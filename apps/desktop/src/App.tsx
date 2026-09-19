@@ -182,6 +182,8 @@ export function App() {
 
   const activateTool = useCallback(
     (tool: ToolId) => {
+      isPanningRef.current = false;
+      lastPointerRef.current = null;
       syncSession(setActiveTool(sessionRef.current, tool));
     },
     [syncSession],
@@ -238,7 +240,14 @@ export function App() {
         return;
       }
       if (event.key === 'Escape') {
-        syncSession(cancelTool(sessionRef.current));
+        // Cancel in-progress tool gesture; second Escape returns to Select.
+        if (sessionRef.current.anchor) {
+          syncSession(cancelTool(sessionRef.current));
+        } else if (sessionRef.current.activeTool !== 'select') {
+          activateTool('select');
+        } else {
+          syncSession(cancelTool(sessionRef.current));
+        }
         return;
       }
       if (!meta) {
@@ -286,7 +295,6 @@ export function App() {
   const onPointerDown = (event: ReactPointerEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    canvas.setPointerCapture(event.pointerId);
 
     const panMode =
       sessionRef.current.activeTool === 'pan' ||
@@ -294,6 +302,8 @@ export function App() {
       event.button === 1;
 
     if (panMode) {
+      // Capture only while panning so toolbar clicks are never stolen.
+      canvas.setPointerCapture(event.pointerId);
       isPanningRef.current = true;
       lastPointerRef.current = { x: event.clientX, y: event.clientY };
       return;
@@ -404,7 +414,10 @@ export function App() {
               key={tool.id}
               type="button"
               className={`tool-btn${session.activeTool === tool.id ? ' active' : ''}`}
-              onClick={() => activateTool(tool.id)}
+              onClick={(event) => {
+                event.stopPropagation();
+                activateTool(tool.id);
+              }}
             >
               {tool.label}
             </button>
@@ -427,8 +440,11 @@ export function App() {
               key={tool.id}
               type="button"
               className={`rail-btn${session.activeTool === tool.id ? ' active' : ''}`}
-              onClick={() => activateTool(tool.id)}
-              title={`${tool.label} (${tool.id[0]?.toUpperCase()})`}
+              onClick={(event) => {
+                event.stopPropagation();
+                activateTool(tool.id);
+              }}
+              title={`${tool.label}`}
             >
               <span className="glyph">{tool.glyph}</span>
               <span>{tool.label}</span>

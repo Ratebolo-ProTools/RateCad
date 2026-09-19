@@ -23,7 +23,9 @@ function createWindow() {
   const devUrl = process.env.VITE_DEV_SERVER_URL;
   if (devUrl) {
     mainWindow.loadURL(devUrl);
-    mainWindow.webContents.openDevTools({ mode: 'detach' });
+    if (process.env.RATECAD_DEBUG === '1') {
+      mainWindow.webContents.openDevTools({ mode: 'detach' });
+    }
   } else {
     mainWindow.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
   }
