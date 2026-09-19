@@ -1,0 +1,11 @@
+node_modules/
+dist/
+out/
+*.local
+.DS_Store
+*.log
+coverage/
+.vite/
+release/
+*.tsbuildinfo
+.ratecad-autosave/

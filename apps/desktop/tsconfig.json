@@ -1,0 +1,18 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@ratecad/core": ["../../packages/core/src"],
+      "@ratecad/geometry": ["../../packages/geometry/src"],
+      "@ratecad/commands": ["../../packages/commands/src"],
+      "@ratecad/tools": ["../../packages/tools/src"],
+      "@ratecad/viewport": ["../../packages/viewport/src"],
+      "@ratecad/io": ["../../packages/io/src"],
+      "@ratecad/ai": ["../../packages/ai/src"]
+    }
+  },
+  "include": ["src/**/*", "vite.config.ts"]
+}

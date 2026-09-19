@@ -1,0 +1,38 @@
+{
+  "name": "@ratecad/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "RateCAD desktop application",
+  "main": "electron/main.cjs",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -k \"vite --port 5173 --strictPort\" \"wait-on tcp:5173 && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron .\"",
+    "build": "tsc -p tsconfig.json --noEmit && vite build",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "preview": "vite preview",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@ratecad/ai": "workspace:*",
+    "@ratecad/commands": "workspace:*",
+    "@ratecad/core": "workspace:*",
+    "@ratecad/geometry": "workspace:*",
+    "@ratecad/io": "workspace:*",
+    "@ratecad/tools": "workspace:*",
+    "@ratecad/viewport": "workspace:*",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.10",
+    "@types/react-dom": "^19.0.4",
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.2",
+    "cross-env": "^7.0.3",
+    "electron": "^35.0.1",
+    "typescript": "^5.8.2",
+    "vite": "^6.2.2",
+    "vitest": "^3.0.9",
+    "wait-on": "^8.0.3"
+  }
+}
