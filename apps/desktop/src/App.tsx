@@ -445,8 +445,12 @@ export function App() {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const meta = event.metaKey || event.ctrlKey;
-      const tag = (event.target as HTMLElement | null)?.tagName;
-      const inField = tag === 'INPUT' || tag === 'TEXTAREA';
+      const target = event.target as HTMLElement | null;
+      const tag = target?.tagName;
+      const isEditable =
+        (tag === 'INPUT' || tag === 'TEXTAREA') &&
+        !(target as HTMLInputElement | HTMLTextAreaElement).disabled;
+      const inField = !!isEditable;
 
       if (event.code === 'Space' && !inField) {
         spaceDownRef.current = true;
@@ -486,6 +490,10 @@ export function App() {
       }
       if ((event.key === 'Delete' || event.key === 'Backspace') && !inField) {
         event.preventDefault();
+        // Ensure canvas shortcuts work even if a disabled field has focus
+        if (target && (tag === 'INPUT' || tag === 'TEXTAREA')) {
+          (target as HTMLElement).blur();
+        }
         deleteSelection();
         return;
       }
@@ -531,6 +539,9 @@ export function App() {
         const tool = map[event.key.toLowerCase()];
         if (tool) {
           event.preventDefault();
+          if (target && (tag === 'INPUT' || tag === 'TEXTAREA')) {
+            (target as HTMLElement).blur();
+          }
           activateTool(tool);
         }
       }
@@ -787,6 +798,7 @@ export function App() {
             <button
               key={tool.id}
               type="button"
+              data-testid={`tool-${tool.id}`}
               className={`tool-btn${session.activeTool === tool.id ? ' active' : ''}`}
               onClick={(event) => {
                 event.stopPropagation();
@@ -836,6 +848,7 @@ export function App() {
               placeholder="Describe a drawing command… (AI not active)"
               aria-label="AI prompt"
               disabled
+              tabIndex={-1}
             />
             <button type="button" disabled>
               Run
