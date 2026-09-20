@@ -9,5 +9,5 @@ contextBridge.exposeInMainWorld('ratecadDesktop', {
   },
   openDrawing: () => ipcRenderer.invoke('dialog:openRatecad'),
   saveDrawing: (payload) => ipcRenderer.invoke('dialog:saveRatecad', payload),
-  confirmDiscard: (message) => ipcRenderer.invoke('dialog:confirmDiscard', message),
+  quickSave: (payload) => ipcRenderer.invoke('fs:quickSaveRatecad', payload),
 });

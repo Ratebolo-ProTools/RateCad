@@ -24,6 +24,14 @@
   font-family: var(--font-mono);
   font-size: 12px;
   color: var(--text-dim);
+  pointer-events: none;
+}
+
+.menu-actions {
+  display: flex;
+  gap: 4px;
+  position: relative;
+  z-index: 2;
 }
 
 .menu-actions button.active-toggle {
@@ -304,4 +312,54 @@
 .status-right strong {
   color: var(--text);
   font-weight: 500;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.modal-panel {
+  width: min(360px, 90vw);
+  padding: 16px 18px;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  background: var(--bg-panel);
+}
+
+.modal-panel h3 {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+
+.modal-panel p {
+  margin: 0 0 14px;
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.modal-actions button {
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+  background: var(--bg-panel-2);
+}
+
+.modal-actions button.danger {
+  border-color: var(--danger);
+  color: #ffd0d5;
+  background: rgba(227, 93, 106, 0.15);
 }

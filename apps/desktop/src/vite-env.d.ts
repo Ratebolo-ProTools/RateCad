@@ -21,7 +21,14 @@ declare global {
         filePath?: string;
         error?: string;
       }>;
-      confirmDiscard: (message?: string) => Promise<boolean>;
+      quickSave: (payload: {
+        contents: string;
+        preferredName?: string;
+      }) => Promise<{
+        canceled?: boolean;
+        filePath?: string;
+        error?: string;
+      }>;
     };
   }
 }

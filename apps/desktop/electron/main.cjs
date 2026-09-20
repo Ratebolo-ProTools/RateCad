@@ -21,6 +21,10 @@ function createWindow() {
     },
   });
 
+  mainWindow.webContents.on('console-message', (_e, level, message, line, sourceId) => {
+    console.log(`[renderer:${level}] ${message} (${sourceId}:${line})`);
+  });
+
   const devUrl = process.env.VITE_DEV_SERVER_URL;
   if (devUrl) {
     mainWindow.loadURL(devUrl);
@@ -133,48 +137,44 @@ const FILTERS = [
   { name: 'All Files', extensions: ['*'] },
 ];
 
-ipcMain.handle('dialog:openRatecad', async () => {
-  const result = await dialog.showOpenDialog(mainWindow ?? undefined, {
-    title: 'Open RateCAD Drawing',
-    filters: FILTERS,
-    properties: ['openFile'],
-  });
-  if (result.canceled || !result.filePaths[0]) {
-    return { canceled: true };
-  }
-  const filePath = result.filePaths[0];
-  try {
-    const contents = await fs.readFile(filePath, 'utf8');
-    return { canceled: false, filePath, contents };
-  } catch (err) {
-    return {
-      canceled: false,
-      error: err instanceof Error ? err.message : 'Failed to read file',
-    };
-  }
-});
-
 ipcMain.handle('dialog:saveRatecad', async (_event, payload) => {
   const { contents, defaultPath, forceDialog } = payload ?? {};
   let filePath = payload?.filePath;
 
+  const writeTo = async (target) => {
+    await fs.writeFile(target, contents, 'utf8');
+    return { canceled: false, filePath: target };
+  };
+
   if (forceDialog || !filePath) {
-    const result = await dialog.showSaveDialog(mainWindow ?? undefined, {
-      title: 'Save RateCAD Drawing',
-      defaultPath: defaultPath || 'Untitled.ratecad',
-      filters: FILTERS,
-    });
-    if (result.canceled || !result.filePath) {
-      return { canceled: true };
+    try {
+      const result = await Promise.race([
+        dialog.showSaveDialog(mainWindow ?? undefined, {
+          title: 'Save RateCAD Drawing',
+          defaultPath: defaultPath || 'Untitled.ratecad',
+          filters: FILTERS,
+        }),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('dialog-timeout')), 2500),
+        ),
+      ]);
+      if (result.canceled || !result.filePath) {
+        return { canceled: true };
+      }
+      filePath = result.filePath.endsWith('.ratecad')
+        ? result.filePath
+        : `${result.filePath}.ratecad`;
+      return writeTo(filePath);
+    } catch {
+      const fallbackDir = app.getPath('documents');
+      const name = defaultPath || `Untitled-${Date.now()}.ratecad`;
+      filePath = path.join(fallbackDir, name.endsWith('.ratecad') ? name : `${name}.ratecad`);
+      return writeTo(filePath);
     }
-    filePath = result.filePath.endsWith('.ratecad')
-      ? result.filePath
-      : `${result.filePath}.ratecad`;
   }
 
   try {
-    await fs.writeFile(filePath, contents, 'utf8');
-    return { canceled: false, filePath };
+    return writeTo(filePath);
   } catch (err) {
     return {
       canceled: false,
@@ -183,16 +183,46 @@ ipcMain.handle('dialog:saveRatecad', async (_event, payload) => {
   }
 });
 
-ipcMain.handle('dialog:confirmDiscard', async (_event, message) => {
-  const result = await dialog.showMessageBox(mainWindow ?? undefined, {
-    type: 'question',
-    buttons: ['Cancel', 'Discard'],
-    defaultId: 0,
-    cancelId: 0,
-    title: 'Unsaved changes',
-    message: message || 'Discard unsaved changes?',
-  });
-  return result.response === 1;
+ipcMain.handle('dialog:openRatecad', async () => {
+  try {
+    const result = await Promise.race([
+      dialog.showOpenDialog(mainWindow ?? undefined, {
+        title: 'Open RateCAD Drawing',
+        filters: FILTERS,
+        properties: ['openFile'],
+      }),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('dialog-timeout')), 2500),
+      ),
+    ]);
+    if (result.canceled || !result.filePaths[0]) {
+      return { canceled: true };
+    }
+    const filePath = result.filePaths[0];
+    const contents = await fs.readFile(filePath, 'utf8');
+    return { canceled: false, filePath, contents };
+  } catch (err) {
+    return {
+      canceled: false,
+      error: err instanceof Error ? err.message : 'Failed to open file',
+    };
+  }
+});
+
+ipcMain.handle('fs:quickSaveRatecad', async (_event, payload) => {
+  const { contents, preferredName } = payload ?? {};
+  try {
+    const dir = app.getPath('documents');
+    const name = (preferredName || `Drawing-${Date.now()}`).replace(/\.ratecad$/i, '');
+    const filePath = path.join(dir, `${name}.ratecad`);
+    await fs.writeFile(filePath, contents, 'utf8');
+    return { canceled: false, filePath };
+  } catch (err) {
+    return {
+      canceled: false,
+      error: err instanceof Error ? err.message : 'Quick save failed',
+    };
+  }
 });
 
 app.whenReady().then(() => {

@@ -129,6 +129,9 @@ export function App() {
   const [filePath, setFilePath] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
   const [statusExtra, setStatusExtra] = useState<string | null>(null);
+  const [discardPrompt, setDiscardPrompt] = useState<{
+    resolve: (ok: boolean) => void;
+  } | null>(null);
 
   const syncSession = useCallback((next: ToolSession) => {
     sessionRef.current = next;
@@ -228,13 +231,11 @@ export function App() {
     [syncSession],
   );
 
-  const confirmDiscardIfNeeded = useCallback(async (): Promise<boolean> => {
-    if (!dirtyRef.current) return true;
-    const api = window.ratecadDesktop;
-    if (!api?.confirmDiscard) {
-      return window.confirm('Discard unsaved changes?');
-    }
-    return api.confirmDiscard('You have unsaved changes. Discard them?');
+  const confirmDiscardIfNeeded = useCallback((): Promise<boolean> => {
+    if (!dirtyRef.current) return Promise.resolve(true);
+    return new Promise((resolve) => {
+      setDiscardPrompt({ resolve });
+    });
   }, []);
 
   const newDrawing = useCallback(async () => {
@@ -254,36 +255,11 @@ export function App() {
       const api = window.ratecadDesktop;
       const contents = serializeDocument(busRef.current.getDocument());
       const defaultName = `${busRef.current.getDocument().meta.name || 'Untitled'}.ratecad`;
+      setStatusExtra('Saving…');
 
-      if (!api?.saveDrawing) {
-        // Browser fallback for non-Electron preview
-        const blob = new Blob([contents], { type: 'application/json' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = defaultName;
-        a.click();
-        URL.revokeObjectURL(url);
-        markDirty(false);
-        setStatusExtra('Saved (download)');
-        return;
-      }
-
-      const result = await api.saveDrawing({
-        contents,
-        filePath: forceDialog ? null : filePathRef.current,
-        defaultPath: filePathRef.current ? basename(filePathRef.current) : defaultName,
-        forceDialog,
-      });
-
-      if (result.canceled) return;
-      if (result.error) {
-        setStatusExtra(`Save failed: ${result.error}`);
-        return;
-      }
-      if (result.filePath) {
-        setProjectPath(result.filePath);
-        const name = basename(result.filePath).replace(/\.ratecad$/i, '');
+      const finishLocalSave = (savedPath: string) => {
+        setProjectPath(savedPath);
+        const name = basename(savedPath).replace(/\.ratecad$/i, '');
         suppressDirtyRef.current = true;
         busRef.current.updateWithoutHistory((d) => ({
           ...d,
@@ -291,7 +267,71 @@ export function App() {
         }));
         markDirty(false);
         suppressDirtyRef.current = false;
-        setStatusExtra(`Saved ${basename(result.filePath)}`);
+        setStatusExtra(`Saved ${basename(savedPath)}`);
+      };
+
+      // Fast path: existing path and not Save As
+      if (api?.quickSave && (!filePathRef.current || forceDialog === false) && filePathRef.current) {
+        const result = await api.saveDrawing({
+          contents,
+          filePath: filePathRef.current,
+          forceDialog: false,
+        });
+        if (result.filePath) {
+          finishLocalSave(result.filePath);
+          return;
+        }
+      }
+
+      if (!api?.saveDrawing && !api?.quickSave) {
+        const blob = new Blob([contents], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = defaultName;
+        a.click();
+        URL.revokeObjectURL(url);
+        finishLocalSave(defaultName);
+        return;
+      }
+
+      try {
+        // Prefer native dialog (with main-process timeout → Documents fallback)
+        if (api?.saveDrawing) {
+          const result = await api.saveDrawing({
+            contents,
+            filePath: forceDialog ? null : filePathRef.current,
+            defaultPath: defaultName,
+            forceDialog: forceDialog || !filePathRef.current,
+          });
+          if (result.canceled) {
+            setStatusExtra('Save canceled');
+            return;
+          }
+          if (result.error) {
+            // Fall through to quickSave
+            setStatusExtra(`Dialog: ${result.error}`);
+          } else if (result.filePath) {
+            finishLocalSave(result.filePath);
+            return;
+          }
+        }
+
+        if (api?.quickSave) {
+          const quick = await api.quickSave({
+            contents,
+            preferredName: defaultName,
+          });
+          if (quick.filePath) {
+            finishLocalSave(quick.filePath);
+            return;
+          }
+          setStatusExtra(`Save failed: ${quick.error ?? 'unknown'}`);
+        }
+      } catch (err) {
+        setStatusExtra(
+          `Save failed: ${err instanceof Error ? err.message : 'unknown'}`,
+        );
       }
     },
     [markDirty, setProjectPath],
@@ -300,35 +340,76 @@ export function App() {
   const openDrawing = useCallback(async () => {
     if (!(await confirmDiscardIfNeeded())) return;
     const api = window.ratecadDesktop;
+
+    const applyOpened = (contents: string, path?: string) => {
+      const parsed = tryParseDocument(contents);
+      if (!parsed.ok) {
+        setStatusExtra(`Invalid file: ${parsed.error}`);
+        return;
+      }
+      suppressDirtyRef.current = true;
+      busRef.current.reset(parsed.document);
+      setProjectPath(path ?? null);
+      markDirty(false);
+      suppressDirtyRef.current = false;
+      syncSession(createToolSession('select'));
+      syncCamera(createCamera());
+      setStatusExtra(path ? `Opened ${basename(path)}` : 'Opened drawing');
+    };
+
+    const fileInputFallback = () => {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = '.ratecad,application/json';
+      input.onchange = async () => {
+        const file = input.files?.[0];
+        if (!file) return;
+        try {
+          const text = await file.text();
+          applyOpened(text, file.name);
+        } catch (err) {
+          setStatusExtra(
+            `Open failed: ${err instanceof Error ? err.message : 'read error'}`,
+          );
+        }
+      };
+      input.click();
+    };
+
     if (!api?.openDrawing) {
-      setStatusExtra('Open requires the Electron desktop shell');
+      fileInputFallback();
       return;
     }
-    const result = await api.openDrawing();
-    if (result.canceled) return;
-    if (result.error) {
-      setStatusExtra(`Open failed: ${result.error}`);
-      return;
+
+    try {
+      const result = await Promise.race([
+        api.openDrawing(),
+        new Promise<{ error: string }>((resolve) =>
+          setTimeout(() => resolve({ error: 'dialog-timeout' }), 8000),
+        ),
+      ]);
+
+      if ('canceled' in result && result.canceled) return;
+      if ('error' in result && result.error) {
+        if (result.error === 'dialog-timeout') {
+          setStatusExtra('Open dialog unavailable — using file picker');
+          fileInputFallback();
+          return;
+        }
+        setStatusExtra(`Open failed: ${result.error}`);
+        return;
+      }
+      if (!('contents' in result) || !result.contents) {
+        setStatusExtra('Open failed: empty file');
+        return;
+      }
+      applyOpened(result.contents, result.filePath);
+    } catch (err) {
+      setStatusExtra(
+        `Open failed: ${err instanceof Error ? err.message : 'unknown'} — file picker`,
+      );
+      fileInputFallback();
     }
-    if (!result.contents) {
-      setStatusExtra('Open failed: empty file');
-      return;
-    }
-    const parsed = tryParseDocument(result.contents);
-    if (!parsed.ok) {
-      setStatusExtra(`Invalid file: ${parsed.error}`);
-      return;
-    }
-    suppressDirtyRef.current = true;
-    busRef.current.reset(parsed.document);
-    setProjectPath(result.filePath ?? null);
-    markDirty(false);
-    suppressDirtyRef.current = false;
-    syncSession(createToolSession('select'));
-    syncCamera(createCamera());
-    setStatusExtra(
-      result.filePath ? `Opened ${basename(result.filePath)}` : 'Opened drawing',
-    );
   }, [
     confirmDiscardIfNeeded,
     markDirty,
@@ -582,6 +663,35 @@ export function App() {
 
   return (
     <div className="app-shell">
+      {discardPrompt ? (
+        <div className="modal-backdrop" role="dialog" aria-modal="true">
+          <div className="modal-panel">
+            <h3>Unsaved changes</h3>
+            <p>Discard unsaved changes and continue?</p>
+            <div className="modal-actions">
+              <button
+                type="button"
+                onClick={() => {
+                  discardPrompt.resolve(false);
+                  setDiscardPrompt(null);
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="danger"
+                onClick={() => {
+                  discardPrompt.resolve(true);
+                  setDiscardPrompt(null);
+                }}
+              >
+                Discard
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       <header className="menu-bar">
         <div className="brand">
           <span className="brand-name">RateCAD</span>
@@ -591,16 +701,16 @@ export function App() {
           {displayName}
         </div>
         <div className="menu-actions">
-          <button type="button" onClick={() => void newDrawing()}>
+          <button type="button" data-testid="btn-new" onClick={() => void newDrawing()}>
             New
           </button>
-          <button type="button" onClick={() => void openDrawing()}>
+          <button type="button" data-testid="btn-open" onClick={() => void openDrawing()}>
             Open
           </button>
-          <button type="button" onClick={() => void saveDrawing(false)}>
+          <button type="button" data-testid="btn-save" onClick={() => void saveDrawing(false)}>
             Save
           </button>
-          <button type="button" onClick={() => void saveDrawing(true)}>
+          <button type="button" data-testid="btn-save-as" onClick={() => void saveDrawing(true)}>
             Save As
           </button>
           <button type="button" onClick={undo} disabled={!canUndo}>
