@@ -47,7 +47,7 @@ function pickEntity(
   camera: PointerInput['camera'],
   exclude?: EntityId,
 ): Entity | null {
-  const tol = screenToleranceToWorld(camera, 8);
+  const tol = screenToleranceToWorld(camera, 14);
   const id = hitTestDocument(bus.getDocument(), point, tol);
   if (!id || id === exclude) return null;
   return getEntity(bus.getDocument(), id) ?? null;
@@ -60,8 +60,11 @@ export function handleTrimPointerDown(
   snapPoint: Vec2,
   snap: ToolSession['lastSnap'],
 ): ToolSession {
+  // Hit-test with raw cursor so grid snap does not miss thin entities
+  const pickAt = input.world;
+
   if (!session.refEntityId) {
-    const ent = pickEntity(bus, snapPoint, input.camera);
+    const ent = pickEntity(bus, pickAt, input.camera);
     if (!ent) {
       return {
         ...session,
@@ -87,7 +90,7 @@ export function handleTrimPointerDown(
       statusMessage: 'Trim: cutting edge lost',
     };
   }
-  const target = pickEntity(bus, snapPoint, input.camera, cutter.id);
+  const target = pickEntity(bus, pickAt, input.camera, cutter.id);
   if (!target) {
     return {
       ...session,
@@ -96,23 +99,39 @@ export function handleTrimPointerDown(
     };
   }
 
-  const preview = trimEntity(target, cutter, snapPoint);
-  if (!preview.ok) {
-    return {
-      ...session,
-      lastSnap: snap,
-      statusMessage: `Trim: ${preview.reason}`,
-    };
-  }
+  // Use snapped point for geometry when near intersections; else raw pick
+  const pickPoint = snapPoint;
 
-  try {
-    bus.execute(new TrimEntityCommand(target, cutter, snapPoint));
-  } catch (err) {
-    return {
-      ...session,
-      lastSnap: snap,
-      statusMessage: `Trim failed: ${err instanceof Error ? err.message : 'error'}`,
-    };
+  const preview = trimEntity(target, cutter, pickPoint);
+  if (!preview.ok) {
+    // Retry with raw pick projection onto target if snap drifted
+    const retry = trimEntity(target, cutter, pickAt);
+    if (!retry.ok) {
+      return {
+        ...session,
+        lastSnap: snap,
+        statusMessage: `Trim: ${preview.reason}`,
+      };
+    }
+    try {
+      bus.execute(new TrimEntityCommand(target, cutter, pickAt));
+    } catch (err) {
+      return {
+        ...session,
+        lastSnap: snap,
+        statusMessage: `Trim failed: ${err instanceof Error ? err.message : 'error'}`,
+      };
+    }
+  } else {
+    try {
+      bus.execute(new TrimEntityCommand(target, cutter, pickPoint));
+    } catch (err) {
+      return {
+        ...session,
+        lastSnap: snap,
+        statusMessage: `Trim failed: ${err instanceof Error ? err.message : 'error'}`,
+      };
+    }
   }
 
   return {
@@ -143,7 +162,7 @@ export function handleTrimPointerMove(
   }
   const cutter = getEntity(bus.getDocument(), session.refEntityId);
   if (!cutter) return { ...session, lastSnap: snap };
-  const target = pickEntity(bus, snapPoint, input.camera, cutter.id);
+  const target = pickEntity(bus, input.world, input.camera, cutter.id);
   if (!target) {
     return {
       ...session,
@@ -152,8 +171,12 @@ export function handleTrimPointerMove(
       hideEntityIds: [],
     };
   }
-  const result = trimEntity(target, cutter, snapPoint);
-  const removal = trimRemovalPreview(target, cutter, snapPoint);
+  const pickPoint = snapPoint;
+  let result = trimEntity(target, cutter, pickPoint);
+  if (!result.ok) result = trimEntity(target, cutter, input.world);
+  const removal =
+    trimRemovalPreview(target, cutter, pickPoint) ??
+    trimRemovalPreview(target, cutter, input.world);
   if (!result.ok) {
     return {
       ...session,
@@ -185,8 +208,9 @@ export function handleExtendPointerDown(
   snapPoint: Vec2,
   snap: ToolSession['lastSnap'],
 ): ToolSession {
+  const pickAt = input.world;
   if (!session.refEntityId) {
-    const ent = pickEntity(bus, snapPoint, input.camera);
+    const ent = pickEntity(bus, pickAt, input.camera);
     if (!ent) {
       return {
         ...session,
@@ -208,7 +232,7 @@ export function handleExtendPointerDown(
   if (!boundary) {
     return { ...cancelTool(session), lastSnap: snap };
   }
-  const target = pickEntity(bus, snapPoint, input.camera, boundary.id);
+  const target = pickEntity(bus, pickAt, input.camera, boundary.id);
   if (!target) {
     return {
       ...session,
@@ -218,7 +242,7 @@ export function handleExtendPointerDown(
   }
 
   try {
-    bus.execute(new ExtendEntityCommand(target, boundary, snapPoint));
+    bus.execute(new ExtendEntityCommand(target, boundary, pickAt));
   } catch (err) {
     return {
       ...session,
@@ -250,7 +274,7 @@ export function handleExtendPointerMove(
   }
   const boundary = getEntity(bus.getDocument(), session.refEntityId);
   if (!boundary) return { ...session, lastSnap: snap };
-  const target = pickEntity(bus, snapPoint, input.camera, boundary.id);
+  const target = pickEntity(bus, input.world, input.camera, boundary.id);
   if (!target) {
     return {
       ...session,
@@ -259,7 +283,8 @@ export function handleExtendPointerMove(
       hideEntityIds: [],
     };
   }
-  const result = extendEntity(target, boundary, snapPoint);
+  void snapPoint;
+  const result = extendEntity(target, boundary, input.world);
   if (!result.ok) {
     return {
       ...session,

@@ -115,6 +115,7 @@ export function trimLineEntity(
   pickPoint: Vec2,
 ): ModifyResult {
   const { start, end } = line.geometry;
+  const pick = closestPointOnSegment(pickPoint, start, end);
   const hits = collectIntersectionsOnLine(start, end, cutter);
   if (hits.length === 0) return fail('No intersection with cutting edge');
 
@@ -122,13 +123,12 @@ export function trimLineEntity(
     .map((p) => ({ p, t: projectParam(p, start, end) }))
     .sort((a, b) => a.t - b.t);
 
-  const pickT = Math.max(0, Math.min(1, projectParam(pickPoint, start, end)));
+  const pickT = Math.max(0, Math.min(1, projectParam(pick, start, end)));
   const bounds = [0, ...params.map((h) => h.t), 1];
 
   let removeI = -1;
   for (let i = 0; i < bounds.length - 1; i += 1) {
     if (pickT >= bounds[i]! - EPS && pickT <= bounds[i + 1]! + EPS) {
-      // Prefer interior segment if on boundary
       removeI = i;
       break;
     }
