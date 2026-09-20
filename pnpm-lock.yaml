@@ -111,6 +111,10 @@ importers:
         version: 3.2.7(@types/node@22.20.4)
 
   packages/geometry:
+    dependencies:
+      '@ratecad/core':
+        specifier: workspace:*
+        version: link:../core
     devDependencies:
       typescript:
         specifier: ^5.8.2

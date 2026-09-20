@@ -60,13 +60,31 @@ export interface CircleEntity extends EntityBase {
   };
 }
 
-export type Entity = LineEntity | RectangleEntity | CircleEntity;
+/** Ordered polyline — one structured entity, not unrelated lines. */
+export interface PolylineEntity extends EntityBase {
+  type: 'polyline';
+  geometry: {
+    vertices: Vec2[];
+    closed: boolean;
+  };
+  properties: {
+    color?: string;
+    lineWeight?: number;
+  };
+}
+
+export type Entity =
+  | LineEntity
+  | RectangleEntity
+  | CircleEntity
+  | PolylineEntity;
 export type EntityType = Entity['type'];
 
 export interface DrawingSettings {
   units: LengthUnit;
   precision: number;
   gridSize: number;
+  /** Master snap toggle (grid + object snaps). */
   snapToGrid: boolean;
 }
 
@@ -89,4 +107,4 @@ export interface DrawingDocument {
 
 export const DEFAULT_LAYER_ID = 'layer-0' as LayerId;
 export const SCHEMA_VERSION = 1;
-export const APP_VERSION = '0.1.0';
+export const APP_VERSION = '0.2.0';

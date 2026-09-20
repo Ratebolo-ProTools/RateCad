@@ -20,3 +20,11 @@ export {
   hitTestEntity,
   isPointNearEntityBounds,
 } from './hitTest.js';
+
+export {
+  type Grip,
+  type GripRole,
+  firstSegmentMidpoint,
+  getEntityGrips,
+  getSelectionGrips,
+} from './grips.js';

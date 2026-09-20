@@ -7,6 +7,7 @@ import {
   type DrawingDocument,
   type EntityId,
   type LineEntity,
+  type PolylineEntity,
   type RectangleEntity,
   type Vec2,
 } from '@ratecad/core';
@@ -115,6 +116,49 @@ export class CreateCircleCommand implements Command {
       geometry: {
         center: { ...this.center },
         radius: this.radius,
+      },
+      properties: {},
+    };
+    return addEntity(doc, entity);
+  }
+
+  undo(doc: DrawingDocument): DrawingDocument {
+    return removeEntities(doc, [this.entityId]);
+  }
+}
+
+export class CreatePolylineCommand implements Command {
+  readonly name = 'CreatePolyline';
+  private readonly entityId: EntityId;
+  private readonly vertices: Vec2[];
+
+  constructor(
+    vertices: Vec2[],
+    entityId?: EntityId,
+    private readonly closed = false,
+    private readonly layerId = DEFAULT_LAYER_ID,
+  ) {
+    if (vertices.length < 2) {
+      throw new Error('Polyline requires at least 2 vertices');
+    }
+    this.vertices = vertices.map((v) => ({ ...v }));
+    this.entityId = entityId ?? createEntityId('pline');
+  }
+
+  getEntityId(): EntityId {
+    return this.entityId;
+  }
+
+  execute(doc: DrawingDocument): DrawingDocument {
+    const entity: PolylineEntity = {
+      id: this.entityId,
+      type: 'polyline',
+      layerId: this.layerId,
+      visible: true,
+      locked: false,
+      geometry: {
+        vertices: this.vertices.map((v) => ({ ...v })),
+        closed: this.closed,
       },
       properties: {},
     };

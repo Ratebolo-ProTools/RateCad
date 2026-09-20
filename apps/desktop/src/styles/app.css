@@ -15,6 +15,23 @@
   border-bottom: 1px solid var(--border);
 }
 
+.doc-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.menu-actions button.active-toggle {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: #d7e8ff;
+}
+
 .brand {
   display: flex;
   align-items: baseline;
@@ -44,6 +61,7 @@
   padding: 4px 10px;
   border-radius: 3px;
   color: var(--text-dim);
+  border: 1px solid transparent;
 }
 
 .menu-actions button:hover:not(:disabled) {

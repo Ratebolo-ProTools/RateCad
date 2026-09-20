@@ -1,9 +1,10 @@
 # Milestones
 
-## Milestone 1 (current)
+## Milestone 2 (current)
 
-Application shell + CAD workspace + Line / Rectangle / Circle + select/delete + undo/redo + zoom/pan.
+Canvas engine hardening: Polyline, shared snap engine, selection grips,
+New/Open/Save/Save As, camera polish, keyboard workflow.
 
-## Milestone 2+
+## Milestone 3+
 
-See product plan: canvas engine hardening, more geometry, modify tools, construction objects, annotations, AI engine, quantities, RateBolo integration API.
+Basic geometry expansion / selection editing (see product plan).

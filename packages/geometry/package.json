@@ -16,6 +16,9 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --passWithNoTests"
   },
+  "dependencies": {
+    "@ratecad/core": "workspace:*"
+  },
   "devDependencies": {
     "typescript": "^5.8.2",
     "vitest": "^3.0.9"

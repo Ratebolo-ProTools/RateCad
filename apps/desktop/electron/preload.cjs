@@ -3,16 +3,11 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('ratecadDesktop', {
   platform: process.platform,
   onMenuAction: (handler) => {
-    const channels = ['menu:new', 'menu:undo', 'menu:redo', 'menu:delete'];
-    const listeners = channels.map((channel) => {
-      const listener = () => handler(channel.replace('menu:', ''));
-      ipcRenderer.on(channel, listener);
-      return { channel, listener };
-    });
-    return () => {
-      for (const { channel, listener } of listeners) {
-        ipcRenderer.removeListener(channel, listener);
-      }
-    };
+    const listener = (_event, action) => handler(action);
+    ipcRenderer.on('menu:action', listener);
+    return () => ipcRenderer.removeListener('menu:action', listener);
   },
+  openDrawing: () => ipcRenderer.invoke('dialog:openRatecad'),
+  saveDrawing: (payload) => ipcRenderer.invoke('dialog:saveRatecad', payload),
+  confirmDiscard: (message) => ipcRenderer.invoke('dialog:confirmDiscard', message),
 });

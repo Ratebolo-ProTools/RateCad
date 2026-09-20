@@ -11,6 +11,7 @@ export type {
   LayerId,
   LengthUnit,
   LineEntity,
+  PolylineEntity,
   RectangleEntity,
   Vec2,
 } from './types.js';

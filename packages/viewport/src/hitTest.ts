@@ -41,6 +41,19 @@ export function hitTestEntity(
         entity.geometry.radius,
         tolerance,
       );
+    case 'polyline': {
+      const verts = entity.geometry.vertices;
+      if (verts.length < 2) {
+        return verts[0] ? pointNearSegment(point, verts[0], verts[0], tolerance) : false;
+      }
+      const count = entity.geometry.closed ? verts.length : verts.length - 1;
+      for (let i = 0; i < count; i += 1) {
+        const a = verts[i]!;
+        const b = verts[(i + 1) % verts.length]!;
+        if (pointNearSegment(point, a, b, tolerance)) return true;
+      }
+      return false;
+    }
   }
 }
 
@@ -49,7 +62,6 @@ export function hitTestDocument(
   point: Vec2,
   tolerance: number,
 ): EntityId | null {
-  // Topmost last-drawn wins
   for (let i = doc.entities.length - 1; i >= 0; i -= 1) {
     const entity = doc.entities[i]!;
     if (!entity.visible || entity.locked) continue;
@@ -74,6 +86,21 @@ export function entityBounds(entity: Entity): ReturnType<typeof aabbFromPoints> 
         maxX: center.x + radius,
         maxY: center.y + radius,
       };
+    }
+    case 'polyline': {
+      const verts = entity.geometry.vertices;
+      if (verts.length === 0) return null;
+      let minX = verts[0]!.x;
+      let minY = verts[0]!.y;
+      let maxX = verts[0]!.x;
+      let maxY = verts[0]!.y;
+      for (const v of verts) {
+        minX = Math.min(minX, v.x);
+        minY = Math.min(minY, v.y);
+        maxX = Math.max(maxX, v.x);
+        maxY = Math.max(maxY, v.y);
+      }
+      return { minX, minY, maxX, maxY };
     }
   }
 }

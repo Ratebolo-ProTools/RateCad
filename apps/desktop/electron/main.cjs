@@ -1,5 +1,6 @@
-const { app, BrowserWindow, Menu } = require('electron');
+const { app, BrowserWindow, Menu, dialog, ipcMain } = require('electron');
 const path = require('node:path');
+const fs = require('node:fs/promises');
 
 /** @type {BrowserWindow | null} */
 let mainWindow = null;
@@ -35,6 +36,10 @@ function createWindow() {
   });
 }
 
+function send(action) {
+  mainWindow?.webContents.send('menu:action', action);
+}
+
 function buildMenu() {
   const isMac = process.platform === 'darwin';
   /** @type {Electron.MenuItemConstructorOptions[]} */
@@ -63,7 +68,22 @@ function buildMenu() {
         {
           label: 'New Drawing',
           accelerator: 'CmdOrCtrl+N',
-          click: () => mainWindow?.webContents.send('menu:new'),
+          click: () => send('new'),
+        },
+        {
+          label: 'Open…',
+          accelerator: 'CmdOrCtrl+O',
+          click: () => send('open'),
+        },
+        {
+          label: 'Save',
+          accelerator: 'CmdOrCtrl+S',
+          click: () => send('save'),
+        },
+        {
+          label: 'Save As…',
+          accelerator: 'CmdOrCtrl+Shift+S',
+          click: () => send('saveAs'),
         },
         { type: 'separator' },
         isMac ? { role: 'close' } : { role: 'quit' },
@@ -75,18 +95,18 @@ function buildMenu() {
         {
           label: 'Undo',
           accelerator: 'CmdOrCtrl+Z',
-          click: () => mainWindow?.webContents.send('menu:undo'),
+          click: () => send('undo'),
         },
         {
           label: 'Redo',
           accelerator: 'CmdOrCtrl+Shift+Z',
-          click: () => mainWindow?.webContents.send('menu:redo'),
+          click: () => send('redo'),
         },
         { type: 'separator' },
         {
           label: 'Delete',
           accelerator: 'Delete',
-          click: () => mainWindow?.webContents.send('menu:delete'),
+          click: () => send('delete'),
         },
       ],
     },
@@ -107,6 +127,73 @@ function buildMenu() {
 
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
+
+const FILTERS = [
+  { name: 'RateCAD Drawing', extensions: ['ratecad'] },
+  { name: 'All Files', extensions: ['*'] },
+];
+
+ipcMain.handle('dialog:openRatecad', async () => {
+  const result = await dialog.showOpenDialog(mainWindow ?? undefined, {
+    title: 'Open RateCAD Drawing',
+    filters: FILTERS,
+    properties: ['openFile'],
+  });
+  if (result.canceled || !result.filePaths[0]) {
+    return { canceled: true };
+  }
+  const filePath = result.filePaths[0];
+  try {
+    const contents = await fs.readFile(filePath, 'utf8');
+    return { canceled: false, filePath, contents };
+  } catch (err) {
+    return {
+      canceled: false,
+      error: err instanceof Error ? err.message : 'Failed to read file',
+    };
+  }
+});
+
+ipcMain.handle('dialog:saveRatecad', async (_event, payload) => {
+  const { contents, defaultPath, forceDialog } = payload ?? {};
+  let filePath = payload?.filePath;
+
+  if (forceDialog || !filePath) {
+    const result = await dialog.showSaveDialog(mainWindow ?? undefined, {
+      title: 'Save RateCAD Drawing',
+      defaultPath: defaultPath || 'Untitled.ratecad',
+      filters: FILTERS,
+    });
+    if (result.canceled || !result.filePath) {
+      return { canceled: true };
+    }
+    filePath = result.filePath.endsWith('.ratecad')
+      ? result.filePath
+      : `${result.filePath}.ratecad`;
+  }
+
+  try {
+    await fs.writeFile(filePath, contents, 'utf8');
+    return { canceled: false, filePath };
+  } catch (err) {
+    return {
+      canceled: false,
+      error: err instanceof Error ? err.message : 'Failed to write file',
+    };
+  }
+});
+
+ipcMain.handle('dialog:confirmDiscard', async (_event, message) => {
+  const result = await dialog.showMessageBox(mainWindow ?? undefined, {
+    type: 'question',
+    buttons: ['Cancel', 'Discard'],
+    defaultId: 0,
+    cancelId: 0,
+    title: 'Unsaved changes',
+    message: message || 'Discard unsaved changes?',
+  });
+  return result.response === 1;
+});
 
 app.whenReady().then(() => {
   buildMenu();

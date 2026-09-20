@@ -1,9 +1,14 @@
 import { describe, expect, it, beforeEach } from 'vitest';
-import { createEmptyDocument, getEntity, resetIdCounter } from '@ratecad/core';
+import {
+  createEmptyDocument,
+  getEntity,
+  resetIdCounter,
+} from '@ratecad/core';
 import {
   CommandBus,
   CreateCircleCommand,
   CreateLineCommand,
+  CreatePolylineCommand,
   CreateRectangleCommand,
   DeleteEntitiesCommand,
 } from '../src/index.js';
@@ -35,6 +40,35 @@ describe('CommandBus', () => {
 
     const types = bus.getDocument().entities.map((e) => e.type);
     expect(types).toEqual(['rectangle', 'circle']);
+  });
+
+  it('creates polyline with ordered vertices and supports undo/redo', () => {
+    const bus = new CommandBus(createEmptyDocument());
+    const verts = [
+      { x: 0, y: 0 },
+      { x: 5, y: 0 },
+      { x: 5, y: 4 },
+    ];
+    const cmd = new CreatePolylineCommand(verts);
+    bus.execute(cmd);
+
+    const entity = getEntity(bus.getDocument(), cmd.getEntityId());
+    expect(entity?.type).toBe('polyline');
+    if (entity?.type === 'polyline') {
+      expect(entity.geometry.vertices).toHaveLength(3);
+      expect(entity.geometry.vertices[1]).toEqual({ x: 5, y: 0 });
+      expect(entity.geometry.closed).toBe(false);
+    }
+
+    bus.undo();
+    expect(bus.getDocument().entities).toHaveLength(0);
+    bus.redo();
+    expect(bus.getDocument().entities).toHaveLength(1);
+    expect(bus.getDocument().entities[0]?.type).toBe('polyline');
+  });
+
+  it('rejects polyline with fewer than 2 vertices', () => {
+    expect(() => new CreatePolylineCommand([{ x: 0, y: 0 }])).toThrow();
   });
 
   it('deletes entities and restores them on undo', () => {
