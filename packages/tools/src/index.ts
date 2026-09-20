@@ -14,7 +14,6 @@ import {
   setSelection,
   toggleSelectionId,
   type Entity,
-  type EntityId,
   type Vec2,
 } from '@ratecad/core';
 import {
@@ -31,108 +30,57 @@ import {
   hitTestGrip,
   screenToleranceToWorld,
   selectByRectangle,
-  type Camera,
-  type Grip,
-  type PreviewGeometry,
 } from '@ratecad/viewport';
+import {
+  commitOffsetDistance,
+  commitRotateAngle,
+  commitScaleFactor,
+  handleExtendPointerDown,
+  handleExtendPointerMove,
+  handleMirrorPointerDown,
+  handleMirrorPointerMove,
+  handleOffsetPointerDown,
+  handleOffsetPointerMove,
+  handleRotatePointerDown,
+  handleRotatePointerMove,
+  handleScalePointerDown,
+  handleScalePointerMove,
+  handleTrimPointerDown,
+  handleTrimPointerMove,
+} from './cadModifyTools.js';
+import {
+  cancelTool,
+  createToolSession,
+  setActiveTool,
+  toolStatus,
+  type PointerInput,
+  type ToolId,
+  type ToolSession,
+} from './session.js';
 
-export type ToolId =
-  | 'select'
-  | 'line'
-  | 'rectangle'
-  | 'circle'
-  | 'polyline'
-  | 'pan'
-  | 'move'
-  | 'copy';
+export type {
+  InteractionMode,
+  PointerInput,
+  ToolId,
+  ToolSession,
+} from './session.js';
+export {
+  cancelTool,
+  createToolSession,
+  setActiveTool,
+  toolStatus,
+} from './session.js';
+export {
+  commitOffsetDistance,
+  commitRotateAngle,
+  commitScaleFactor,
+} from './cadModifyTools.js';
 
-export type InteractionMode =
-  | 'idle'
-  | 'draw'
-  | 'grip'
-  | 'window'
-  | 'move'
-  | 'copy';
-
-export interface ToolSession {
-  activeTool: ToolId;
-  mode: InteractionMode;
-  anchor: Vec2 | null;
-  vertices: Vec2[];
-  preview: PreviewGeometry | null;
-  previewEntities: Entity[] | null;
-  hideEntityIds: EntityId[];
-  selectionRect: { a: Vec2; b: Vec2 } | null;
-  grip: Grip | null;
-  gripEntity: Entity | null;
-  statusMessage: string;
-  lastSnap: SnapResult | null;
-}
-
-export function createToolSession(tool: ToolId = 'select'): ToolSession {
-  return {
-    activeTool: tool,
-    mode: 'idle',
-    anchor: null,
-    vertices: [],
-    preview: null,
-    previewEntities: null,
-    hideEntityIds: [],
-    selectionRect: null,
-    grip: null,
-    gripEntity: null,
-    statusMessage: toolStatus(tool),
-    lastSnap: null,
-  };
-}
-
-function toolStatus(tool: ToolId): string {
-  switch (tool) {
-    case 'select':
-      return 'Select: click object, Ctrl+click multi, drag window';
-    case 'line':
-      return 'Line: specify first point';
-    case 'rectangle':
-      return 'Rectangle: specify first corner';
-    case 'circle':
-      return 'Circle: specify center';
-    case 'polyline':
-      return 'Polyline: specify first point';
-    case 'pan':
-      return 'Pan: drag to move the view';
-    case 'move':
-      return 'Move: select objects, then specify base point';
-    case 'copy':
-      return 'Copy: select objects, then specify base point';
-  }
-}
-
-export function setActiveTool(session: ToolSession, tool: ToolId): ToolSession {
-  return {
-    ...createToolSession(tool),
-    activeTool: tool,
-    statusMessage: toolStatus(tool),
-  };
-}
-
-export function cancelTool(session: ToolSession): ToolSession {
-  return {
-    ...createToolSession(session.activeTool),
-    activeTool: session.activeTool,
-    statusMessage: toolStatus(session.activeTool),
-  };
-}
-
-export interface PointerInput {
-  world: Vec2;
-  camera: Camera;
-  detail?: number;
-  ctrlKey?: boolean;
-  metaKey?: boolean;
-  shiftKey?: boolean;
-}
-
-function snapPoint(world: Vec2, bus: CommandBus, camera: Camera): SnapResult {
+function snapPoint(
+  world: Vec2,
+  bus: CommandBus,
+  camera: PointerInput['camera'],
+): SnapResult {
   const doc = bus.getDocument();
   return resolveSnap(world, doc, {
     enabled: doc.settings.snapToGrid,
@@ -154,14 +102,11 @@ export function handleToolPointerDown(
   const point = snap.point;
   const multi = !!(input.ctrlKey || input.metaKey);
 
-  // --- Select / grip / window ---
   if (session.activeTool === 'select') {
-    // Continue window drag
     if (session.mode === 'window' && session.anchor) {
       return session;
     }
 
-    // Hit grip first (single-select editing)
     const selected = selectedOrMessage(bus);
     if (selected.length > 0 && !multi) {
       const grips = getSelectionGrips(selected);
@@ -203,7 +148,6 @@ export function handleToolPointerDown(
       };
     }
 
-    // Start window selection
     if (!multi) {
       bus.updateWithoutHistory((doc) => setSelection(doc, []));
     }
@@ -221,11 +165,28 @@ export function handleToolPointerDown(
     return { ...session, lastSnap: snap };
   }
 
-  // --- Move ---
+  if (session.activeTool === 'trim') {
+    return handleTrimPointerDown(session, bus, input, point, snap);
+  }
+  if (session.activeTool === 'extend') {
+    return handleExtendPointerDown(session, bus, input, point, snap);
+  }
+  if (session.activeTool === 'offset') {
+    return handleOffsetPointerDown(session, bus, input, point, snap);
+  }
+  if (session.activeTool === 'mirror') {
+    return handleMirrorPointerDown(session, bus, input, point, snap);
+  }
+  if (session.activeTool === 'rotate') {
+    return handleRotatePointerDown(session, bus, input, point, snap);
+  }
+  if (session.activeTool === 'scale') {
+    return handleScalePointerDown(session, bus, input, point, snap);
+  }
+
   if (session.activeTool === 'move') {
     const selected = selectedOrMessage(bus);
     if (selected.length === 0) {
-      // Allow pick-to-select then move
       const tol = screenToleranceToWorld(input.camera, 8);
       const id = hitTestDocument(bus.getDocument(), point, tol);
       if (id) {
@@ -273,7 +234,6 @@ export function handleToolPointerDown(
     };
   }
 
-  // --- Copy ---
   if (session.activeTool === 'copy') {
     const selected = selectedOrMessage(bus);
     if (selected.length === 0) {
@@ -309,9 +269,7 @@ export function handleToolPointerDown(
 
     const delta = vecDelta(session.anchor, point);
     try {
-      const cmd = new CopyEntitiesCommand(selected, delta);
-      bus.execute(cmd);
-      // Keep same base point for optional repeated placement
+      bus.execute(new CopyEntitiesCommand(selected, delta));
       return {
         ...session,
         mode: 'copy',
@@ -330,14 +288,16 @@ export function handleToolPointerDown(
     }
   }
 
-  // --- Polyline ---
   if (session.activeTool === 'polyline') {
     const verts = [...session.vertices, point];
     if ((input.detail ?? 1) >= 2 && session.vertices.length >= 1) {
-      const cleaned = [...(session.vertices.length >= 2 ? session.vertices : verts)];
+      const cleaned = [
+        ...(session.vertices.length >= 2 ? session.vertices : verts),
+      ];
       if (
         cleaned.length >= 2 &&
-        distance(cleaned[cleaned.length - 1]!, cleaned[cleaned.length - 2]!) < 1e-9
+        distance(cleaned[cleaned.length - 1]!, cleaned[cleaned.length - 2]!) <
+          1e-9
       ) {
         cleaned.pop();
       }
@@ -364,49 +324,56 @@ export function handleToolPointerDown(
     };
   }
 
-  // --- Two-click draw tools ---
-  if (!session.anchor) {
+  if (
+    session.activeTool === 'line' ||
+    session.activeTool === 'rectangle' ||
+    session.activeTool === 'circle'
+  ) {
+    if (!session.anchor) {
+      return {
+        ...session,
+        mode: 'draw',
+        anchor: point,
+        vertices: [],
+        preview: null,
+        lastSnap: snap,
+        statusMessage:
+          session.activeTool === 'line'
+            ? 'Line: specify second point'
+            : session.activeTool === 'rectangle'
+              ? 'Rectangle: specify opposite corner'
+              : 'Circle: specify radius point',
+      };
+    }
+
+    switch (session.activeTool) {
+      case 'line':
+        if (distance(session.anchor, point) > 1e-9) {
+          bus.execute(new CreateLineCommand(session.anchor, point));
+        }
+        break;
+      case 'rectangle':
+        if (distance(session.anchor, point) > 1e-9) {
+          bus.execute(new CreateRectangleCommand(session.anchor, point));
+        }
+        break;
+      case 'circle': {
+        const radius = distance(session.anchor, point);
+        if (radius > 1e-9) {
+          bus.execute(new CreateCircleCommand(session.anchor, radius));
+        }
+        break;
+      }
+    }
+
     return {
-      ...session,
-      mode: 'draw',
-      anchor: point,
-      vertices: [],
-      preview: null,
+      ...cancelTool(session),
       lastSnap: snap,
-      statusMessage:
-        session.activeTool === 'line'
-          ? 'Line: specify second point'
-          : session.activeTool === 'rectangle'
-            ? 'Rectangle: specify opposite corner'
-            : 'Circle: specify radius point',
+      statusMessage: toolStatus(session.activeTool),
     };
   }
 
-  switch (session.activeTool) {
-    case 'line':
-      if (distance(session.anchor, point) > 1e-9) {
-        bus.execute(new CreateLineCommand(session.anchor, point));
-      }
-      break;
-    case 'rectangle':
-      if (distance(session.anchor, point) > 1e-9) {
-        bus.execute(new CreateRectangleCommand(session.anchor, point));
-      }
-      break;
-    case 'circle': {
-      const radius = distance(session.anchor, point);
-      if (radius > 1e-9) {
-        bus.execute(new CreateCircleCommand(session.anchor, radius));
-      }
-      break;
-    }
-  }
-
-  return {
-    ...cancelTool(session),
-    lastSnap: snap,
-    statusMessage: toolStatus(session.activeTool),
-  };
+  return { ...session, lastSnap: snap };
 }
 
 export function handleToolPointerMove(
@@ -443,10 +410,7 @@ export function handleToolPointerMove(
     };
   }
 
-  if (
-    (session.mode === 'move' || session.mode === 'copy') &&
-    session.anchor
-  ) {
+  if ((session.mode === 'move' || session.mode === 'copy') && session.anchor) {
     const selected = selectedOrMessage(bus);
     const delta = vecDelta(session.anchor, point);
     const previewEntities = selected
@@ -458,6 +422,25 @@ export function handleToolPointerMove(
       previewEntities,
       hideEntityIds: session.mode === 'move' ? selected.map((e) => e.id) : [],
     };
+  }
+
+  if (session.activeTool === 'trim') {
+    return handleTrimPointerMove(session, bus, input, point, snap);
+  }
+  if (session.activeTool === 'extend') {
+    return handleExtendPointerMove(session, bus, input, point, snap);
+  }
+  if (session.activeTool === 'offset') {
+    return handleOffsetPointerMove(session, bus, point, snap);
+  }
+  if (session.activeTool === 'mirror') {
+    return handleMirrorPointerMove(session, bus, point, snap);
+  }
+  if (session.activeTool === 'rotate') {
+    return handleRotatePointerMove(session, bus, point, snap);
+  }
+  if (session.activeTool === 'scale') {
+    return handleScalePointerMove(session, bus, point, snap);
   }
 
   if (session.activeTool === 'select' || session.activeTool === 'pan') {
@@ -512,7 +495,6 @@ export function handleToolPointerUp(
   const snap = snapPoint(input.world, bus, input.camera);
   const point = snap.point;
 
-  // Commit grip edit
   if (session.mode === 'grip' && session.grip && session.gripEntity) {
     try {
       bus.execute(
@@ -536,9 +518,13 @@ export function handleToolPointerUp(
     }
   }
 
-  // Commit window selection
   if (session.mode === 'window' && session.anchor) {
-    const ids = selectByRectangle(bus.getDocument(), session.anchor, point, 'auto');
+    const ids = selectByRectangle(
+      bus.getDocument(),
+      session.anchor,
+      point,
+      'auto',
+    );
     const multi = !!(input.ctrlKey || input.metaKey);
     if (multi) {
       bus.updateWithoutHistory((doc) => {
@@ -576,5 +562,48 @@ export function finishPolyline(
   return {
     ...cancelTool(session),
     statusMessage: toolStatus('polyline'),
+  };
+}
+
+/** Commit numeric keyboard entry for offset / rotate / scale. */
+export function commitNumericInput(
+  session: ToolSession,
+  bus: CommandBus,
+): ToolSession {
+  const buffer = session.inputBuffer;
+  if (!buffer.trim()) return session;
+
+  if (session.activeTool === 'offset' && session.refEntityId) {
+    return commitOffsetDistance(session, buffer);
+  }
+  if (session.activeTool === 'rotate' && session.anchor) {
+    const next = commitRotateAngle(session, buffer);
+    // If angle set and we already have selection, wait for click to confirm
+    return next;
+  }
+  if (session.activeTool === 'scale' && session.anchor) {
+    return commitScaleFactor(session, buffer);
+  }
+  void bus;
+  return { ...session, inputBuffer: '', statusMessage: session.statusMessage };
+}
+
+export function appendInputBuffer(
+  session: ToolSession,
+  ch: string,
+): ToolSession {
+  if (!/^[0-9.\-]$/.test(ch) && ch !== 'Backspace') return session;
+  if (ch === 'Backspace') {
+    return {
+      ...session,
+      inputBuffer: session.inputBuffer.slice(0, -1),
+      statusMessage: `${toolStatus(session.activeTool as ToolId)} [${session.inputBuffer.slice(0, -1) || '…'}]`,
+    };
+  }
+  const inputBuffer = session.inputBuffer + ch;
+  return {
+    ...session,
+    inputBuffer,
+    statusMessage: `${session.statusMessage.split('[')[0]!.trim()} [${inputBuffer}]`,
   };
 }

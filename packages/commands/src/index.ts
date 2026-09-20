@@ -13,3 +13,11 @@ export {
   MoveEntityGripCommand,
   ReplaceEntityCommand,
 } from './modifyCommands.js';
+export {
+  ExtendEntityCommand,
+  MirrorEntitiesCommand,
+  OffsetEntityCommand,
+  RotateEntitiesCommand,
+  ScaleEntitiesCommand,
+  TrimEntityCommand,
+} from './cadModifyCommands.js';

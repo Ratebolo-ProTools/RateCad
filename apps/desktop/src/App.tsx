@@ -17,7 +17,9 @@ import {
 import { formatLength } from '@ratecad/geometry';
 import { serializeDocument, tryParseDocument } from '@ratecad/io';
 import {
+  appendInputBuffer,
   cancelTool,
+  commitNumericInput,
   createToolSession,
   finishPolyline,
   handleToolPointerDown,
@@ -45,9 +47,23 @@ const DRAW_TOOLS: Array<{ id: ToolId; label: string; glyph: string }> = [
   { id: 'polyline', label: 'PLine', glyph: '⌇' },
   { id: 'move', label: 'Move', glyph: '↔' },
   { id: 'copy', label: 'Copy', glyph: '⧉' },
+  { id: 'trim', label: 'Trim', glyph: '✂' },
+  { id: 'extend', label: 'Extend', glyph: '⟶' },
+  { id: 'offset', label: 'Offset', glyph: '∥' },
+  { id: 'mirror', label: 'Mirror', glyph: '⊳⊲' },
+  { id: 'rotate', label: 'Rotate', glyph: '↻' },
+  { id: 'scale', label: 'Scale', glyph: '⤢' },
   { id: 'pan', label: 'Pan', glyph: '✥' },
 ];
 
+const COMMAND_ALIASES: Record<string, ToolId> = {
+  tr: 'trim',
+  ex: 'extend',
+  o: 'offset',
+  mi: 'mirror',
+  ro: 'rotate',
+  sc: 'scale',
+};
 function createBus(): CommandBus {
   return new CommandBus(createEmptyDocument('Untitled Drawing'));
 }
@@ -121,6 +137,8 @@ export function App() {
   const suppressDirtyRef = useRef(false);
   const rafPanRef = useRef<number | null>(null);
   const pendingPanRef = useRef<{ dx: number; dy: number } | null>(null);
+  const commandAliasRef = useRef('');
+  const commandAliasTimerRef = useRef<number | null>(null);
 
   const [doc, setDoc] = useState<DrawingDocument>(() => busRef.current.getDocument());
   const [session, setSession] = useState<ToolSession>(() => sessionRef.current);
@@ -489,8 +507,21 @@ export function App() {
         return;
       }
       if ((event.key === 'Delete' || event.key === 'Backspace') && !inField) {
+        const s = sessionRef.current;
+        const numericTools =
+          s.activeTool === 'offset' ||
+          s.activeTool === 'rotate' ||
+          s.activeTool === 'scale';
+        if (
+          event.key === 'Backspace' &&
+          numericTools &&
+          (s.inputBuffer.length > 0 || s.anchor || s.refEntityId)
+        ) {
+          event.preventDefault();
+          syncSession(appendInputBuffer(s, 'Backspace'));
+          return;
+        }
         event.preventDefault();
-        // Ensure canvas shortcuts work even if a disabled field has focus
         if (target && (tag === 'INPUT' || tag === 'TEXTAREA')) {
           (target as HTMLElement).blur();
         }
@@ -498,6 +529,11 @@ export function App() {
         return;
       }
       if (event.key === 'Escape') {
+        commandAliasRef.current = '';
+        if (commandAliasTimerRef.current != null) {
+          window.clearTimeout(commandAliasTimerRef.current);
+          commandAliasTimerRef.current = null;
+        }
         const s = sessionRef.current;
         const inProgress =
           s.mode !== 'idle' ||
@@ -505,7 +541,9 @@ export function App() {
           s.vertices.length > 0 ||
           !!s.grip ||
           !!s.previewEntities ||
-          !!s.selectionRect;
+          !!s.selectionRect ||
+          !!s.refEntityId ||
+          s.inputBuffer.length > 0;
         if (inProgress) {
           syncSession(cancelTool(s));
         } else if (s.activeTool !== 'select') {
@@ -515,9 +553,28 @@ export function App() {
         }
         return;
       }
-      if (event.key === 'Enter' && sessionRef.current.activeTool === 'polyline') {
+      if (event.key === 'Enter' && !inField) {
         event.preventDefault();
-        syncSession(finishPolyline(sessionRef.current, busRef.current));
+        const s = sessionRef.current;
+        if (s.activeTool === 'polyline') {
+          syncSession(finishPolyline(s, busRef.current));
+          return;
+        }
+        if (
+          s.inputBuffer.length > 0 &&
+          (s.activeTool === 'offset' ||
+            s.activeTool === 'rotate' ||
+            s.activeTool === 'scale')
+        ) {
+          syncSession(commitNumericInput(s, busRef.current));
+          return;
+        }
+        // Resolve pending command alias on Enter
+        const alias = COMMAND_ALIASES[commandAliasRef.current];
+        if (alias) {
+          commandAliasRef.current = '';
+          activateTool(alias);
+        }
         return;
       }
       if (!meta && !inField) {
@@ -526,19 +583,100 @@ export function App() {
           toggleSnap();
           return;
         }
-        const map: Record<string, ToolId> = {
+
+        // Numeric entry for offset / rotate / scale
+        const s = sessionRef.current;
+        const numericTools =
+          s.activeTool === 'offset' ||
+          s.activeTool === 'rotate' ||
+          s.activeTool === 'scale';
+        if (
+          numericTools &&
+          (s.refEntityId || s.anchor) &&
+          /^[0-9.\-]$/.test(event.key)
+        ) {
+          event.preventDefault();
+          syncSession(appendInputBuffer(s, event.key));
+          return;
+        }
+
+        const key = event.key.toLowerCase();
+        const singleMap: Record<string, ToolId> = {
           v: 'select',
           l: 'line',
-          r: 'rectangle',
           c: 'circle',
           p: 'polyline',
-          m: 'move',
-          t: 'copy',
           h: 'pan',
+          o: 'offset',
         };
-        const tool = map[event.key.toLowerCase()];
+
+        // Delayed single-key tools that are also alias prefixes: t→copy/TR, m→move/MI, r→rect/RO
+        const delayedSingles: Record<string, ToolId> = {
+          t: 'copy',
+          m: 'move',
+          r: 'rectangle',
+        };
+
+        // If we already started an alias prefix, append and resolve (e.g. T+R → Trim)
+        if (commandAliasRef.current.length > 0 && /^[a-z]$/.test(key)) {
+          const nextAlias = (commandAliasRef.current + key).slice(-2);
+          const alias = COMMAND_ALIASES[nextAlias];
+          if (alias) {
+            event.preventDefault();
+            commandAliasRef.current = '';
+            if (commandAliasTimerRef.current != null) {
+              window.clearTimeout(commandAliasTimerRef.current);
+              commandAliasTimerRef.current = null;
+            }
+            activateTool(alias);
+            return;
+          }
+        }
+
+        if (delayedSingles[key]) {
+          event.preventDefault();
+          commandAliasRef.current = key;
+          if (commandAliasTimerRef.current != null) {
+            window.clearTimeout(commandAliasTimerRef.current);
+          }
+          commandAliasTimerRef.current = window.setTimeout(() => {
+            if (commandAliasRef.current === key) {
+              commandAliasRef.current = '';
+              activateTool(delayedSingles[key]!);
+            }
+            commandAliasTimerRef.current = null;
+          }, 350);
+          return;
+        }
+
+        // Multi-character CAD aliases: EX, SC (and any non-delayed prefixes)
+        if (/^[a-z]$/.test(key)) {
+          const nextAlias = (commandAliasRef.current + key).slice(-2);
+          commandAliasRef.current = nextAlias;
+          const alias = COMMAND_ALIASES[nextAlias];
+          if (alias) {
+            event.preventDefault();
+            commandAliasRef.current = '';
+            if (commandAliasTimerRef.current != null) {
+              window.clearTimeout(commandAliasTimerRef.current);
+              commandAliasTimerRef.current = null;
+            }
+            activateTool(alias);
+            return;
+          }
+          if (commandAliasTimerRef.current != null) {
+            window.clearTimeout(commandAliasTimerRef.current);
+          }
+          commandAliasTimerRef.current = window.setTimeout(() => {
+            commandAliasRef.current = '';
+            commandAliasTimerRef.current = null;
+          }, 800);
+        }
+
+        const tool = singleMap[key];
         if (tool) {
           event.preventDefault();
+          commandAliasRef.current = '';
           if (target && (tag === 'INPUT' || tag === 'TEXTAREA')) {
             (target as HTMLElement).blur();
           }

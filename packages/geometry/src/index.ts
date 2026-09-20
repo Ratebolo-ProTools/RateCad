@@ -27,3 +27,44 @@ export {
   validateEntityGeometry,
   vecDelta,
 } from './transform.js';
+
+export {
+  angleBetween,
+  closestPointOnSegment,
+  cross,
+  degreesToRadians,
+  dot,
+  intersectLineCircle,
+  intersectRaySegment,
+  intersectSegmentCircle,
+  intersectSegments,
+  leftNormal,
+  normalize,
+  pointOnSegment,
+  projectParam,
+  radiansToDegrees,
+  reflectPoint,
+  rotatePoint,
+  scalePoint,
+} from './intersect.js';
+
+export type { ModifyResult } from './cadOps.js';
+export {
+  entitySegments,
+  extendEntity,
+  extendLineEntity,
+  extendPolylineEntity,
+  mirrorEntity,
+  offsetEntity,
+  offsetLineEntity,
+  offsetPolylineEntity,
+  offsetRectangleEntity,
+  parseAngleDegrees,
+  parsePositiveScale,
+  rotateEntity,
+  scaleEntity,
+  trimEntity,
+  trimLineEntity,
+  trimPolylineEntity,
+  trimRemovalPreview,
+} from './cadOps.js';
