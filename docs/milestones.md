@@ -1,28 +1,26 @@
 # Milestones
 
-## Milestone 6 (current) — Construction Objects Foundation
+## Milestone 7 (current) — Rooms & Spaces Foundation
 
-Structured walls, doors, and windows with host relationships.
+Semantic RoomEntity bounded by WallEntity loops.
 
 ### Behavior notes
 
-- **Semantic entities**: `WallEntity`, `DoorEntity`, `WindowEntity` are first-class
-  document types. Plan geometry is derived from parameters (not stored as lines).
-- **Hosting**: Doors/windows store `hostWallId` + parametric `position` along the
-  wall. Moving/rotating a wall does not rewrite hosted records; world placement
-  follows the host automatically.
-- **Delete wall**: Cascades — hosted doors/windows are deleted with the wall
-  (via `DeleteWallCommand` / `DeleteEntitiesCommand` + `expandDeleteIds`).
-  Undo restores the wall and hosted elements together. Orphans are filtered on
-  `.ratecad` open.
-- **Scale**: Explicitly **disabled** for walls/doors/windows. Scaling thickness
-  or height silently would produce incorrect construction data.
-- **Wall joining**: Basic endpoint cleanup only — joined ends omit caps and
-  slightly extend side faces. Full architectural wall cleanup is future work.
-- **Layers**: Walls → Walls layer, Doors → Doors, Windows → Windows. Locked
-  layers block modification.
-- **Schema**: `.ratecad` schema **v3** with `constructionDefaults`. v1/v2
-  documents migrate on open.
+- **RoomEntity**: wallIds + wallDirs are authoritative; polygon/area are
+  derived caches recalculated when boundary walls move/rotate/grip-edit.
+- **Detection**: deterministic left-hand face walk on wall endpoint graph.
+  Click inside a closed loop creates a room (smallest containing loop).
+  Open networks and clicks outside loops are rejected with a clear message.
+- **Delete wall**: Cascades hosted doors/windows **and** rooms that used
+  that wall (invalid rooms are not left behind).
+- **Queries**: `findRooms`, `findWallsForRoom`, `findDoorsForRoom`,
+  `findWindowsForRoom`, `findRoomsContainingPoint`, `findAffectedRoomsForWall`.
+- **Scale / Copy / Mirror of rooms**: restricted — rooms follow walls.
+- **Schema**: `.ratecad` schema **v4** with Rooms layer. v1–v3 migrate on open.
+
+## Milestone 6 — Construction Objects Foundation
+
+Walls, doors, windows with host relationships; schema v3.
 
 ## Milestone 5 — Annotations & layers
 

@@ -15,6 +15,7 @@ import {
   distance,
   doorLayout,
   formatLengthInUnits,
+  formatRoomLabelLines,
   measuredLength,
   wallOutlineSegments,
   windowLayout,
@@ -503,6 +504,51 @@ function strokeEntity(
       ctx.moveTo(ma.x, ma.y);
       ctx.lineTo(mb.x, mb.y);
       ctx.stroke();
+      break;
+    }
+    case 'room': {
+      const poly = entity.geometry.polygon;
+      if (poly.length < 3) break;
+      ctx.save();
+      ctx.beginPath();
+      const first = worldToScreen(poly[0]!, camera, width, height);
+      ctx.moveTo(first.x, first.y);
+      for (let i = 1; i < poly.length; i += 1) {
+        const p = worldToScreen(poly[i]!, camera, width, height);
+        ctx.lineTo(p.x, p.y);
+      }
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(201, 168, 108, 0.12)';
+      ctx.fill();
+      ctx.strokeStyle = color;
+      ctx.lineWidth = Math.max(1, lineWidth * 0.75);
+      ctx.setLineDash([6, 4]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      // Label
+      const lines = formatRoomLabelLines(
+        entity,
+        doc.settings.units,
+        doc.settings.precision,
+      );
+      const lp = worldToScreen(
+        entity.geometry.labelPosition,
+        camera,
+        width,
+        height,
+      );
+      const fontPx = Math.max(11, 0.35 * camera.zoom);
+      ctx.font = `${fontPx}px "IBM Plex Sans", system-ui, sans-serif`;
+      ctx.fillStyle = color;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      const lineH = fontPx * 1.15;
+      const startY = lp.y - ((lines.length - 1) * lineH) / 2;
+      for (let i = 0; i < lines.length; i += 1) {
+        ctx.globalAlpha = i === 0 ? 1 : 0.85;
+        ctx.fillText(lines[i]!, lp.x, startY + i * lineH);
+      }
+      ctx.restore();
       break;
     }
   }

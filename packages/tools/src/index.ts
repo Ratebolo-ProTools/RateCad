@@ -50,6 +50,8 @@ import {
   commitWallThickness,
   handleDoorPointerDown,
   handleDoorPointerMove,
+  handleRoomPointerDown,
+  handleRoomPointerMove,
   handleWallPointerDown,
   handleWallPointerMove,
   handleWindowPointerDown,
@@ -228,6 +230,9 @@ export function handleToolPointerDown(
   }
   if (session.activeTool === 'window') {
     return handleWindowPointerDown(session, bus, input, point, snap);
+  }
+  if (session.activeTool === 'room') {
+    return handleRoomPointerDown(session, bus, input, point, snap);
   }
 
   if (session.activeTool === 'trim') {
@@ -567,6 +572,9 @@ export function handleToolPointerMove(
   if (session.activeTool === 'window') {
     return handleWindowPointerMove(session, bus, input, point, snap);
   }
+  if (session.activeTool === 'room') {
+    return handleRoomPointerMove(session, bus, input, point, snap);
+  }
 
   if (session.activeTool === 'trim') {
     return handleTrimPointerMove(session, bus, input, point, snap);
@@ -658,6 +666,7 @@ export function handleToolPointerUp(
           session.grip.editTarget,
           point,
           hostWall?.type === 'wall' ? hostWall : undefined,
+          bus.getDocument().entities,
         ),
       );
       return {

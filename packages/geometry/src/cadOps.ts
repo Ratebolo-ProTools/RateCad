@@ -75,6 +75,7 @@ export function entitySegments(entity: Entity): Array<{ a: Vec2; b: Vec2 }> {
     case 'wall':
     case 'door':
     case 'window':
+    case 'room':
       return [];
   }
 }
@@ -341,6 +342,7 @@ export function trimEntity(
     case 'wall':
     case 'door':
     case 'window':
+    case 'room':
       return fail(`Cannot trim ${target.type}`);
   }
 }
@@ -484,6 +486,7 @@ export function extendEntity(
     case 'wall':
     case 'door':
     case 'window':
+    case 'room':
       return fail(`${target.type} extend not supported`);
   }
 }
@@ -664,6 +667,7 @@ export function offsetEntity(
     case 'wall':
     case 'door':
     case 'window':
+    case 'room':
       return fail(`${entity.type} offset not supported`);
   }
 }
@@ -777,6 +781,9 @@ export function mirrorEntity(
     case 'window':
       // Hosted objects mirror with their wall via remapped hostWallId in command layer.
       // Standalone mirror without host remap is invalid.
+      return null;
+    case 'room':
+      // Rooms follow walls — mirror walls instead.
       return null;
   }
   return validateEntityGeometry(next) ? next : null;
@@ -899,6 +906,17 @@ export function rotateEntity(
       // Parametric on host — rotate is a no-op on door/window records.
       next = { ...entity };
       break;
+    case 'room':
+      // Boundary from walls; rotate label with origin so selection feedback works.
+      next = {
+        ...entity,
+        geometry: {
+          ...entity.geometry,
+          labelPosition: map(entity.geometry.labelPosition),
+          polygon: entity.geometry.polygon.map(map),
+        },
+      };
+      break;
   }
   return validateEntityGeometry(next) ? next : null;
 }
@@ -985,6 +1003,7 @@ export function scaleEntity(
     case 'wall':
     case 'door':
     case 'window':
+    case 'room':
       // Scale is disabled for construction objects — thickness/height/width
       // must not silently scale into incorrect construction data.
       return null;

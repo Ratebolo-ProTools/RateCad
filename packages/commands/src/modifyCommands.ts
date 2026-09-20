@@ -2,6 +2,7 @@ import {
   addEntity,
   createEntityId,
   expandDeleteIds,
+  findRoomsUsingWalls,
   getEntity,
   removeEntities,
   replaceEntity,
@@ -9,6 +10,7 @@ import {
   type DrawingDocument,
   type Entity,
   type EntityId,
+  type RoomEntity,
   type Vec2,
   type WallEntity,
   type WindowEntity,
@@ -19,6 +21,7 @@ import {
   cloneEntityWithNewId,
   doorLayout,
   projectOntoWall,
+  recalculateRoomFromDocument,
   translateEntity,
   translatePoint,
   validateEntityGeometry,
@@ -34,6 +37,73 @@ function assertValid(entity: Entity): Entity {
   }
   return entity;
 }
+
+/**
+ * After wall geometry changes, recompute affected rooms.
+ * Returns room before/after pairs and broken room ids to delete.
+ */
+export function planRoomRefresh(
+  allEntitiesBefore: Entity[],
+  allEntitiesAfterWalls: Entity[],
+  wallIds: EntityId[],
+): {
+  roomsBefore: RoomEntity[];
+  roomsAfter: RoomEntity[];
+  brokenIds: EntityId[];
+} {
+  const docBefore = { entities: allEntitiesBefore } as DrawingDocument;
+  const docAfter = { entities: allEntitiesAfterWalls } as DrawingDocument;
+  const affected = findRoomsUsingWalls(docBefore, wallIds);
+  const roomsBefore = affected.map((r) => structuredClone(r));
+  const roomsAfter: RoomEntity[] = [];
+  const brokenIds: EntityId[] = [];
+  for (const room of affected) {
+    const next = recalculateRoomFromDocument(docAfter, room);
+    if (!next) brokenIds.push(room.id);
+    else roomsAfter.push(next);
+  }
+  return { roomsBefore, roomsAfter, brokenIds };
+}
+
+function applyRoomRefreshPlan(
+  doc: DrawingDocument,
+  roomsAfter: RoomEntity[],
+  brokenIds: EntityId[],
+): DrawingDocument {
+  let next = doc;
+  for (const room of roomsAfter) {
+    next = replaceEntity(next, structuredClone(room));
+  }
+  if (brokenIds.length > 0) {
+    next = removeEntities(next, brokenIds);
+  }
+  return next;
+}
+
+function restoreRoomsBefore(
+  doc: DrawingDocument,
+  roomsBefore: RoomEntity[],
+  brokenIds: EntityId[],
+): DrawingDocument {
+  let next = doc;
+  for (const room of roomsBefore) {
+    if (brokenIds.includes(room.id)) {
+      if (!getEntity(next, room.id)) {
+        next = addEntity(next, structuredClone(room));
+      } else {
+        next = replaceEntity(next, structuredClone(room));
+      }
+    } else {
+      next = replaceEntity(next, structuredClone(room));
+    }
+  }
+  return next;
+}
+
+export {
+  applyRoomRefreshPlan as applyRoomRefresh,
+  restoreRoomsBefore as restoreRooms,
+};
 
 function entityPrefix(type: Entity['type']): string {
   switch (type) {
@@ -57,6 +127,8 @@ function entityPrefix(type: Entity['type']): string {
       return 'door';
     case 'window':
       return 'window';
+    case 'room':
+      return 'room';
   }
 }
 
@@ -122,12 +194,17 @@ export class ReplaceEntityCommand implements Command {
 export class MoveEntityGripCommand implements Command {
   readonly name = 'MoveEntityGrip';
   private readonly replace: ReplaceEntityCommand;
+  private roomsBefore: RoomEntity[] = [];
+  private roomsAfter: RoomEntity[] = [];
+  private brokenRoomIds: EntityId[] = [];
+  private contextEntities: Entity[] | null = null;
 
   constructor(
     before: Entity,
     target: GripEditTarget,
     point: Vec2,
     hostWall?: WallEntity,
+    contextEntities?: Entity[],
   ) {
     let after: Entity | null = null;
     if (
@@ -151,14 +228,27 @@ export class MoveEntityGripCommand implements Command {
       throw new Error('Grip edit produced invalid geometry');
     }
     this.replace = new ReplaceEntityCommand(before, after);
+
+    if (before.type === 'wall' && contextEntities) {
+      this.contextEntities = contextEntities;
+      const entitiesAfter = contextEntities.map((e) =>
+        e.id === after!.id ? after! : e,
+      );
+      const plan = planRoomRefresh(contextEntities, entitiesAfter, [before.id]);
+      this.roomsBefore = plan.roomsBefore;
+      this.roomsAfter = plan.roomsAfter;
+      this.brokenRoomIds = plan.brokenIds;
+    }
   }
 
   execute(doc: DrawingDocument): DrawingDocument {
-    return this.replace.execute(doc);
+    let next = this.replace.execute(doc);
+    return applyRoomRefreshPlan(next, this.roomsAfter, this.brokenRoomIds);
   }
 
   undo(doc: DrawingDocument): DrawingDocument {
-    return this.replace.undo(doc);
+    let next = this.replace.undo(doc);
+    return restoreRoomsBefore(next, this.roomsBefore, this.brokenRoomIds);
   }
 }
 
@@ -166,6 +256,9 @@ export class MoveEntitiesCommand implements Command {
   readonly name = 'MoveEntities';
   private readonly before: Entity[] = [];
   private readonly after: Entity[] = [];
+  private roomsBefore: RoomEntity[] = [];
+  private roomsAfter: RoomEntity[] = [];
+  private brokenRoomIds: EntityId[] = [];
 
   /**
    * @param entities Entities to move
@@ -204,12 +297,35 @@ export class MoveEntitiesCommand implements Command {
         continue;
       }
 
+      if (entity.type === 'room') {
+        // Moving a room alone moves its label only
+        const moved = translateEntity(entity, delta);
+        if (!moved || !validateEntityGeometry(moved)) {
+          throw new Error(`Cannot move room ${entity.id}`);
+        }
+        this.before.push(structuredClone(entity));
+        this.after.push(moved);
+        continue;
+      }
+
       const moved = translateEntity(entity, delta);
       if (!moved || !validateEntityGeometry(moved)) {
         throw new Error(`Cannot move entity ${entity.id}`);
       }
       this.before.push(structuredClone(entity));
       this.after.push(moved);
+    }
+
+    const movedWallIds = this.after
+      .filter((e): e is WallEntity => e.type === 'wall')
+      .map((w) => w.id);
+    if (movedWallIds.length > 0) {
+      const afterById = new Map(this.after.map((e) => [e.id, e]));
+      const entitiesAfter = contextEntities.map((e) => afterById.get(e.id) ?? e);
+      const plan = planRoomRefresh(contextEntities, entitiesAfter, movedWallIds);
+      this.roomsBefore = plan.roomsBefore;
+      this.roomsAfter = plan.roomsAfter;
+      this.brokenRoomIds = plan.brokenIds;
     }
   }
 
@@ -218,7 +334,7 @@ export class MoveEntitiesCommand implements Command {
     for (const entity of this.after) {
       next = replaceEntity(next, structuredClone(entity));
     }
-    return next;
+    return applyRoomRefreshPlan(next, this.roomsAfter, this.brokenRoomIds);
   }
 
   undo(doc: DrawingDocument): DrawingDocument {
@@ -226,7 +342,7 @@ export class MoveEntitiesCommand implements Command {
     for (const entity of this.before) {
       next = replaceEntity(next, structuredClone(entity));
     }
-    return next;
+    return restoreRoomsBefore(next, this.roomsBefore, this.brokenRoomIds);
   }
 }
 
@@ -253,6 +369,11 @@ export class CopyEntitiesCommand implements Command {
     // First pass: copy walls (and non-hosted)
     for (const entity of entities) {
       if (entity.type === 'door' || entity.type === 'window') continue;
+      if (entity.type === 'room') {
+        throw new Error(
+          'Cannot copy rooms directly — copy boundary walls and recreate the room',
+        );
+      }
 
       const moved = translateEntity(entity, delta);
       if (!moved || !validateEntityGeometry(moved)) {

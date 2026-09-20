@@ -15,6 +15,7 @@ import {
   SetCurrentLayerCommand,
   UpdateDoorCommand,
   UpdateLayerCommand,
+  UpdateRoomCommand,
   UpdateTextCommand,
   UpdateWallCommand,
   UpdateWindowCommand,
@@ -33,11 +34,16 @@ import {
   type Entity,
   type Layer,
   type LengthUnit,
+  type RoomEntity,
   type TextEntity,
   type WallEntity,
   type WindowEntity,
 } from '@ratecad/core';
 import {
+  findDoorsForRoom,
+  findWallsForRoom,
+  findWindowsForRoom,
+  formatAreaInUnits,
   formatLength,
   formatLengthInUnits,
   measuredLength,
@@ -89,6 +95,7 @@ const DRAW_TOOLS: Array<{
   { id: 'wall', label: 'Wall', glyph: '▮' },
   { id: 'door', label: 'Door', glyph: '⊓' },
   { id: 'window', label: 'Window', glyph: '▤' },
+  { id: 'room', label: 'Room', glyph: '⌂' },
   { id: 'move', label: 'Move', glyph: '↔' },
   { id: 'copy', label: 'Copy', glyph: '⧉' },
   { id: 'trim', label: 'Trim', glyph: '✂' },
@@ -112,6 +119,7 @@ const COMMAND_ALIASES: Record<string, ToolId> = {
   wa: 'wall',
   do: 'door',
   wi: 'window',
+  rm: 'room',
 };
 
 const UNIT_OPTIONS: LengthUnit[] = ['ft', 'in', 'm', 'mm'];
@@ -331,6 +339,35 @@ function describeEntity(
         {
           label: 'Position',
           value: `${(entity.geometry.position * 100).toFixed(1)}%`,
+        },
+      ];
+    }
+    case 'room': {
+      const walls = findWallsForRoom(doc, entity.id);
+      const doors = findDoorsForRoom(doc, entity.id);
+      const windows = findWindowsForRoom(doc, entity.id);
+      return [
+        ...common,
+        { label: 'Name', value: entity.properties.name },
+        { label: 'Room type', value: entity.properties.roomType ?? '—' },
+        {
+          label: 'Area',
+          value: formatAreaInUnits(
+            entity.geometry.area,
+            doc.settings.units,
+            doc.settings.precision,
+          ),
+        },
+        { label: 'Walls', value: String(walls.length) },
+        { label: 'Doors', value: String(doors.length) },
+        { label: 'Windows', value: String(windows.length) },
+        {
+          label: 'Boundary',
+          value: entity.geometry.wallIds.join(', '),
+        },
+        {
+          label: 'Label',
+          value: `${formatLength(entity.geometry.labelPosition.x)}, ${formatLength(entity.geometry.labelPosition.y)}`,
         },
       ];
     }
@@ -1687,6 +1724,48 @@ export function App() {
                       }}
                     >
                       Edit height…
+                    </button>
+                  </>
+                ) : null}
+                {selected[0]?.type === 'room' ? (
+                  <>
+                    <button
+                      type="button"
+                      className="mini-btn block"
+                      onClick={() => {
+                        const room = selected[0] as RoomEntity;
+                        if (!isEntityModifiable(doc, room)) return;
+                        const next = window.prompt(
+                          'Room name',
+                          room.properties.name,
+                        );
+                        if (next == null) return;
+                        busRef.current.execute(
+                          new UpdateRoomCommand(room, { name: next }),
+                        );
+                      }}
+                    >
+                      Rename…
+                    </button>
+                    <button
+                      type="button"
+                      className="mini-btn block"
+                      onClick={() => {
+                        const room = selected[0] as RoomEntity;
+                        if (!isEntityModifiable(doc, room)) return;
+                        const next = window.prompt(
+                          'Room type',
+                          room.properties.roomType ?? 'general',
+                        );
+                        if (next == null) return;
+                        busRef.current.execute(
+                          new UpdateRoomCommand(room, {
+                            roomType: next.trim() || 'general',
+                          }),
+                        );
+                      }}
+                    >
+                      Edit type…
                     </button>
                   </>
                 ) : null}

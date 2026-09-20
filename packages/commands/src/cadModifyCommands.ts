@@ -7,7 +7,9 @@ import {
   type DrawingDocument,
   type Entity,
   type EntityId,
+  type RoomEntity,
   type Vec2,
+  type WallEntity,
 } from '@ratecad/core';
 import {
   extendEntity,
@@ -19,7 +21,12 @@ import {
   validateEntityGeometry,
 } from '@ratecad/geometry';
 import type { Command } from './bus.js';
-import { ReplaceEntityCommand } from './modifyCommands.js';
+import {
+  ReplaceEntityCommand,
+  applyRoomRefresh,
+  planRoomRefresh,
+  restoreRooms,
+} from './modifyCommands.js';
 
 function prefixFor(type: Entity['type']): string {
   switch (type) {
@@ -43,6 +50,8 @@ function prefixFor(type: Entity['type']): string {
       return 'door';
     case 'window':
       return 'window';
+    case 'room':
+      return 'room';
   }
 }
 
@@ -166,6 +175,11 @@ export class MirrorEntitiesCommand implements Command {
 
     for (const entity of entities) {
       if (entity.type === 'door' || entity.type === 'window') continue;
+      if (entity.type === 'room') {
+        throw new Error(
+          'Cannot mirror rooms directly — mirror boundary walls and recreate the room',
+        );
+      }
       const id = createEntityId(prefixFor(entity.type));
       const mirrored = mirrorEntity(entity, axisA, axisB, id);
       if (!mirrored) {
@@ -241,8 +255,16 @@ export class RotateEntitiesCommand implements Command {
   readonly name = 'RotateEntities';
   private readonly before: Entity[] = [];
   private readonly after: Entity[] = [];
+  private roomsBefore: RoomEntity[] = [];
+  private roomsAfter: RoomEntity[] = [];
+  private brokenRoomIds: EntityId[] = [];
 
-  constructor(entities: Entity[], origin: Vec2, radians: number) {
+  constructor(
+    entities: Entity[],
+    origin: Vec2,
+    radians: number,
+    contextEntities: Entity[] = entities,
+  ) {
     if (!Number.isFinite(radians)) {
       throw new Error('Invalid rotation angle');
     }
@@ -257,12 +279,33 @@ export class RotateEntitiesCommand implements Command {
           `Cannot rotate ${entity.type} without its host wall — select the wall too`,
         );
       }
+      if (entity.type === 'room') {
+        // Rooms recalculate from walls; skip standalone room rotate if walls also selected
+        if (entity.geometry.wallIds.some((id) => selectedIds.has(id))) {
+          continue;
+        }
+        throw new Error(
+          'Cannot rotate room without its boundary walls — select the walls too',
+        );
+      }
       const rotated = rotateEntity(entity, origin, radians);
       if (!rotated) {
         throw new Error(`Cannot rotate entity ${entity.id}`);
       }
       this.before.push(structuredClone(entity));
       this.after.push(rotated);
+    }
+
+    const wallIds = this.after
+      .filter((e): e is WallEntity => e.type === 'wall')
+      .map((w) => w.id);
+    if (wallIds.length > 0) {
+      const afterById = new Map(this.after.map((e) => [e.id, e]));
+      const entitiesAfter = contextEntities.map((e) => afterById.get(e.id) ?? e);
+      const plan = planRoomRefresh(contextEntities, entitiesAfter, wallIds);
+      this.roomsBefore = plan.roomsBefore;
+      this.roomsAfter = plan.roomsAfter;
+      this.brokenRoomIds = plan.brokenIds;
     }
   }
 
@@ -280,7 +323,7 @@ export class RotateEntitiesCommand implements Command {
         next = replaceEntity(next, structuredClone(entity));
       }
     }
-    return next;
+    return applyRoomRefresh(next, this.roomsAfter, this.brokenRoomIds);
   }
 
   undo(doc: DrawingDocument): DrawingDocument {
@@ -298,7 +341,7 @@ export class RotateEntitiesCommand implements Command {
         next = addEntity(next, structuredClone(entity));
       }
     }
-    return next;
+    return restoreRooms(next, this.roomsBefore, this.brokenRoomIds);
   }
 }
 
@@ -315,7 +358,8 @@ export class ScaleEntitiesCommand implements Command {
       if (
         entity.type === 'wall' ||
         entity.type === 'door' ||
-        entity.type === 'window'
+        entity.type === 'window' ||
+        entity.type === 'room'
       ) {
         throw new Error(
           `Scale is disabled for ${entity.type} — construction sizes must be edited explicitly`,

@@ -217,7 +217,7 @@ export function handleTrimPointerMove(
       ...result.entities.map((e) => ({
         ...e,
         properties: { ...e.properties, color: '#7eb6ff' },
-      })),
+      }) as Entity),
     ],
     hideEntityIds: [target.id],
     statusMessage: 'Trim: click to commit',
@@ -325,7 +325,7 @@ export function handleExtendPointerMove(
     previewEntities: result.entities.map((e) => ({
       ...e,
       properties: { ...e.properties, color: '#7eb6ff' },
-    })),
+    }) as Entity),
     hideEntityIds: [target.id],
     statusMessage: 'Extend: click to commit',
   };
@@ -625,7 +625,14 @@ export function handleRotatePointerDown(
       : angleBetween(session.anchor, snapPoint) - (session.referenceAngle ?? 0);
 
   try {
-    bus.execute(new RotateEntitiesCommand(sel, session.anchor, radians));
+    bus.execute(
+      new RotateEntitiesCommand(
+        sel,
+        session.anchor,
+        radians,
+        bus.getDocument().entities,
+      ),
+    );
   } catch (err) {
     return {
       ...cancelTool(session),

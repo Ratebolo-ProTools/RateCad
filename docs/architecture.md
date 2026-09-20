@@ -17,9 +17,9 @@ DrawingDocument
       ↓
 CommandBus
       ↓
-Construction object model (Wall / Door / Window)
+Construction object model (Wall / Door / Window / Room)
       ↓
-Geometry kernel (derived plan symbols)
+Geometry kernel (derived plan symbols + room topology)
       ↓
 Viewport renderer (projection-only)
 ```
@@ -32,25 +32,26 @@ Viewport renderer (projection-only)
 Prompt → AI → Validated commands → CommandBus → DrawingDocument → Viewport
 ```
 
-## Construction model (Milestone 6)
+## Construction model
 
-| Entity | Authority | Host |
-|--------|-----------|------|
-| Wall | start/end, thickness, height, justification, material | — |
-| Door | hostWallId, position ∈ [0,1], width, height, swing | Wall |
-| Window | hostWallId, position ∈ [0,1], width, height, sill | Wall |
+| Entity | Authority | Relationships |
+|--------|-----------|---------------|
+| Wall | start/end, thickness, height, justification | — |
+| Door | hostWallId, position ∈ [0,1], width, swing | → Wall |
+| Window | hostWallId, position, width, sill | → Wall |
+| Room | wallIds + wallDirs (closed loop), name, type | → Walls; doors/windows via host walls |
 
-Doors and windows are never flattened into anonymous lines/arcs in the document.
-Openings are derived when rendering the host wall outline.
+Rooms do not store duplicate wall geometry. Moving a boundary wall recalculates
+room polygon/area. Broken loops remove the room rather than leaving stale data.
 
 ## Packages
 
 | Package | Role |
 |---------|------|
-| core | Document, layers, Wall/Door/Window + legacy CAD entities |
-| geometry | Math, snap, construction layouts, transforms |
+| core | Document, layers, Wall/Door/Window/Room + CAD entities |
+| geometry | Math, snap, construction layouts, room topology/queries |
 | commands | Create/Update/Delete + modify + undo/redo bus |
-| tools | Interactive tool sessions (Wall/Door/Window + CAD) |
+| tools | Interactive tool sessions |
 | viewport | Camera, grid, Canvas2D renderer, hit-test, grips |
 | io | `.ratecad` JSON serialize/parse + schema migration |
 | ai | Stub boundary only |
@@ -64,6 +65,5 @@ Openings are derived when rendering the host wall outline.
 ## File format
 
 - Extension: `.ratecad`
-- Current schema version: **3**
-- Migrations: v1 → v3, v2 → v3 (adds annotation layers, dimensionStyle,
-  constructionDefaults, Walls/Doors/Windows layers)
+- Current schema version: **4**
+- Migrations: v1/v2/v3 → v4

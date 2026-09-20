@@ -179,6 +179,15 @@ export function getEntityGrips(entity: Entity): Grip[] {
     case 'window':
       // World grip requires host wall — filled in by getSelectionGrips(doc)
       return [];
+    case 'room':
+      return [
+        {
+          role: 'center' as const,
+          point: { ...entity.geometry.labelPosition },
+          entityId: entity.id,
+          editTarget: { kind: 'room-label' as const },
+        },
+      ];
   }
 }
 

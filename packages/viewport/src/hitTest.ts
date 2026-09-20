@@ -4,6 +4,7 @@ import {
   dimensionLayout,
   doorLayout,
   pointInAABB,
+  pointInPolygon,
   pointNearCircle,
   pointNearSegment,
   projectOntoWall,
@@ -181,6 +182,8 @@ export function hitTestEntity(
         pointNearSegment(point, layout.innerA, layout.innerB, tolerance)
       );
     }
+    case 'room':
+      return pointInPolygon(point, entity.geometry.polygon);
   }
 }
 
@@ -194,8 +197,10 @@ export function hitTestDocument(
       .filter((e): e is WallEntity => e.type === 'wall')
       .map((w) => [w.id, w]),
   );
+  // Prefer walls/doors/windows over rooms so edge clicks select construction
   for (let i = doc.entities.length - 1; i >= 0; i -= 1) {
     const entity = doc.entities[i]!;
+    if (entity.type === 'room') continue;
     if (!entity.visible) continue;
     const layer = doc.layers.find((l) => l.id === entity.layerId);
     if (layer && !layer.visible) continue;
@@ -204,6 +209,16 @@ export function hitTestDocument(
         ? walls.get(entity.geometry.hostWallId)
         : undefined;
     if (hitTestEntity(entity, point, tolerance, host)) {
+      return entity.id;
+    }
+  }
+  for (let i = doc.entities.length - 1; i >= 0; i -= 1) {
+    const entity = doc.entities[i]!;
+    if (entity.type !== 'room') continue;
+    if (!entity.visible) continue;
+    const layer = doc.layers.find((l) => l.id === entity.layerId);
+    if (layer && !layer.visible) continue;
+    if (hitTestEntity(entity, point, tolerance)) {
       return entity.id;
     }
   }
@@ -296,6 +311,8 @@ export function entityBounds(
     case 'door':
     case 'window':
       return null;
+    case 'room':
+      return aabbFromMany(entity.geometry.polygon);
   }
 }
 

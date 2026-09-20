@@ -222,6 +222,15 @@ function collectEntityCandidates(entity: Entity): SnapCandidate[] {
     case 'window':
       // World position is derived from host wall — snap candidates come from walls.
       break;
+    case 'room':
+      out.push({
+        kind: 'center',
+        point: { ...entity.geometry.labelPosition },
+        priority: KIND_PRIORITY.center,
+        entityId: entity.id,
+        label: 'Room label',
+      });
+      break;
   }
   return out;
 }

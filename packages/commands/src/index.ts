@@ -42,3 +42,9 @@ export {
   UpdateWallCommand,
   UpdateWindowCommand,
 } from './constructionCommands.js';
+export {
+  CreateRoomCommand,
+  DeleteRoomCommand,
+  RefreshRoomsCommand,
+  UpdateRoomCommand,
+} from './roomCommands.js';

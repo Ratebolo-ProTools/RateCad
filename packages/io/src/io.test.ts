@@ -152,12 +152,12 @@ describe('.ratecad IO', () => {
       },
     };
     const opened = parseDocument(JSON.stringify(v1));
-    expect(opened.schemaVersion).toBe(3);
+    expect(opened.schemaVersion).toBe(4);
     expect(opened.currentLayerId).toBe('layer-0');
     expect(opened.settings.dimensionStyle).toBeDefined();
     expect(opened.settings.constructionDefaults).toBeDefined();
     expect(opened.layers.map((l) => l.name)).toEqual(
-      expect.arrayContaining(['0', 'Walls', 'Doors', 'Windows', 'Dimensions']),
+      expect.arrayContaining(['0', 'Walls', 'Doors', 'Windows', 'Rooms', 'Dimensions']),
     );
     expect(opened.entities).toHaveLength(1);
   });
@@ -218,12 +218,73 @@ describe('.ratecad IO', () => {
       },
     };
     const opened = parseDocument(JSON.stringify(v2));
-    expect(opened.schemaVersion).toBe(3);
+    expect(opened.schemaVersion).toBe(4);
     expect(opened.settings.constructionDefaults.wallThickness).toBeGreaterThan(0);
     expect(opened.layers.map((l) => l.name)).toEqual(
-      expect.arrayContaining(['Walls', 'Doors', 'Windows']),
+      expect.arrayContaining(['Walls', 'Doors', 'Windows', 'Rooms']),
     );
     expect(opened.entities).toHaveLength(1);
+  });
+
+  it('migrates schema v3 documents to v4 with Rooms layer', () => {
+    const v3 = {
+      format: 'ratecad',
+      schemaVersion: 3,
+      document: {
+        schemaVersion: 3,
+        meta: {
+          name: 'M6',
+          createdAt: '2024-06-01T00:00:00.000Z',
+          updatedAt: '2024-06-01T00:00:00.000Z',
+          appVersion: '0.4.0',
+        },
+        settings: {
+          units: 'ft',
+          precision: 2,
+          gridSize: 1,
+          snapToGrid: true,
+          dimensionStyle: {
+            textHeight: 0.35,
+            arrowSize: 0.2,
+            precision: 2,
+            extensionGap: 0.05,
+            extensionBeyond: 0.1,
+          },
+          constructionDefaults: {
+            wallThickness: 0.75,
+            wallHeight: 8,
+            doorWidth: 3,
+            doorHeight: 7,
+            windowWidth: 3,
+            windowHeight: 4,
+            windowSill: 3,
+          },
+        },
+        currentLayerId: 'layer-0',
+        layers: [
+          {
+            id: 'layer-0',
+            name: '0',
+            color: '#d4d4d4',
+            visible: true,
+            locked: false,
+          },
+          {
+            id: 'layer-walls',
+            name: 'Walls',
+            color: '#e8e8e8',
+            visible: true,
+            locked: false,
+          },
+        ],
+        entities: [],
+      },
+    };
+    const opened = parseDocument(JSON.stringify(v3));
+    expect(opened.schemaVersion).toBe(4);
+    expect(opened.layers.map((l) => l.name)).toEqual(
+      expect.arrayContaining(['Rooms']),
+    );
   });
 
   it('round-trips walls, doors, windows and host relationships', () => {
@@ -281,7 +342,7 @@ describe('.ratecad IO', () => {
       ],
     };
     const opened = parseDocument(serializeDocument(doc));
-    expect(opened.schemaVersion).toBe(3);
+    expect(opened.schemaVersion).toBe(4);
     expect(opened.entities.map((e) => e.type)).toEqual([
       'wall',
       'door',
@@ -292,6 +353,105 @@ describe('.ratecad IO', () => {
     expect(door?.type === 'door' && door.geometry.hostWallId).toBe(wallId);
     expect(win?.type === 'window' && win.geometry.hostWallId).toBe(wallId);
     expect(opened.settings.constructionDefaults).toBeDefined();
+  });
+
+  it('round-trips rooms with wall boundary references', () => {
+    const base = createEmptyDocument('Rooms');
+    const wallIds = ['wall-a', 'wall-b', 'wall-c', 'wall-d'];
+    const doc: DrawingDocument = {
+      ...base,
+      entities: [
+        {
+          id: wallIds[0]!,
+          type: 'wall',
+          layerId: 'layer-walls',
+          visible: true,
+          locked: false,
+          geometry: {
+            start: { x: 0, y: 0 },
+            end: { x: 10, y: 0 },
+            thickness: 0.75,
+            height: 8,
+            justification: 'center',
+          },
+          properties: {},
+        },
+        {
+          id: wallIds[1]!,
+          type: 'wall',
+          layerId: 'layer-walls',
+          visible: true,
+          locked: false,
+          geometry: {
+            start: { x: 10, y: 0 },
+            end: { x: 10, y: 12 },
+            thickness: 0.75,
+            height: 8,
+            justification: 'center',
+          },
+          properties: {},
+        },
+        {
+          id: wallIds[2]!,
+          type: 'wall',
+          layerId: 'layer-walls',
+          visible: true,
+          locked: false,
+          geometry: {
+            start: { x: 10, y: 12 },
+            end: { x: 0, y: 12 },
+            thickness: 0.75,
+            height: 8,
+            justification: 'center',
+          },
+          properties: {},
+        },
+        {
+          id: wallIds[3]!,
+          type: 'wall',
+          layerId: 'layer-walls',
+          visible: true,
+          locked: false,
+          geometry: {
+            start: { x: 0, y: 12 },
+            end: { x: 0, y: 0 },
+            thickness: 0.75,
+            height: 8,
+            justification: 'center',
+          },
+          properties: {},
+        },
+        {
+          id: 'room-1',
+          type: 'room',
+          layerId: 'layer-rooms',
+          visible: true,
+          locked: false,
+          geometry: {
+            wallIds,
+            wallDirs: ['forward', 'forward', 'forward', 'forward'],
+            polygon: [
+              { x: 0, y: 0 },
+              { x: 10, y: 0 },
+              { x: 10, y: 12 },
+              { x: 0, y: 12 },
+            ],
+            labelPosition: { x: 5, y: 6 },
+            area: 120,
+          },
+          properties: { name: 'Bedroom', roomType: 'bedroom' },
+        },
+      ],
+    };
+    const opened = parseDocument(serializeDocument(doc));
+    expect(opened.schemaVersion).toBe(4);
+    const room = opened.entities.find((e) => e.type === 'room');
+    expect(room?.type).toBe('room');
+    if (room?.type === 'room') {
+      expect(room.properties.name).toBe('Bedroom');
+      expect(room.geometry.area).toBe(120);
+      expect(room.geometry.wallIds).toEqual(wallIds);
+    }
   });
 
   it('drops orphaned doors/windows on open', () => {

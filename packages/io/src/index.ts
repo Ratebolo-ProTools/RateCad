@@ -36,6 +36,7 @@ const ENTITY_TYPES = new Set([
   'wall',
   'door',
   'window',
+  'room',
 ]);
 
 function isVec2(value: unknown): value is { x: number; y: number } {
@@ -178,6 +179,28 @@ function assertEntity(raw: unknown, index: number): Entity {
       }
       break;
     }
+    case 'room': {
+      const props = (e.properties ?? {}) as Record<string, unknown>;
+      if (
+        !Array.isArray(g.wallIds) ||
+        g.wallIds.length < 3 ||
+        !g.wallIds.every((id) => typeof id === 'string') ||
+        !Array.isArray(g.wallDirs) ||
+        g.wallDirs.length !== g.wallIds.length ||
+        !g.wallDirs.every((d) => d === 'forward' || d === 'reverse') ||
+        !Array.isArray(g.polygon) ||
+        g.polygon.length < 3 ||
+        !g.polygon.every(isVec2) ||
+        !isVec2(g.labelPosition) ||
+        typeof g.area !== 'number' ||
+        !(g.area > 0) ||
+        typeof props.name !== 'string' ||
+        !props.name.trim()
+      ) {
+        throw new RatecadParseError(`Entity ${e.id}: invalid room geometry`);
+      }
+      break;
+    }
   }
 
   return raw as Entity;
@@ -236,15 +259,33 @@ function migrateDocument(
     }
   }
 
+  // v3 → v4: Rooms layer
+  if (fileSchema < 4) {
+    const defaults = createDefaultLayers();
+    for (const def of defaults) {
+      if (!nextLayers.some((l) => l.id === def.id || l.name === def.name)) {
+        nextLayers = [...nextLayers, def];
+      }
+    }
+  }
+
   // Validate host relationships — drop orphaned doors/windows with warning via filter
   const wallIds = new Set(
     entities.filter((e) => e.type === 'wall').map((e) => e.id),
   );
-  const nextEntities = entities.filter((e) => {
+  let nextEntities = entities.filter((e) => {
     if (e.type === 'door' || e.type === 'window') {
       return wallIds.has(e.geometry.hostWallId);
     }
     return true;
+  });
+  // Drop rooms whose boundary walls are missing
+  nextEntities = nextEntities.filter((e) => {
+    if (e.type !== 'room') return true;
+    return (
+      e.geometry.wallIds.length >= 3 &&
+      e.geometry.wallIds.every((id) => wallIds.has(id))
+    );
   });
 
   const settingsRaw = (d.settings ?? {}) as Record<string, unknown>;

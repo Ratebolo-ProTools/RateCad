@@ -51,6 +51,33 @@ export {
   windowLayout,
 } from './construction.js';
 
+export type { DetectedLoop, RoomDetectionError, RoomDetectionResult } from './rooms.js';
+export {
+  detectClosedLoops,
+  findAffectedRoomsForWall,
+  findDoorsForRoom,
+  findLoopAtPoint,
+  findRoomById,
+  findRooms,
+  findRoomsContainingPoint,
+  findRoomsForDoor,
+  findRoomsForWindow,
+  findWallsForRoom,
+  findWindowsForRoom,
+  formatAreaInUnits,
+  formatRoomLabelLines,
+  joinToleranceForWalls,
+  pointInPolygon,
+  polygonAABBSize,
+  polygonArea,
+  polygonCentroid,
+  polygonSignedArea,
+  recalculateAffectedRooms,
+  recalculateRoomFromDocument,
+  rebuildRoomGeometry,
+  validateRoomGeometry,
+} from './rooms.js';
+
 export {
   angleBetween,
   closestPointOnSegment,

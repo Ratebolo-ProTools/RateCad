@@ -22,7 +22,8 @@ export type ToolId =
   | 'leader'
   | 'wall'
   | 'door'
-  | 'window';
+  | 'window'
+  | 'room';
 
 export type InteractionMode =
   | 'idle'
@@ -137,6 +138,8 @@ export function toolStatus(tool: ToolId, dimKind: DimensionKind = 'aligned'): st
       return 'Door: select host wall';
     case 'window':
       return 'Window: select host wall';
+    case 'room':
+      return 'Room: click inside a closed wall loop';
   }
 }
 

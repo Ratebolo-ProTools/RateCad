@@ -7,6 +7,7 @@ import type {
   EntityId,
   Layer,
   LayerId,
+  RoomEntity,
   WallEntity,
   WindowEntity,
 } from './types.js';
@@ -16,6 +17,7 @@ import {
   DEFAULT_DIMENSION_STYLE,
   DEFAULT_LAYER_ID,
   DOORS_LAYER_ID,
+  ROOMS_LAYER_ID,
   SCHEMA_VERSION,
   WALLS_LAYER_ID,
   WINDOWS_LAYER_ID,
@@ -43,6 +45,7 @@ export function createDefaultLayers(): Layer[] {
     { id: WALLS_LAYER_ID, name: 'Walls', color: '#e8e8e8', visible: true, locked: false },
     { id: DOORS_LAYER_ID, name: 'Doors', color: '#8ec8ff', visible: true, locked: false },
     { id: WINDOWS_LAYER_ID, name: 'Windows', color: '#7ad4c8', visible: true, locked: false },
+    { id: ROOMS_LAYER_ID, name: 'Rooms', color: '#c9a86c', visible: true, locked: false },
     { id: 'layer-dimensions' as LayerId, name: 'Dimensions', color: '#f0c674', visible: true, locked: false },
     { id: 'layer-text' as LayerId, name: 'Text', color: '#c8ced6', visible: true, locked: false },
     { id: 'layer-construction' as LayerId, name: 'Construction', color: '#6a737d', visible: true, locked: false },
@@ -270,6 +273,11 @@ export function getWall(doc: DrawingDocument, id: EntityId): WallEntity | undefi
   return e?.type === 'wall' ? e : undefined;
 }
 
+export function getRoom(doc: DrawingDocument, id: EntityId): RoomEntity | undefined {
+  const e = getEntity(doc, id);
+  return e?.type === 'room' ? e : undefined;
+}
+
 /** Doors and windows hosted by a given wall. */
 export function getHostedByWall(
   doc: DrawingDocument,
@@ -297,6 +305,18 @@ export function getHostedWindowIds(
     .map((e) => e.id);
 }
 
+/** Rooms that reference any of the given wall IDs in their boundary. */
+export function findRoomsUsingWalls(
+  doc: DrawingDocument,
+  wallIds: EntityId[],
+): RoomEntity[] {
+  const set = new Set(wallIds);
+  return doc.entities.filter(
+    (e): e is RoomEntity =>
+      e.type === 'room' && e.geometry.wallIds.some((id) => set.has(id)),
+  );
+}
+
 /** Wall deletion must cascade hosted doors/windows — collect full set. */
 export function expandDeleteIds(
   doc: DrawingDocument,
@@ -309,6 +329,10 @@ export function expandDeleteIds(
       for (const hosted of getHostedByWall(doc, id)) {
         out.add(hosted.id);
       }
+      // Rooms that lose a boundary wall become invalid — delete them too
+      for (const room of findRoomsUsingWalls(doc, [id])) {
+        out.add(room.id);
+      }
     }
   }
   return [...out];
@@ -320,5 +344,15 @@ export function findOrphanHosted(
   return doc.entities.filter((e): e is DoorEntity | WindowEntity => {
     if (e.type !== 'door' && e.type !== 'window') return false;
     return !getWall(doc, e.geometry.hostWallId);
+  });
+}
+
+/** Rooms whose wallIds reference missing walls. */
+export function findInvalidRooms(doc: DrawingDocument): RoomEntity[] {
+  return doc.entities.filter((e): e is RoomEntity => {
+    if (e.type !== 'room') return false;
+    if (e.geometry.wallIds.length < 3) return true;
+    if (e.geometry.wallIds.length !== e.geometry.wallDirs.length) return true;
+    return e.geometry.wallIds.some((id) => !getWall(doc, id));
   });
 }

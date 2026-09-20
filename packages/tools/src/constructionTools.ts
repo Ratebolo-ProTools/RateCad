@@ -1,13 +1,16 @@
 import type { CommandBus } from '@ratecad/commands';
 import {
   CreateDoorCommand,
+  CreateRoomCommand,
   CreateWallCommand,
   CreateWindowCommand,
 } from '@ratecad/commands';
 import {
+  ROOMS_LAYER_ID,
   getEntity,
   getWall,
   type DoorEntity,
+  type RoomEntity,
   type Vec2,
   type WallEntity,
   type WindowEntity,
@@ -16,11 +19,13 @@ import {
   clampHostedPosition,
   distance,
   doorLayout,
+  findLoopAtPoint,
   parseLengthInput,
   projectOntoWall,
   wallLayout,
   wallLength,
   windowLayout,
+  type DetectedLoop,
   type SnapResult,
 } from '@ratecad/geometry';
 import { hitTestDocument, screenToleranceToWorld } from '@ratecad/viewport';
@@ -436,3 +441,150 @@ void getEntity;
 void doorLayout;
 void windowLayout;
 void wallLayout;
+
+// ── Room tool ─────────────────────────────────────────────────────
+
+function previewRoom(
+  loop: DetectedLoop,
+  name = 'Room',
+  roomType = 'general',
+): RoomEntity {
+  const cx =
+    loop.polygon.reduce((s, p) => s + p.x, 0) / Math.max(1, loop.polygon.length);
+  const cy =
+    loop.polygon.reduce((s, p) => s + p.y, 0) / Math.max(1, loop.polygon.length);
+  return {
+    id: 'preview-room',
+    type: 'room',
+    layerId: ROOMS_LAYER_ID,
+    visible: true,
+    locked: false,
+    geometry: {
+      wallIds: [...loop.wallIds],
+      wallDirs: [...loop.wallDirs],
+      polygon: loop.polygon.map((p) => ({ ...p })),
+      labelPosition: { x: cx, y: cy },
+      area: loop.area,
+    },
+    properties: { name, roomType },
+  };
+}
+
+export function handleRoomPointerMove(
+  session: ToolSession,
+  bus: CommandBus,
+  input: PointerInput,
+  point: Vec2,
+  snap: SnapResult | null,
+): ToolSession {
+  void input;
+  const walls = bus
+    .getDocument()
+    .entities.filter((e): e is WallEntity => e.type === 'wall');
+  const result = findLoopAtPoint(walls, point);
+  if (!('wallIds' in result)) {
+    return {
+      ...session,
+      lastSnap: snap,
+      previewEntities: null,
+      statusMessage: result.reason,
+    };
+  }
+  return {
+    ...session,
+    lastSnap: snap,
+    previewEntities: [previewRoom(result)],
+    statusMessage: `Room preview · area ${result.area.toFixed(2)} — click to create`,
+  };
+}
+
+export function handleRoomPointerDown(
+  session: ToolSession,
+  bus: CommandBus,
+  input: PointerInput,
+  point: Vec2,
+  snap: SnapResult | null,
+): ToolSession {
+  void input;
+  const walls = bus
+    .getDocument()
+    .entities.filter((e): e is WallEntity => e.type === 'wall');
+  const result = findLoopAtPoint(walls, point);
+  if (!('wallIds' in result)) {
+    return {
+      ...session,
+      lastSnap: snap,
+      previewEntities: null,
+      statusMessage: result.reason,
+    };
+  }
+
+  const existing = bus.getDocument().entities.find(
+    (e) =>
+      e.type === 'room' &&
+      e.geometry.wallIds.length === result.wallIds.length &&
+      result.wallIds.every((id) => e.geometry.wallIds.includes(id)),
+  );
+  if (existing) {
+    return {
+      ...session,
+      lastSnap: snap,
+      previewEntities: [previewRoom(result)],
+      statusMessage: 'A room already exists for this wall loop',
+    };
+  }
+
+  const promptFn =
+    typeof globalThis !== 'undefined'
+      ? (
+          globalThis as {
+            prompt?: (m: string, d?: string) => string | null;
+          }
+        ).prompt
+      : undefined;
+
+  const name = promptFn ? promptFn('Room name', 'Room') : 'Room';
+  if (name === null) {
+    return {
+      ...cancelTool(session),
+      lastSnap: snap,
+      statusMessage: 'Room creation canceled',
+    };
+  }
+
+  const roomType = promptFn
+    ? promptFn('Room type (e.g. bedroom, kitchen, living)', 'general')
+    : 'general';
+  if (roomType === null) {
+    return {
+      ...cancelTool(session),
+      lastSnap: snap,
+      statusMessage: 'Room creation canceled',
+    };
+  }
+
+  try {
+    bus.execute(
+      new CreateRoomCommand(
+        result.wallIds,
+        result.wallDirs,
+        result.polygon,
+        result.area,
+        name.trim() || 'Room',
+        (roomType.trim() || 'general').toLowerCase(),
+      ),
+    );
+  } catch (err) {
+    return {
+      ...cancelTool(session),
+      lastSnap: snap,
+      statusMessage: `Room failed: ${err instanceof Error ? err.message : 'error'}`,
+    };
+  }
+
+  return {
+    ...cancelTool(session),
+    lastSnap: snap,
+    statusMessage: `Created room "${name.trim() || 'Room'}"`,
+  };
+}

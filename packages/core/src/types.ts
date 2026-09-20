@@ -195,6 +195,33 @@ export interface WindowEntity extends EntityBase {
   };
 }
 
+export type WallDir = 'forward' | 'reverse';
+
+/**
+ * Semantic room — bounded by WallEntity IDs (walls remain geometry source of truth).
+ * polygon/area are derived caches, recalculated when boundary walls change.
+ */
+export interface RoomEntity extends EntityBase {
+  type: 'room';
+  geometry: {
+    /** Ordered wall IDs forming a closed loop. */
+    wallIds: EntityId[];
+    /** Direction of each wall along the loop (forward = start→end). */
+    wallDirs: WallDir[];
+    /** Derived closed polygon (first point not repeated). */
+    polygon: Vec2[];
+    /** Label anchor in world units. */
+    labelPosition: Vec2;
+    /** Area in document world square units (derived). */
+    area: number;
+  };
+  properties: {
+    name: string;
+    roomType?: string;
+    color?: string;
+  };
+}
+
 export type Entity =
   | LineEntity
   | RectangleEntity
@@ -205,7 +232,8 @@ export type Entity =
   | LeaderEntity
   | WallEntity
   | DoorEntity
-  | WindowEntity;
+  | WindowEntity
+  | RoomEntity;
 export type EntityType = Entity['type'];
 
 export interface DimensionStyle {
@@ -260,9 +288,10 @@ export const DEFAULT_LAYER_ID = 'layer-0' as LayerId;
 export const WALLS_LAYER_ID = 'layer-walls' as LayerId;
 export const DOORS_LAYER_ID = 'layer-doors' as LayerId;
 export const WINDOWS_LAYER_ID = 'layer-windows' as LayerId;
+export const ROOMS_LAYER_ID = 'layer-rooms' as LayerId;
 
-export const SCHEMA_VERSION = 3;
-export const APP_VERSION = '0.4.0';
+export const SCHEMA_VERSION = 4;
+export const APP_VERSION = '0.5.0';
 
 export const DEFAULT_DIMENSION_STYLE: DimensionStyle = {
   textHeight: 0.35,

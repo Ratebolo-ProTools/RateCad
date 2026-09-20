@@ -99,6 +99,15 @@ export function translateEntity(entity: Entity, delta: Vec2): Entity | null {
       // Hosted objects are parametric on the wall — world translate is a no-op.
       // Callers that move a door along a wall should update `position` instead.
       return { ...entity };
+    case 'room':
+      // Moving a room alone moves its label; boundary follows walls.
+      return {
+        ...entity,
+        geometry: {
+          ...entity.geometry,
+          labelPosition: translatePoint(entity.geometry.labelPosition, delta),
+        },
+      };
   }
 }
 
@@ -124,7 +133,8 @@ export type GripEditTarget =
   | { kind: 'wall-start' }
   | { kind: 'wall-end' }
   | { kind: 'door-position' }
-  | { kind: 'window-position' };
+  | { kind: 'window-position' }
+  | { kind: 'room-label' };
 
 /**
  * Compute dimension line placement from start/end/kind/offset.
@@ -352,6 +362,17 @@ export function applyGripEdit(
       // Position grips require host wall context — handled by MoveEntityGripCommand
       // callers that pass updated position via ReplaceEntityCommand.
       return null;
+    case 'room':
+      if (target.kind === 'room-label') {
+        return {
+          ...entity,
+          geometry: {
+            ...entity.geometry,
+            labelPosition: { ...point },
+          },
+        };
+      }
+      return null;
   }
 }
 
@@ -442,6 +463,18 @@ export function validateEntityGeometry(entity: Entity): boolean {
         entity.geometry.height > 0 &&
         Number.isFinite(entity.geometry.sillHeight) &&
         entity.geometry.sillHeight >= 0
+      );
+    case 'room':
+      return (
+        entity.geometry.wallIds.length >= 3 &&
+        entity.geometry.wallIds.length === entity.geometry.wallDirs.length &&
+        entity.geometry.polygon.length >= 3 &&
+        entity.geometry.polygon.every(isFiniteVec2) &&
+        Number.isFinite(entity.geometry.area) &&
+        entity.geometry.area > 1e-12 &&
+        isFiniteVec2(entity.geometry.labelPosition) &&
+        typeof entity.properties.name === 'string' &&
+        entity.properties.name.trim().length > 0
       );
   }
 }
