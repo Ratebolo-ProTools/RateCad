@@ -1,16 +1,23 @@
 import type {
   DimensionEntity,
+  DoorEntity,
   DrawingDocument,
   Entity,
   LeaderEntity,
   TextEntity,
   Vec2,
+  WallEntity,
+  WindowEntity,
 } from '@ratecad/core';
+import { getHostedByWall } from '@ratecad/core';
 import {
   dimensionLayout,
   distance,
+  doorLayout,
   formatLengthInUnits,
   measuredLength,
+  wallOutlineSegments,
+  windowLayout,
   type SnapResult,
 } from '@ratecad/geometry';
 import {
@@ -18,7 +25,7 @@ import {
   screenToWorld,
   worldToScreen,
 } from './camera.js';
-import { getEntityGrips, type Grip } from './grips.js';
+import { getEntityGrips, getSelectionGrips, type Grip } from './grips.js';
 
 export interface PreviewGeometry {
   kind: 'line' | 'rectangle' | 'circle' | 'polyline';
@@ -392,6 +399,112 @@ function strokeEntity(
     case 'leader':
       strokeLeader(ctx, entity, camera, width, height, color, lineWidth);
       break;
+    case 'wall': {
+      const hosted = getHostedByWall(doc, entity.id).map((h) => ({
+        position: h.geometry.position,
+        width: h.geometry.width,
+      }));
+      const neighbors = doc.entities.filter(
+        (e): e is WallEntity => e.type === 'wall',
+      );
+      const segs = wallOutlineSegments(entity, hosted, neighbors);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = lineWidth;
+      ctx.beginPath();
+      for (const [a, b] of segs) {
+        const sa = worldToScreen(a, camera, width, height);
+        const sb = worldToScreen(b, camera, width, height);
+        ctx.moveTo(sa.x, sa.y);
+        ctx.lineTo(sb.x, sb.y);
+      }
+      ctx.stroke();
+      // Centerline reference (light)
+      ctx.save();
+      ctx.setLineDash([3, 3]);
+      ctx.globalAlpha = 0.35;
+      ctx.beginPath();
+      const cs = worldToScreen(entity.geometry.start, camera, width, height);
+      const ce = worldToScreen(entity.geometry.end, camera, width, height);
+      ctx.moveTo(cs.x, cs.y);
+      ctx.lineTo(ce.x, ce.y);
+      ctx.stroke();
+      ctx.restore();
+      break;
+    }
+    case 'door': {
+      const wall = doc.entities.find(
+        (e): e is WallEntity =>
+          e.type === 'wall' && e.id === entity.geometry.hostWallId,
+      );
+      if (!wall) break;
+      const layout = doorLayout(entity, wall);
+      if (!layout) break;
+      ctx.strokeStyle = color;
+      ctx.fillStyle = color;
+      ctx.lineWidth = lineWidth;
+      // Opening gap already in wall outline; draw leaf + swing arc
+      ctx.beginPath();
+      const h = worldToScreen(layout.hinge, camera, width, height);
+      const leaf = worldToScreen(layout.leafEnd, camera, width, height);
+      ctx.moveTo(h.x, h.y);
+      ctx.lineTo(leaf.x, leaf.y);
+      ctx.stroke();
+      // Swing arc
+      const r = entity.geometry.width * camera.zoom;
+      const startAng = Math.atan2(
+        worldToScreen(layout.openEnd, camera, width, height).y - h.y,
+        worldToScreen(layout.openEnd, camera, width, height).x - h.x,
+      );
+      // Approximate arc from closed direction to leaf
+      const closedScreen = worldToScreen(
+        layout.swing === 'left' ? layout.openEnd : layout.openStart,
+        camera,
+        width,
+        height,
+      );
+      const a0 = Math.atan2(closedScreen.y - h.y, closedScreen.x - h.x);
+      const a1 = Math.atan2(leaf.y - h.y, leaf.x - h.x);
+      ctx.beginPath();
+      ctx.arc(h.x, h.y, Math.max(r, 2), a0, a1, layout.swing !== 'left');
+      ctx.stroke();
+      break;
+    }
+    case 'window': {
+      const wall = doc.entities.find(
+        (e): e is WallEntity =>
+          e.type === 'wall' && e.id === entity.geometry.hostWallId,
+      );
+      if (!wall) break;
+      const layout = windowLayout(entity, wall);
+      if (!layout) break;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = lineWidth;
+      ctx.beginPath();
+      // Double line across opening (classic plan window)
+      const oa = worldToScreen(layout.outerA, camera, width, height);
+      const ob = worldToScreen(layout.outerB, camera, width, height);
+      const ia = worldToScreen(layout.innerA, camera, width, height);
+      const ib = worldToScreen(layout.innerB, camera, width, height);
+      ctx.moveTo(oa.x, oa.y);
+      ctx.lineTo(ob.x, ob.y);
+      ctx.moveTo(ia.x, ia.y);
+      ctx.lineTo(ib.x, ib.y);
+      // Mid glass line
+      const midA = {
+        x: (layout.outerA.x + layout.innerA.x) / 2,
+        y: (layout.outerA.y + layout.innerA.y) / 2,
+      };
+      const midB = {
+        x: (layout.outerB.x + layout.innerB.x) / 2,
+        y: (layout.outerB.y + layout.innerB.y) / 2,
+      };
+      const ma = worldToScreen(midA, camera, width, height);
+      const mb = worldToScreen(midB, camera, width, height);
+      ctx.moveTo(ma.x, ma.y);
+      ctx.lineTo(mb.x, mb.y);
+      ctx.stroke();
+      break;
+    }
   }
 }
 
@@ -630,7 +743,9 @@ export function renderDocument(
       isSelected ? 2 : 1.25,
     );
     if (isSelected && !options.previewEntities?.length) {
-      autoGrips.push(...getEntityGrips(entity));
+      autoGrips.push(
+        ...getSelectionGrips([entity], doc.entities),
+      );
     }
   }
 

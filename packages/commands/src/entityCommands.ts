@@ -1,6 +1,7 @@
 import {
   addEntity,
   createEntityId,
+  expandDeleteIds,
   getCurrentLayer,
   removeEntities,
   type CircleEntity,
@@ -179,10 +180,12 @@ export class DeleteEntitiesCommand implements Command {
   constructor(private readonly ids: EntityId[]) {}
 
   execute(doc: DrawingDocument): DrawingDocument {
-    const idSet = new Set(this.ids);
+    // Cascade: deleting a wall also removes hosted doors/windows
+    const expanded = expandDeleteIds(doc, this.ids);
+    const idSet = new Set(expanded);
     this.removed = doc.entities.filter((e) => idSet.has(e.id));
     this.previousSelection = [...doc.selection];
-    return removeEntities(doc, this.ids);
+    return removeEntities(doc, expanded);
   }
 
   undo(doc: DrawingDocument): DrawingDocument {

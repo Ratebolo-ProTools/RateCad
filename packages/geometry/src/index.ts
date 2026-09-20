@@ -32,6 +32,25 @@ export {
 
 export { formatLengthInUnits, measuredLength } from './units.js';
 
+export type { OpeningLayout, WallLayout } from './construction.js';
+export {
+  clampHostedPosition,
+  convertToWorld,
+  doorLayout,
+  parseLengthInput,
+  pointAlongWall,
+  projectOntoWall,
+  validateDoorGeometry,
+  validateWallGeometry,
+  validateWindowGeometry,
+  wallDirection,
+  wallLayout,
+  wallLength,
+  wallNormal,
+  wallOutlineSegments,
+  windowLayout,
+} from './construction.js';
+
 export {
   angleBetween,
   closestPointOnSegment,

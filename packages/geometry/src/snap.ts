@@ -191,6 +191,37 @@ function collectEntityCandidates(entity: Entity): SnapCandidate[] {
       }
       break;
     }
+    case 'wall': {
+      const { start, end } = entity.geometry;
+      out.push(
+        {
+          kind: 'endpoint',
+          point: { ...start },
+          priority: KIND_PRIORITY.endpoint,
+          entityId: entity.id,
+          label: 'Endpoint',
+        },
+        {
+          kind: 'endpoint',
+          point: { ...end },
+          priority: KIND_PRIORITY.endpoint,
+          entityId: entity.id,
+          label: 'Endpoint',
+        },
+        {
+          kind: 'midpoint',
+          point: midpoint(start, end),
+          priority: KIND_PRIORITY.midpoint,
+          entityId: entity.id,
+          label: 'Midpoint',
+        },
+      );
+      break;
+    }
+    case 'door':
+    case 'window':
+      // World position is derived from host wall — snap candidates come from walls.
+      break;
   }
   return out;
 }

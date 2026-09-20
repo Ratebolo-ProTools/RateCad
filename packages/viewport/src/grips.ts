@@ -1,8 +1,11 @@
-import type { Entity, EntityId, Vec2 } from '@ratecad/core';
+import type { Entity, EntityId, Vec2, WallEntity } from '@ratecad/core';
 import {
+  clampHostedPosition,
   dimensionLayout,
   distance,
   midpoint,
+  pointAlongWall,
+  wallLength,
   type GripEditTarget,
 } from '@ratecad/geometry';
 
@@ -157,11 +160,60 @@ export function getEntityGrips(entity: Entity): Grip[] {
           editTarget: { kind: 'leader-vertex' as const, index },
         })),
       ];
+    case 'wall':
+      return [
+        {
+          role: 'start' as const,
+          point: { ...entity.geometry.start },
+          entityId: entity.id,
+          editTarget: { kind: 'wall-start' as const },
+        },
+        {
+          role: 'end' as const,
+          point: { ...entity.geometry.end },
+          entityId: entity.id,
+          editTarget: { kind: 'wall-end' as const },
+        },
+      ];
+    case 'door':
+    case 'window':
+      // World grip requires host wall — filled in by getSelectionGrips(doc)
+      return [];
   }
 }
 
-export function getSelectionGrips(entities: Entity[]): Grip[] {
-  return entities.flatMap(getEntityGrips);
+export function getSelectionGrips(
+  entities: Entity[],
+  allEntities?: Entity[],
+): Grip[] {
+  const walls = new Map(
+    (allEntities ?? entities)
+      .filter((e): e is WallEntity => e.type === 'wall')
+      .map((w) => [w.id, w]),
+  );
+  const grips: Grip[] = [];
+  for (const entity of entities) {
+    grips.push(...getEntityGrips(entity));
+    if (entity.type === 'door' || entity.type === 'window') {
+      const wall = walls.get(entity.geometry.hostWallId);
+      if (!wall) continue;
+      const t = clampHostedPosition(
+        wallLength(wall),
+        entity.geometry.width,
+        entity.geometry.position,
+      );
+      grips.push({
+        role: 'center',
+        point: pointAlongWall(wall, t),
+        entityId: entity.id,
+        editTarget:
+          entity.type === 'door'
+            ? { kind: 'door-position' }
+            : { kind: 'window-position' },
+      });
+    }
+  }
+  return grips;
 }
 
 export function hitTestGrip(

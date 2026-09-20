@@ -13,22 +13,37 @@ import {
   DeleteEntitiesCommand,
   DeleteLayerCommand,
   SetCurrentLayerCommand,
+  UpdateDoorCommand,
   UpdateLayerCommand,
   UpdateTextCommand,
+  UpdateWallCommand,
+  UpdateWindowCommand,
 } from '@ratecad/commands';
 import {
   createEmptyDocument,
+  getEntity,
+  getHostedByWall,
   getLayer,
   getSelectedEntities,
+  getWall,
   isEntityModifiable,
   type DimensionKind,
+  type DoorEntity,
   type DrawingDocument,
   type Entity,
   type Layer,
   type LengthUnit,
   type TextEntity,
+  type WallEntity,
+  type WindowEntity,
 } from '@ratecad/core';
-import { formatLength, formatLengthInUnits, measuredLength } from '@ratecad/geometry';
+import {
+  formatLength,
+  formatLengthInUnits,
+  measuredLength,
+  parseLengthInput,
+  wallLength,
+} from '@ratecad/geometry';
 import { serializeDocument, tryParseDocument } from '@ratecad/io';
 import {
   appendInputBuffer,
@@ -71,6 +86,9 @@ const DRAW_TOOLS: Array<{
   { id: 'dimension', label: 'DimA', glyph: '⤡', dimKind: 'aligned' },
   { id: 'text', label: 'Text', glyph: 'T' },
   { id: 'leader', label: 'Leader', glyph: '⤷' },
+  { id: 'wall', label: 'Wall', glyph: '▮' },
+  { id: 'door', label: 'Door', glyph: '⊓' },
+  { id: 'window', label: 'Window', glyph: '▤' },
   { id: 'move', label: 'Move', glyph: '↔' },
   { id: 'copy', label: 'Copy', glyph: '⧉' },
   { id: 'trim', label: 'Trim', glyph: '✂' },
@@ -91,6 +109,9 @@ const COMMAND_ALIASES: Record<string, ToolId> = {
   sc: 'scale',
   di: 'dimension',
   le: 'leader',
+  wa: 'wall',
+  do: 'door',
+  wi: 'window',
 };
 
 const UNIT_OPTIONS: LengthUnit[] = ['ft', 'in', 'm', 'mm'];
@@ -206,6 +227,113 @@ function describeEntity(
           value: `${formatLength(entity.geometry.arrow.x)}, ${formatLength(entity.geometry.arrow.y)}`,
         },
       ];
+    case 'wall':
+      return [
+        ...common,
+        {
+          label: 'Length',
+          value: formatLengthInUnits(
+            wallLength(entity),
+            doc.settings.units,
+            doc.settings.precision,
+          ),
+        },
+        {
+          label: 'Thickness',
+          value: formatLengthInUnits(
+            entity.geometry.thickness,
+            doc.settings.units,
+            doc.settings.precision,
+          ),
+        },
+        {
+          label: 'Height',
+          value: formatLengthInUnits(
+            entity.geometry.height,
+            doc.settings.units,
+            doc.settings.precision,
+          ),
+        },
+        { label: 'Material', value: entity.properties.material ?? '—' },
+        { label: 'Type', value: entity.properties.wallType ?? '—' },
+        {
+          label: 'Start',
+          value: `${formatLength(entity.geometry.start.x)}, ${formatLength(entity.geometry.start.y)}`,
+        },
+        {
+          label: 'End',
+          value: `${formatLength(entity.geometry.end.x)}, ${formatLength(entity.geometry.end.y)}`,
+        },
+      ];
+    case 'door': {
+      const host = getWall(doc, entity.geometry.hostWallId);
+      return [
+        ...common,
+        { label: 'Host wall', value: host?.id ?? entity.geometry.hostWallId },
+        {
+          label: 'Width',
+          value: formatLengthInUnits(
+            entity.geometry.width,
+            doc.settings.units,
+            doc.settings.precision,
+          ),
+        },
+        {
+          label: 'Height',
+          value: formatLengthInUnits(
+            entity.geometry.height,
+            doc.settings.units,
+            doc.settings.precision,
+          ),
+        },
+        { label: 'Swing', value: entity.geometry.swing },
+        {
+          label: 'Swing ∠',
+          value: `${((entity.geometry.swingAngle * 180) / Math.PI).toFixed(0)}°`,
+        },
+        { label: 'Type', value: entity.properties.doorType ?? '—' },
+        {
+          label: 'Position',
+          value: `${(entity.geometry.position * 100).toFixed(1)}%`,
+        },
+      ];
+    }
+    case 'window': {
+      const host = getWall(doc, entity.geometry.hostWallId);
+      return [
+        ...common,
+        { label: 'Host wall', value: host?.id ?? entity.geometry.hostWallId },
+        {
+          label: 'Width',
+          value: formatLengthInUnits(
+            entity.geometry.width,
+            doc.settings.units,
+            doc.settings.precision,
+          ),
+        },
+        {
+          label: 'Height',
+          value: formatLengthInUnits(
+            entity.geometry.height,
+            doc.settings.units,
+            doc.settings.precision,
+          ),
+        },
+        {
+          label: 'Sill',
+          value: formatLengthInUnits(
+            entity.geometry.sillHeight,
+            doc.settings.units,
+            doc.settings.precision,
+          ),
+        },
+        { label: 'Type', value: entity.properties.windowType ?? '—' },
+        {
+          label: 'Position',
+          value: `${(entity.geometry.position * 100).toFixed(1)}%`,
+        },
+      ];
+    }
   }
 }
 
@@ -544,6 +672,15 @@ export function App() {
       }
       return;
     }
+    const hostedCount = selected
+      .filter((e) => e.type === 'wall')
+      .reduce((n, w) => n + getHostedByWall(doc, w.id).length, 0);
+    if (hostedCount > 0) {
+      const ok = window.confirm(
+        `Delete wall(s) and ${hostedCount} hosted door/window object(s)?`,
+      );
+      if (!ok) return;
+    }
     busRef.current.execute(
       new DeleteEntitiesCommand(selected.map((e) => e.id)),
     );
@@ -704,11 +841,12 @@ export function App() {
         const numericTools =
           s.activeTool === 'offset' ||
           s.activeTool === 'rotate' ||
-          s.activeTool === 'scale';
+          s.activeTool === 'scale' ||
+          s.activeTool === 'wall';
         if (
           event.key === 'Backspace' &&
           numericTools &&
-          (s.inputBuffer.length > 0 || s.anchor || s.refEntityId)
+          (s.inputBuffer.length > 0 || s.anchor || s.refEntityId || s.activeTool === 'wall')
         ) {
           event.preventDefault();
           syncSession(appendInputBuffer(s, 'Backspace'));
@@ -765,7 +903,8 @@ export function App() {
           s.inputBuffer.length > 0 &&
           (s.activeTool === 'offset' ||
             s.activeTool === 'rotate' ||
-            s.activeTool === 'scale')
+            s.activeTool === 'scale' ||
+            s.activeTool === 'wall')
         ) {
           syncSession(commitNumericInput(s, busRef.current));
           return;
@@ -785,15 +924,16 @@ export function App() {
           return;
         }
 
-        // Numeric entry for offset / rotate / scale
+        // Numeric entry for offset / rotate / scale / wall thickness
         const s = sessionRef.current;
         const numericTools =
           s.activeTool === 'offset' ||
           s.activeTool === 'rotate' ||
-          s.activeTool === 'scale';
+          s.activeTool === 'scale' ||
+          s.activeTool === 'wall';
         if (
           numericTools &&
-          (s.refEntityId || s.anchor) &&
+          (s.refEntityId || s.anchor || s.activeTool === 'wall') &&
           /^[0-9.\-]$/.test(event.key)
         ) {
           event.preventDefault();
@@ -811,6 +951,7 @@ export function App() {
           o: 'offset',
           d: 'dimension',
           a: 'text',
+          w: 'wall',
         };
 
         // Delayed single-key tools that are also alias prefixes: t→copy/TR, m→move/MI, r→rect/RO
@@ -1379,6 +1520,175 @@ export function App() {
                   >
                     Edit text…
                   </button>
+                ) : null}
+                {selected[0]?.type === 'wall' ? (
+                  <>
+                    <button
+                      type="button"
+                      className="mini-btn block"
+                      onClick={() => {
+                        const wall = selected[0] as WallEntity;
+                        if (!isEntityModifiable(doc, wall)) return;
+                        const next = window.prompt(
+                          `Wall thickness (${doc.settings.units})`,
+                          String(wall.geometry.thickness),
+                        );
+                        if (next == null) return;
+                        const n =
+                          parseLengthInput(next, doc.settings.units) ??
+                          Number(next);
+                        if (!(n > 0)) return;
+                        busRef.current.execute(
+                          new UpdateWallCommand(wall, { thickness: n }),
+                        );
+                      }}
+                    >
+                      Edit thickness…
+                    </button>
+                    <button
+                      type="button"
+                      className="mini-btn block"
+                      onClick={() => {
+                        const wall = selected[0] as WallEntity;
+                        if (!isEntityModifiable(doc, wall)) return;
+                        const next = window.prompt(
+                          `Wall height (${doc.settings.units})`,
+                          String(wall.geometry.height),
+                        );
+                        if (next == null) return;
+                        const n =
+                          parseLengthInput(next, doc.settings.units) ??
+                          Number(next);
+                        if (!(n > 0)) return;
+                        busRef.current.execute(
+                          new UpdateWallCommand(wall, { height: n }),
+                        );
+                      }}
+                    >
+                      Edit height…
+                    </button>
+                    <button
+                      type="button"
+                      className="mini-btn block"
+                      onClick={() => {
+                        const wall = selected[0] as WallEntity;
+                        if (!isEntityModifiable(doc, wall)) return;
+                        const next = window.prompt(
+                          'Wall material / type',
+                          wall.properties.material ??
+                            wall.properties.wallType ??
+                            '',
+                        );
+                        if (next == null) return;
+                        busRef.current.execute(
+                          new UpdateWallCommand(wall, {
+                            material: next.trim() || undefined,
+                          }),
+                        );
+                      }}
+                    >
+                      Edit material…
+                    </button>
+                  </>
+                ) : null}
+                {selected[0]?.type === 'door' ? (
+                  <>
+                    <button
+                      type="button"
+                      className="mini-btn block"
+                      onClick={() => {
+                        const door = selected[0] as DoorEntity;
+                        if (!isEntityModifiable(doc, door)) return;
+                        const next = window.prompt(
+                          `Door width (${doc.settings.units})`,
+                          String(door.geometry.width),
+                        );
+                        if (next == null) return;
+                        const n =
+                          parseLengthInput(next, doc.settings.units) ??
+                          Number(next);
+                        if (!(n > 0)) return;
+                        busRef.current.execute(
+                          new UpdateDoorCommand(door, { width: n }),
+                        );
+                      }}
+                    >
+                      Edit width…
+                    </button>
+                    <button
+                      type="button"
+                      className="mini-btn block"
+                      onClick={() => {
+                        const door = selected[0] as DoorEntity;
+                        if (!isEntityModifiable(doc, door)) return;
+                        const next = window.prompt(
+                          'Swing (left/right)',
+                          door.geometry.swing,
+                        );
+                        if (next == null) return;
+                        const swing =
+                          next.trim().toLowerCase() === 'right'
+                            ? 'right'
+                            : next.trim().toLowerCase() === 'left'
+                              ? 'left'
+                              : null;
+                        if (!swing) return;
+                        busRef.current.execute(
+                          new UpdateDoorCommand(door, { swing }),
+                        );
+                      }}
+                    >
+                      Edit swing…
+                    </button>
+                  </>
+                ) : null}
+                {selected[0]?.type === 'window' ? (
+                  <>
+                    <button
+                      type="button"
+                      className="mini-btn block"
+                      onClick={() => {
+                        const win = selected[0] as WindowEntity;
+                        if (!isEntityModifiable(doc, win)) return;
+                        const next = window.prompt(
+                          `Window width (${doc.settings.units})`,
+                          String(win.geometry.width),
+                        );
+                        if (next == null) return;
+                        const n =
+                          parseLengthInput(next, doc.settings.units) ??
+                          Number(next);
+                        if (!(n > 0)) return;
+                        busRef.current.execute(
+                          new UpdateWindowCommand(win, { width: n }),
+                        );
+                      }}
+                    >
+                      Edit width…
+                    </button>
+                    <button
+                      type="button"
+                      className="mini-btn block"
+                      onClick={() => {
+                        const win = selected[0] as WindowEntity;
+                        if (!isEntityModifiable(doc, win)) return;
+                        const next = window.prompt(
+                          `Window height (${doc.settings.units})`,
+                          String(win.geometry.height),
+                        );
+                        if (next == null) return;
+                        const n =
+                          parseLengthInput(next, doc.settings.units) ??
+                          Number(next);
+                        if (!(n > 0)) return;
+                        busRef.current.execute(
+                          new UpdateWindowCommand(win, { height: n }),
+                        );
+                      }}
+                    >
+                      Edit height…
+                    </button>
+                  </>
                 ) : null}
               </>
             ) : (

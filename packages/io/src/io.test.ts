@@ -116,7 +116,7 @@ describe('.ratecad IO', () => {
     ]);
   });
 
-  it('migrates schema v1 documents to v2', () => {
+  it('migrates schema v1 documents to current schema', () => {
     const v1 = {
       format: 'ratecad',
       schemaVersion: 1,
@@ -152,11 +152,173 @@ describe('.ratecad IO', () => {
       },
     };
     const opened = parseDocument(JSON.stringify(v1));
-    expect(opened.schemaVersion).toBe(2);
+    expect(opened.schemaVersion).toBe(3);
     expect(opened.currentLayerId).toBe('layer-0');
     expect(opened.settings.dimensionStyle).toBeDefined();
-    expect(opened.layers.length).toBeGreaterThan(1);
+    expect(opened.settings.constructionDefaults).toBeDefined();
+    expect(opened.layers.map((l) => l.name)).toEqual(
+      expect.arrayContaining(['0', 'Walls', 'Doors', 'Windows', 'Dimensions']),
+    );
     expect(opened.entities).toHaveLength(1);
+  });
+
+  it('migrates schema v2 documents to v3 with construction defaults', () => {
+    const v2 = {
+      format: 'ratecad',
+      schemaVersion: 2,
+      document: {
+        schemaVersion: 2,
+        meta: {
+          name: 'M5',
+          createdAt: '2024-01-01T00:00:00.000Z',
+          updatedAt: '2024-01-01T00:00:00.000Z',
+          appVersion: '0.3.0',
+        },
+        settings: {
+          units: 'ft',
+          precision: 2,
+          gridSize: 1,
+          snapToGrid: true,
+          dimensionStyle: {
+            textHeight: 0.35,
+            arrowSize: 0.2,
+            precision: 2,
+            extensionGap: 0.05,
+            extensionBeyond: 0.1,
+          },
+        },
+        currentLayerId: 'layer-0',
+        layers: [
+          {
+            id: 'layer-0',
+            name: '0',
+            color: '#d4d4d4',
+            visible: true,
+            locked: false,
+          },
+          {
+            id: 'layer-dimensions',
+            name: 'Dimensions',
+            color: '#7dd3fc',
+            visible: true,
+            locked: false,
+          },
+        ],
+        entities: [
+          {
+            id: 'line-1',
+            type: 'line',
+            layerId: 'layer-0',
+            visible: true,
+            locked: false,
+            geometry: { start: { x: 0, y: 0 }, end: { x: 5, y: 0 } },
+            properties: {},
+          },
+        ],
+      },
+    };
+    const opened = parseDocument(JSON.stringify(v2));
+    expect(opened.schemaVersion).toBe(3);
+    expect(opened.settings.constructionDefaults.wallThickness).toBeGreaterThan(0);
+    expect(opened.layers.map((l) => l.name)).toEqual(
+      expect.arrayContaining(['Walls', 'Doors', 'Windows']),
+    );
+    expect(opened.entities).toHaveLength(1);
+  });
+
+  it('round-trips walls, doors, windows and host relationships', () => {
+    const base = createEmptyDocument('Construction');
+    const wallId = 'wall-1';
+    const doc: DrawingDocument = {
+      ...base,
+      entities: [
+        {
+          id: wallId,
+          type: 'wall',
+          layerId: 'layer-walls',
+          visible: true,
+          locked: false,
+          geometry: {
+            start: { x: 0, y: 0 },
+            end: { x: 20, y: 0 },
+            thickness: 0.75,
+            height: 8,
+            justification: 'center',
+          },
+          properties: { material: 'Brick' },
+        },
+        {
+          id: 'door-1',
+          type: 'door',
+          layerId: 'layer-doors',
+          visible: true,
+          locked: false,
+          geometry: {
+            hostWallId: wallId,
+            position: 0.4,
+            width: 3,
+            height: 7,
+            swing: 'left',
+            swingAngle: Math.PI / 2,
+          },
+          properties: { doorType: 'single' },
+        },
+        {
+          id: 'window-1',
+          type: 'window',
+          layerId: 'layer-windows',
+          visible: true,
+          locked: false,
+          geometry: {
+            hostWallId: wallId,
+            position: 0.75,
+            width: 4,
+            height: 4,
+            sillHeight: 3,
+          },
+          properties: { windowType: 'fixed' },
+        },
+      ],
+    };
+    const opened = parseDocument(serializeDocument(doc));
+    expect(opened.schemaVersion).toBe(3);
+    expect(opened.entities.map((e) => e.type)).toEqual([
+      'wall',
+      'door',
+      'window',
+    ]);
+    const door = opened.entities.find((e) => e.type === 'door');
+    const win = opened.entities.find((e) => e.type === 'window');
+    expect(door?.type === 'door' && door.geometry.hostWallId).toBe(wallId);
+    expect(win?.type === 'window' && win.geometry.hostWallId).toBe(wallId);
+    expect(opened.settings.constructionDefaults).toBeDefined();
+  });
+
+  it('drops orphaned doors/windows on open', () => {
+    const base = createEmptyDocument('Orphans');
+    const doc: DrawingDocument = {
+      ...base,
+      entities: [
+        {
+          id: 'door-orphan',
+          type: 'door',
+          layerId: 'layer-doors',
+          visible: true,
+          locked: false,
+          geometry: {
+            hostWallId: 'missing-wall',
+            position: 0.5,
+            width: 3,
+            height: 7,
+            swing: 'left',
+            swingAngle: Math.PI / 2,
+          },
+          properties: {},
+        },
+      ],
+    };
+    const opened = parseDocument(serializeDocument(doc));
+    expect(opened.entities).toHaveLength(0);
   });
 
   it('preserves polyline vertices on open', () => {

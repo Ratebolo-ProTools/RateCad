@@ -1,4 +1,5 @@
 import {
+  DEFAULT_CONSTRUCTION,
   DEFAULT_DIMENSION_STYLE,
   DEFAULT_LAYER_ID,
   SCHEMA_VERSION,
@@ -32,6 +33,9 @@ const ENTITY_TYPES = new Set([
   'dimension',
   'text',
   'leader',
+  'wall',
+  'door',
+  'window',
 ]);
 
 function isVec2(value: unknown): value is { x: number; y: number } {
@@ -129,6 +133,51 @@ function assertEntity(raw: unknown, index: number): Entity {
       }
       break;
     }
+    case 'wall': {
+      if (
+        !isVec2(g.start) ||
+        !isVec2(g.end) ||
+        typeof g.thickness !== 'number' ||
+        !(g.thickness > 0) ||
+        typeof g.height !== 'number' ||
+        !(g.height > 0) ||
+        (g.justification !== undefined &&
+          !['center', 'left', 'right'].includes(g.justification as string))
+      ) {
+        throw new RatecadParseError(`Entity ${e.id}: invalid wall geometry`);
+      }
+      break;
+    }
+    case 'door': {
+      if (
+        typeof g.hostWallId !== 'string' ||
+        typeof g.position !== 'number' ||
+        typeof g.width !== 'number' ||
+        !(g.width > 0) ||
+        typeof g.height !== 'number' ||
+        !(g.height > 0) ||
+        (g.swing !== undefined && !['left', 'right'].includes(g.swing as string)) ||
+        (g.swingAngle !== undefined && typeof g.swingAngle !== 'number')
+      ) {
+        throw new RatecadParseError(`Entity ${e.id}: invalid door geometry`);
+      }
+      break;
+    }
+    case 'window': {
+      if (
+        typeof g.hostWallId !== 'string' ||
+        typeof g.position !== 'number' ||
+        typeof g.width !== 'number' ||
+        !(g.width > 0) ||
+        typeof g.height !== 'number' ||
+        !(g.height > 0) ||
+        typeof g.sillHeight !== 'number' ||
+        g.sillHeight < 0
+      ) {
+        throw new RatecadParseError(`Entity ${e.id}: invalid window geometry`);
+      }
+      break;
+    }
   }
 
   return raw as Entity;
@@ -177,10 +226,36 @@ function migrateDocument(
     }
   }
 
+  // v2 → v3: construction defaults; ensure Walls/Doors/Windows layers
+  if (fileSchema < 3) {
+    const defaults = createDefaultLayers();
+    for (const def of defaults) {
+      if (!nextLayers.some((l) => l.id === def.id || l.name === def.name)) {
+        nextLayers = [...nextLayers, def];
+      }
+    }
+  }
+
+  // Validate host relationships — drop orphaned doors/windows with warning via filter
+  const wallIds = new Set(
+    entities.filter((e) => e.type === 'wall').map((e) => e.id),
+  );
+  const nextEntities = entities.filter((e) => {
+    if (e.type === 'door' || e.type === 'window') {
+      return wallIds.has(e.geometry.hostWallId);
+    }
+    return true;
+  });
+
   const settingsRaw = (d.settings ?? {}) as Record<string, unknown>;
   const dimStyleRaw =
     settingsRaw.dimensionStyle && typeof settingsRaw.dimensionStyle === 'object'
       ? (settingsRaw.dimensionStyle as Record<string, unknown>)
+      : {};
+  const constructionRaw =
+    settingsRaw.constructionDefaults &&
+    typeof settingsRaw.constructionDefaults === 'object'
+      ? (settingsRaw.constructionDefaults as Record<string, unknown>)
       : {};
 
   return {
@@ -232,10 +307,40 @@ function migrateDocument(
             ? dimStyleRaw.extensionBeyond
             : DEFAULT_DIMENSION_STYLE.extensionBeyond,
       },
+      constructionDefaults: {
+        wallThickness:
+          typeof constructionRaw.wallThickness === 'number'
+            ? constructionRaw.wallThickness
+            : DEFAULT_CONSTRUCTION.wallThickness,
+        wallHeight:
+          typeof constructionRaw.wallHeight === 'number'
+            ? constructionRaw.wallHeight
+            : DEFAULT_CONSTRUCTION.wallHeight,
+        doorWidth:
+          typeof constructionRaw.doorWidth === 'number'
+            ? constructionRaw.doorWidth
+            : DEFAULT_CONSTRUCTION.doorWidth,
+        doorHeight:
+          typeof constructionRaw.doorHeight === 'number'
+            ? constructionRaw.doorHeight
+            : DEFAULT_CONSTRUCTION.doorHeight,
+        windowWidth:
+          typeof constructionRaw.windowWidth === 'number'
+            ? constructionRaw.windowWidth
+            : DEFAULT_CONSTRUCTION.windowWidth,
+        windowHeight:
+          typeof constructionRaw.windowHeight === 'number'
+            ? constructionRaw.windowHeight
+            : DEFAULT_CONSTRUCTION.windowHeight,
+        windowSill:
+          typeof constructionRaw.windowSill === 'number'
+            ? constructionRaw.windowSill
+            : DEFAULT_CONSTRUCTION.windowSill,
+      },
     },
     layers: nextLayers,
     currentLayerId,
-    entities,
+    entities: nextEntities,
     selection: [],
   };
 }

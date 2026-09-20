@@ -1,16 +1,37 @@
-import type { DrawingDocument, Entity, EntityId, Vec2 } from '@ratecad/core';
+import type { DrawingDocument, Entity, EntityId, Vec2, WallEntity } from '@ratecad/core';
 import {
   aabbFromPoints,
   dimensionLayout,
+  doorLayout,
   pointInAABB,
   pointNearCircle,
   pointNearSegment,
+  projectOntoWall,
+  wallLayout,
+  wallOutlineSegments,
+  windowLayout,
 } from '@ratecad/geometry';
+
+function aabbFromMany(points: Vec2[]): ReturnType<typeof aabbFromPoints> | null {
+  if (points.length === 0) return null;
+  let minX = points[0]!.x;
+  let minY = points[0]!.y;
+  let maxX = points[0]!.x;
+  let maxY = points[0]!.y;
+  for (const p of points) {
+    minX = Math.min(minX, p.x);
+    minY = Math.min(minY, p.y);
+    maxX = Math.max(maxX, p.x);
+    maxY = Math.max(maxY, p.y);
+  }
+  return { minX, minY, maxX, maxY };
+}
 
 export function hitTestEntity(
   entity: Entity,
   point: Vec2,
   tolerance: number,
+  hostWall?: WallEntity,
 ): boolean {
   switch (entity.type) {
     case 'line':
@@ -116,6 +137,50 @@ export function hitTestEntity(
         tolerance,
       );
     }
+    case 'wall': {
+      const layout = wallLayout(entity);
+      if (!layout) return false;
+      // Hit centerline or near wall body
+      if (
+        pointNearSegment(
+          point,
+          entity.geometry.start,
+          entity.geometry.end,
+          tolerance + entity.geometry.thickness / 2,
+        )
+      ) {
+        return true;
+      }
+      const proj = projectOntoWall(entity, point);
+      return !!proj && proj.distance <= entity.geometry.thickness / 2 + tolerance;
+    }
+    case 'door': {
+      if (!hostWall) return false;
+      const layout = doorLayout(entity, hostWall);
+      if (!layout) return false;
+      if (
+        pointNearSegment(point, layout.openStart, layout.openEnd, tolerance)
+      ) {
+        return true;
+      }
+      if (pointNearSegment(point, layout.hinge, layout.leafEnd, tolerance)) {
+        return true;
+      }
+      return (
+        Math.hypot(point.x - layout.center.x, point.y - layout.center.y) <=
+        entity.geometry.width / 2 + tolerance
+      );
+    }
+    case 'window': {
+      if (!hostWall) return false;
+      const layout = windowLayout(entity, hostWall);
+      if (!layout) return false;
+      return (
+        pointNearSegment(point, layout.openStart, layout.openEnd, tolerance) ||
+        pointNearSegment(point, layout.outerA, layout.outerB, tolerance) ||
+        pointNearSegment(point, layout.innerA, layout.innerB, tolerance)
+      );
+    }
   }
 }
 
@@ -124,12 +189,21 @@ export function hitTestDocument(
   point: Vec2,
   tolerance: number,
 ): EntityId | null {
+  const walls = new Map(
+    doc.entities
+      .filter((e): e is WallEntity => e.type === 'wall')
+      .map((w) => [w.id, w]),
+  );
   for (let i = doc.entities.length - 1; i >= 0; i -= 1) {
     const entity = doc.entities[i]!;
     if (!entity.visible) continue;
     const layer = doc.layers.find((l) => l.id === entity.layerId);
     if (layer && !layer.visible) continue;
-    if (hitTestEntity(entity, point, tolerance)) {
+    const host =
+      entity.type === 'door' || entity.type === 'window'
+        ? walls.get(entity.geometry.hostWallId)
+        : undefined;
+    if (hitTestEntity(entity, point, tolerance, host)) {
       return entity.id;
     }
   }
@@ -212,7 +286,44 @@ export function entityBounds(
       }
       return { minX, minY, maxX, maxY };
     }
+    case 'wall': {
+      const layout = wallLayout(entity);
+      if (!layout) {
+        return aabbFromPoints(entity.geometry.start, entity.geometry.end);
+      }
+      return aabbFromMany([...layout.corners]);
+    }
+    case 'door':
+    case 'window':
+      return null;
   }
+}
+
+export function entityBoundsWithHost(
+  entity: Entity,
+  hostWall?: WallEntity,
+): ReturnType<typeof aabbFromPoints> | null {
+  if (entity.type === 'door' && hostWall) {
+    const layout = doorLayout(entity, hostWall);
+    if (!layout) return null;
+    return aabbFromMany([
+      layout.openStart,
+      layout.openEnd,
+      layout.hinge,
+      layout.leafEnd,
+    ]);
+  }
+  if (entity.type === 'window' && hostWall) {
+    const layout = windowLayout(entity, hostWall);
+    if (!layout) return null;
+    return aabbFromMany([
+      layout.outerA,
+      layout.outerB,
+      layout.innerA,
+      layout.innerB,
+    ]);
+  }
+  return entityBounds(entity);
 }
 
 export function isPointNearEntityBounds(
@@ -275,14 +386,33 @@ export function selectByRectangle(
       : mode;
 
   const ids: EntityId[] = [];
+  const walls = new Map(
+    doc.entities
+      .filter((e): e is WallEntity => e.type === 'wall')
+      .map((w) => [w.id, w]),
+  );
   for (const entity of doc.entities) {
     if (!entity.visible) continue;
     const layer = doc.layers.find((l) => l.id === entity.layerId);
     if (layer && !layer.visible) continue;
+    const host =
+      entity.type === 'door' || entity.type === 'window'
+        ? walls.get(entity.geometry.hostWallId)
+        : undefined;
+    const bounds = entityBoundsWithHost(entity, host);
+    if (!bounds) continue;
     const hit =
       resolved === 'window'
-        ? entityFullyInside(entity, box)
-        : entityIntersectsBox(entity, box);
+        ? bounds.minX >= box.minX &&
+          bounds.maxX <= box.maxX &&
+          bounds.minY >= box.minY &&
+          bounds.maxY <= box.maxY
+        : !(
+            bounds.maxX < box.minX ||
+            bounds.minX > box.maxX ||
+            bounds.maxY < box.minY ||
+            bounds.minY > box.maxY
+          );
     if (hit) ids.push(entity.id);
   }
   return ids;

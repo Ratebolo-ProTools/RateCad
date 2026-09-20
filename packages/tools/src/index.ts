@@ -14,15 +14,20 @@ import {
   isEntityModifiable,
   setSelection,
   toggleSelectionId,
+  type DoorEntity,
   type Entity,
   type Vec2,
+  type WindowEntity,
 } from '@ratecad/core';
 import {
   applyGripEdit,
+  clampHostedPosition,
   distance,
+  projectOntoWall,
   resolveSnap,
   translateEntity,
   vecDelta,
+  wallLength,
   type SnapResult,
 } from '@ratecad/geometry';
 import {
@@ -41,6 +46,15 @@ import {
   handleLeaderPointerMove,
   handleTextPointerDown,
 } from './annotationTools.js';
+import {
+  commitWallThickness,
+  handleDoorPointerDown,
+  handleDoorPointerMove,
+  handleWallPointerDown,
+  handleWallPointerMove,
+  handleWindowPointerDown,
+  handleWindowPointerMove,
+} from './constructionTools.js';
 import {
   commitOffsetDistance,
   commitRotateAngle,
@@ -89,6 +103,7 @@ export {
   commitLeaderContent,
   commitTextContent,
 } from './annotationTools.js';
+export { commitWallThickness } from './constructionTools.js';
 
 function snapPoint(
   world: Vec2,
@@ -133,7 +148,7 @@ export function handleToolPointerDown(
 
     const selected = selectedOrMessage(bus);
     if (selected.length > 0 && !multi) {
-      const grips = getSelectionGrips(selected);
+      const grips = getSelectionGrips(selected, bus.getDocument().entities);
       const gripTol = screenToleranceToWorld(input.camera, 8);
       const grip = hitTestGrip(grips, point, gripTol);
       if (grip) {
@@ -204,6 +219,15 @@ export function handleToolPointerDown(
   }
   if (session.activeTool === 'leader') {
     return handleLeaderPointerDown(session, bus, point, snap);
+  }
+  if (session.activeTool === 'wall') {
+    return handleWallPointerDown(session, bus, point, snap);
+  }
+  if (session.activeTool === 'door') {
+    return handleDoorPointerDown(session, bus, input, point, snap);
+  }
+  if (session.activeTool === 'window') {
+    return handleWindowPointerDown(session, bus, input, point, snap);
   }
 
   if (session.activeTool === 'trim') {
@@ -276,7 +300,9 @@ export function handleToolPointerDown(
 
     const delta = vecDelta(session.anchor, point);
     try {
-      bus.execute(new MoveEntitiesCommand(selected, delta));
+      bus.execute(
+        new MoveEntitiesCommand(selected, delta, bus.getDocument().entities),
+      );
     } catch {
       return {
         ...cancelTool(session),
@@ -331,7 +357,9 @@ export function handleToolPointerDown(
 
     const delta = vecDelta(session.anchor, point);
     try {
-      bus.execute(new CopyEntitiesCommand(toCopy, delta));
+      bus.execute(
+        new CopyEntitiesCommand(toCopy, delta, bus.getDocument().entities),
+      );
       return {
         ...session,
         mode: 'copy',
@@ -451,11 +479,42 @@ export function handleToolPointerMove(
   const point = snap.point;
 
   if (session.mode === 'grip' && session.grip && session.gripEntity) {
-    const preview = applyGripEdit(
+    let preview = applyGripEdit(
       session.gripEntity,
       session.grip.editTarget,
       point,
     );
+    if (
+      !preview &&
+      (session.gripEntity.type === 'door' ||
+        session.gripEntity.type === 'window')
+    ) {
+      const host = getEntity(
+        bus.getDocument(),
+        session.gripEntity.geometry.hostWallId,
+      );
+      if (host?.type === 'wall') {
+        const proj = projectOntoWall(host, point);
+        if (proj) {
+          const position = clampHostedPosition(
+            wallLength(host),
+            session.gripEntity.geometry.width,
+            proj.t,
+          );
+          if (session.gripEntity.type === 'door') {
+            preview = {
+              ...session.gripEntity,
+              geometry: { ...session.gripEntity.geometry, position },
+            } satisfies DoorEntity;
+          } else {
+            preview = {
+              ...session.gripEntity,
+              geometry: { ...session.gripEntity.geometry, position },
+            } satisfies WindowEntity;
+          }
+        }
+      }
+    }
     return {
       ...session,
       lastSnap: snap,
@@ -498,6 +557,15 @@ export function handleToolPointerMove(
   }
   if (session.activeTool === 'leader') {
     return handleLeaderPointerMove(session, bus, point, snap);
+  }
+  if (session.activeTool === 'wall') {
+    return handleWallPointerMove(session, bus, point, snap);
+  }
+  if (session.activeTool === 'door') {
+    return handleDoorPointerMove(session, bus, input, point, snap);
+  }
+  if (session.activeTool === 'window') {
+    return handleWindowPointerMove(session, bus, input, point, snap);
   }
 
   if (session.activeTool === 'trim') {
@@ -580,11 +648,16 @@ export function handleToolPointerUp(
       };
     }
     try {
+      const hostWall =
+        session.gripEntity.type === 'door' || session.gripEntity.type === 'window'
+          ? getEntity(bus.getDocument(), session.gripEntity.geometry.hostWallId)
+          : undefined;
       bus.execute(
         new MoveEntityGripCommand(
           session.gripEntity,
           session.grip.editTarget,
           point,
+          hostWall?.type === 'wall' ? hostWall : undefined,
         ),
       );
       return {
@@ -658,6 +731,9 @@ export function commitNumericInput(
 
   if (session.activeTool === 'offset' && session.refEntityId) {
     return commitOffsetDistance(session, buffer);
+  }
+  if (session.activeTool === 'wall') {
+    return commitWallThickness(session, bus, buffer);
   }
   if (session.activeTool === 'rotate' && session.anchor) {
     const next = commitRotateAngle(session, buffer);

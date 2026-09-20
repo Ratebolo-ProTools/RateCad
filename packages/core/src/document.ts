@@ -1,4 +1,5 @@
 import type {
+  DoorEntity,
   DrawingDocument,
   DrawingMeta,
   DrawingSettings,
@@ -6,12 +7,18 @@ import type {
   EntityId,
   Layer,
   LayerId,
+  WallEntity,
+  WindowEntity,
 } from './types.js';
 import {
   APP_VERSION,
+  DEFAULT_CONSTRUCTION,
   DEFAULT_DIMENSION_STYLE,
   DEFAULT_LAYER_ID,
+  DOORS_LAYER_ID,
   SCHEMA_VERSION,
+  WALLS_LAYER_ID,
+  WINDOWS_LAYER_ID,
 } from './types.js';
 
 let idCounter = 0;
@@ -33,9 +40,9 @@ export function resetIdCounter(): void {
 export function createDefaultLayers(): Layer[] {
   return [
     { id: DEFAULT_LAYER_ID, name: '0', color: '#d4d4d4', visible: true, locked: false },
-    { id: 'layer-walls' as LayerId, name: 'Walls', color: '#e8e8e8', visible: true, locked: false },
-    { id: 'layer-doors' as LayerId, name: 'Doors', color: '#8ec8ff', visible: true, locked: false },
-    { id: 'layer-windows' as LayerId, name: 'Windows', color: '#7ad4c8', visible: true, locked: false },
+    { id: WALLS_LAYER_ID, name: 'Walls', color: '#e8e8e8', visible: true, locked: false },
+    { id: DOORS_LAYER_ID, name: 'Doors', color: '#8ec8ff', visible: true, locked: false },
+    { id: WINDOWS_LAYER_ID, name: 'Windows', color: '#7ad4c8', visible: true, locked: false },
     { id: 'layer-dimensions' as LayerId, name: 'Dimensions', color: '#f0c674', visible: true, locked: false },
     { id: 'layer-text' as LayerId, name: 'Text', color: '#c8ced6', visible: true, locked: false },
     { id: 'layer-construction' as LayerId, name: 'Construction', color: '#6a737d', visible: true, locked: false },
@@ -74,6 +81,10 @@ export function createEmptyDocument(
       dimensionStyle: {
         ...DEFAULT_DIMENSION_STYLE,
         ...(settings?.dimensionStyle ?? {}),
+      },
+      constructionDefaults: {
+        ...DEFAULT_CONSTRUCTION,
+        ...(settings?.constructionDefaults ?? {}),
       },
     },
     layers,
@@ -252,4 +263,62 @@ export function isEntitySelectable(doc: DrawingDocument, entity: Entity): boolea
   const layer = getLayer(doc, entity.layerId);
   if (layer && !layer.visible) return false;
   return true;
+}
+
+export function getWall(doc: DrawingDocument, id: EntityId): WallEntity | undefined {
+  const e = getEntity(doc, id);
+  return e?.type === 'wall' ? e : undefined;
+}
+
+/** Doors and windows hosted by a given wall. */
+export function getHostedByWall(
+  doc: DrawingDocument,
+  wallId: EntityId,
+): Array<DoorEntity | WindowEntity> {
+  return doc.entities.filter(
+    (e): e is DoorEntity | WindowEntity =>
+      (e.type === 'door' || e.type === 'window') &&
+      e.geometry.hostWallId === wallId,
+  );
+}
+
+export function getHostedDoorIds(doc: DrawingDocument, wallId: EntityId): EntityId[] {
+  return getHostedByWall(doc, wallId)
+    .filter((e) => e.type === 'door')
+    .map((e) => e.id);
+}
+
+export function getHostedWindowIds(
+  doc: DrawingDocument,
+  wallId: EntityId,
+): EntityId[] {
+  return getHostedByWall(doc, wallId)
+    .filter((e) => e.type === 'window')
+    .map((e) => e.id);
+}
+
+/** Wall deletion must cascade hosted doors/windows — collect full set. */
+export function expandDeleteIds(
+  doc: DrawingDocument,
+  ids: EntityId[],
+): EntityId[] {
+  const out = new Set(ids);
+  for (const id of ids) {
+    const ent = getEntity(doc, id);
+    if (ent?.type === 'wall') {
+      for (const hosted of getHostedByWall(doc, id)) {
+        out.add(hosted.id);
+      }
+    }
+  }
+  return [...out];
+}
+
+export function findOrphanHosted(
+  doc: DrawingDocument,
+): Array<DoorEntity | WindowEntity> {
+  return doc.entities.filter((e): e is DoorEntity | WindowEntity => {
+    if (e.type !== 'door' && e.type !== 'window') return false;
+    return !getWall(doc, e.geometry.hostWallId);
+  });
 }

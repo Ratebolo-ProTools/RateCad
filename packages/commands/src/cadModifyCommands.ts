@@ -37,6 +37,12 @@ function prefixFor(type: Entity['type']): string {
       return 'text';
     case 'leader':
       return 'leader';
+    case 'wall':
+      return 'wall';
+    case 'door':
+      return 'door';
+    case 'window':
+      return 'window';
   }
 }
 
@@ -155,13 +161,58 @@ export class MirrorEntitiesCommand implements Command {
     _keepOriginal = true,
   ) {
     void _keepOriginal;
+    const selectedIds = new Set(entities.map((e) => e.id));
+    const wallIdMap = new Map<EntityId, EntityId>();
+
     for (const entity of entities) {
+      if (entity.type === 'door' || entity.type === 'window') continue;
       const id = createEntityId(prefixFor(entity.type));
       const mirrored = mirrorEntity(entity, axisA, axisB, id);
       if (!mirrored) {
         throw new Error(`Cannot mirror entity ${entity.id}`);
       }
+      if (entity.type === 'wall') {
+        wallIdMap.set(entity.id, id);
+      }
       this.created.push(mirrored);
+    }
+
+    for (const entity of entities) {
+      if (entity.type !== 'door' && entity.type !== 'window') continue;
+      if (!selectedIds.has(entity.geometry.hostWallId)) {
+        throw new Error(
+          `Cannot mirror ${entity.type} without its host wall — select the wall too`,
+        );
+      }
+      const newHost = wallIdMap.get(entity.geometry.hostWallId);
+      if (!newHost) {
+        throw new Error(`Cannot mirror ${entity.type}: host wall failed`);
+      }
+      const id = createEntityId(prefixFor(entity.type));
+      // Flip swing for doors when mirrored
+      const copy: Entity =
+        entity.type === 'door'
+          ? {
+              ...structuredClone(entity),
+              id,
+              geometry: {
+                ...entity.geometry,
+                hostWallId: newHost,
+                swing:
+                  entity.geometry.swing === 'left'
+                    ? ('right' as const)
+                    : ('left' as const),
+              },
+            }
+          : {
+              ...structuredClone(entity),
+              id,
+              geometry: { ...entity.geometry, hostWallId: newHost },
+            };
+      if (!validateEntityGeometry(copy)) {
+        throw new Error(`Cannot mirror ${entity.type}`);
+      }
+      this.created.push(copy);
     }
   }
 
@@ -195,7 +246,17 @@ export class RotateEntitiesCommand implements Command {
     if (!Number.isFinite(radians)) {
       throw new Error('Invalid rotation angle');
     }
+    const selectedIds = new Set(entities.map((e) => e.id));
     for (const entity of entities) {
+      if (entity.type === 'door' || entity.type === 'window') {
+        if (selectedIds.has(entity.geometry.hostWallId)) {
+          // Host wall rotation keeps parametric attachment — no door record change
+          continue;
+        }
+        throw new Error(
+          `Cannot rotate ${entity.type} without its host wall — select the wall too`,
+        );
+      }
       const rotated = rotateEntity(entity, origin, radians);
       if (!rotated) {
         throw new Error(`Cannot rotate entity ${entity.id}`);
@@ -251,6 +312,15 @@ export class ScaleEntitiesCommand implements Command {
       throw new Error('Scale factor must be a positive finite number');
     }
     for (const entity of entities) {
+      if (
+        entity.type === 'wall' ||
+        entity.type === 'door' ||
+        entity.type === 'window'
+      ) {
+        throw new Error(
+          `Scale is disabled for ${entity.type} — construction sizes must be edited explicitly`,
+        );
+      }
       const scaled = scaleEntity(entity, origin, factor);
       if (!scaled) {
         throw new Error(`Cannot scale entity ${entity.id}`);

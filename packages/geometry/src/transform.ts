@@ -85,6 +85,20 @@ export function translateEntity(entity: Entity, delta: Vec2): Entity | null {
           vertices: entity.geometry.vertices.map((v) => translatePoint(v, delta)),
         },
       };
+    case 'wall':
+      return {
+        ...entity,
+        geometry: {
+          ...entity.geometry,
+          start: translatePoint(entity.geometry.start, delta),
+          end: translatePoint(entity.geometry.end, delta),
+        },
+      };
+    case 'door':
+    case 'window':
+      // Hosted objects are parametric on the wall — world translate is a no-op.
+      // Callers that move a door along a wall should update `position` instead.
+      return { ...entity };
   }
 }
 
@@ -106,7 +120,11 @@ export type GripEditTarget =
   | { kind: 'dim-offset' }
   | { kind: 'text-origin' }
   | { kind: 'leader-arrow' }
-  | { kind: 'leader-vertex'; index: number };
+  | { kind: 'leader-vertex'; index: number }
+  | { kind: 'wall-start' }
+  | { kind: 'wall-end' }
+  | { kind: 'door-position' }
+  | { kind: 'window-position' };
 
 /**
  * Compute dimension line placement from start/end/kind/offset.
@@ -312,6 +330,28 @@ export function applyGripEdit(
       }
       return null;
     }
+    case 'wall': {
+      if (target.kind === 'wall-start') {
+        if (distance(point, entity.geometry.end) < 1e-12) return null;
+        return {
+          ...entity,
+          geometry: { ...entity.geometry, start: { ...point } },
+        };
+      }
+      if (target.kind === 'wall-end') {
+        if (distance(entity.geometry.start, point) < 1e-12) return null;
+        return {
+          ...entity,
+          geometry: { ...entity.geometry, end: { ...point } },
+        };
+      }
+      return null;
+    }
+    case 'door':
+    case 'window':
+      // Position grips require host wall context — handled by MoveEntityGripCommand
+      // callers that pass updated position via ReplaceEntityCommand.
+      return null;
   }
 }
 
@@ -364,6 +404,44 @@ export function validateEntityGeometry(entity: Entity): boolean {
         typeof entity.geometry.content === 'string' &&
         Number.isFinite(entity.geometry.textHeight) &&
         entity.geometry.textHeight > 0
+      );
+    case 'wall':
+      return (
+        isFiniteVec2(entity.geometry.start) &&
+        isFiniteVec2(entity.geometry.end) &&
+        distance(entity.geometry.start, entity.geometry.end) > 1e-12 &&
+        Number.isFinite(entity.geometry.thickness) &&
+        entity.geometry.thickness > 1e-12 &&
+        Number.isFinite(entity.geometry.height) &&
+        entity.geometry.height > 0
+      );
+    case 'door':
+      return (
+        typeof entity.geometry.hostWallId === 'string' &&
+        entity.geometry.hostWallId.length > 0 &&
+        Number.isFinite(entity.geometry.position) &&
+        entity.geometry.position >= 0 &&
+        entity.geometry.position <= 1 &&
+        Number.isFinite(entity.geometry.width) &&
+        entity.geometry.width > 1e-12 &&
+        Number.isFinite(entity.geometry.height) &&
+        entity.geometry.height > 0 &&
+        Number.isFinite(entity.geometry.swingAngle) &&
+        entity.geometry.swingAngle > 0
+      );
+    case 'window':
+      return (
+        typeof entity.geometry.hostWallId === 'string' &&
+        entity.geometry.hostWallId.length > 0 &&
+        Number.isFinite(entity.geometry.position) &&
+        entity.geometry.position >= 0 &&
+        entity.geometry.position <= 1 &&
+        Number.isFinite(entity.geometry.width) &&
+        entity.geometry.width > 1e-12 &&
+        Number.isFinite(entity.geometry.height) &&
+        entity.geometry.height > 0 &&
+        Number.isFinite(entity.geometry.sillHeight) &&
+        entity.geometry.sillHeight >= 0
       );
   }
 }

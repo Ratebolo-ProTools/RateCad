@@ -33,3 +33,12 @@ export {
   UpdateLayerCommand,
   UpdateTextCommand,
 } from './annotationCommands.js';
+export {
+  CreateDoorCommand,
+  CreateWallCommand,
+  CreateWindowCommand,
+  DeleteWallCommand,
+  UpdateDoorCommand,
+  UpdateWallCommand,
+  UpdateWindowCommand,
+} from './constructionCommands.js';

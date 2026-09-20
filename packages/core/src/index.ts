@@ -1,8 +1,11 @@
 export type {
   CircleEntity,
+  ConstructionDefaults,
   DimensionEntity,
   DimensionKind,
   DimensionStyle,
+  DoorEntity,
+  DoorSwing,
   DrawingDocument,
   DrawingMeta,
   DrawingSettings,
@@ -19,13 +22,20 @@ export type {
   RectangleEntity,
   TextEntity,
   Vec2,
+  WallEntity,
+  WallJustification,
+  WindowEntity,
 } from './types.js';
 
 export {
   APP_VERSION,
+  DEFAULT_CONSTRUCTION,
   DEFAULT_DIMENSION_STYLE,
   DEFAULT_LAYER_ID,
+  DOORS_LAYER_ID,
   SCHEMA_VERSION,
+  WALLS_LAYER_ID,
+  WINDOWS_LAYER_ID,
 } from './types.js';
 
 export {
@@ -38,10 +48,16 @@ export {
   createEmptyDocument,
   createEntityId,
   createLayerId,
+  expandDeleteIds,
+  findOrphanHosted,
   getCurrentLayer,
   getEntity,
+  getHostedByWall,
+  getHostedDoorIds,
+  getHostedWindowIds,
   getLayer,
   getSelectedEntities,
+  getWall,
   isEntityModifiable,
   isEntitySelectable,
   removeEntities,

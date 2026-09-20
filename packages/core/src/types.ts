@@ -129,6 +129,72 @@ export interface LeaderEntity extends EntityBase {
   };
 }
 
+export type WallJustification = 'center' | 'left' | 'right';
+
+/**
+ * Semantic wall — reference line + thickness/height are source of truth.
+ * Plan geometry is derived, not stored as boundary lines.
+ */
+export interface WallEntity extends EntityBase {
+  type: 'wall';
+  geometry: {
+    start: Vec2;
+    end: Vec2;
+    /** Wall thickness in document world units. */
+    thickness: number;
+    /** Wall height (elevation) in document world units. */
+    height: number;
+    justification: WallJustification;
+  };
+  properties: {
+    color?: string;
+    material?: string;
+    wallType?: string;
+  };
+}
+
+export type DoorSwing = 'left' | 'right';
+
+/**
+ * Hosted door — position is parametric along the host wall [0,1].
+ * World placement is always derived from the host WallEntity.
+ */
+export interface DoorEntity extends EntityBase {
+  type: 'door';
+  geometry: {
+    hostWallId: EntityId;
+    /** Parametric center position along host wall, clamped [0,1]. */
+    position: number;
+    width: number;
+    height: number;
+    swing: DoorSwing;
+    /** Opening angle in radians (typically π/2). */
+    swingAngle: number;
+  };
+  properties: {
+    color?: string;
+    doorType?: string;
+  };
+}
+
+/**
+ * Hosted window — position is parametric along the host wall [0,1].
+ */
+export interface WindowEntity extends EntityBase {
+  type: 'window';
+  geometry: {
+    hostWallId: EntityId;
+    position: number;
+    width: number;
+    height: number;
+    sillHeight: number;
+  };
+  properties: {
+    color?: string;
+    windowType?: string;
+  };
+}
+
 export type Entity =
   | LineEntity
   | RectangleEntity
@@ -136,7 +202,10 @@ export type Entity =
   | PolylineEntity
   | DimensionEntity
   | TextEntity
-  | LeaderEntity;
+  | LeaderEntity
+  | WallEntity
+  | DoorEntity
+  | WindowEntity;
 export type EntityType = Entity['type'];
 
 export interface DimensionStyle {
@@ -147,6 +216,17 @@ export interface DimensionStyle {
   extensionBeyond: number;
 }
 
+/** Default construction sizes in document world units (typically feet). */
+export interface ConstructionDefaults {
+  wallThickness: number;
+  wallHeight: number;
+  doorWidth: number;
+  doorHeight: number;
+  windowWidth: number;
+  windowHeight: number;
+  windowSill: number;
+}
+
 export interface DrawingSettings {
   units: LengthUnit;
   precision: number;
@@ -154,6 +234,7 @@ export interface DrawingSettings {
   /** Master snap toggle (grid + object snaps). */
   snapToGrid: boolean;
   dimensionStyle: DimensionStyle;
+  constructionDefaults: ConstructionDefaults;
 }
 
 export interface DrawingMeta {
@@ -176,8 +257,12 @@ export interface DrawingDocument {
 }
 
 export const DEFAULT_LAYER_ID = 'layer-0' as LayerId;
-export const SCHEMA_VERSION = 2;
-export const APP_VERSION = '0.3.0';
+export const WALLS_LAYER_ID = 'layer-walls' as LayerId;
+export const DOORS_LAYER_ID = 'layer-doors' as LayerId;
+export const WINDOWS_LAYER_ID = 'layer-windows' as LayerId;
+
+export const SCHEMA_VERSION = 3;
+export const APP_VERSION = '0.4.0';
 
 export const DEFAULT_DIMENSION_STYLE: DimensionStyle = {
   textHeight: 0.35,
@@ -185,4 +270,15 @@ export const DEFAULT_DIMENSION_STYLE: DimensionStyle = {
   precision: 2,
   extensionGap: 0.1,
   extensionBeyond: 0.15,
+};
+
+/** Defaults assume feet as document units (9" wall, 8' height, 3' door, etc.). */
+export const DEFAULT_CONSTRUCTION: ConstructionDefaults = {
+  wallThickness: 0.75,
+  wallHeight: 8,
+  doorWidth: 3,
+  doorHeight: 7,
+  windowWidth: 3,
+  windowHeight: 4,
+  windowSill: 3,
 };

@@ -72,6 +72,9 @@ export function entitySegments(entity: Entity): Array<{ a: Vec2; b: Vec2 }> {
     case 'dimension':
     case 'text':
     case 'leader':
+    case 'wall':
+    case 'door':
+    case 'window':
       return [];
   }
 }
@@ -335,6 +338,9 @@ export function trimEntity(
     case 'dimension':
     case 'text':
     case 'leader':
+    case 'wall':
+    case 'door':
+    case 'window':
       return fail(`Cannot trim ${target.type}`);
   }
 }
@@ -475,6 +481,9 @@ export function extendEntity(
     case 'dimension':
     case 'text':
     case 'leader':
+    case 'wall':
+    case 'door':
+    case 'window':
       return fail(`${target.type} extend not supported`);
   }
 }
@@ -652,6 +661,9 @@ export function offsetEntity(
     case 'dimension':
     case 'text':
     case 'leader':
+    case 'wall':
+    case 'door':
+    case 'window':
       return fail(`${entity.type} offset not supported`);
   }
 }
@@ -750,6 +762,22 @@ export function mirrorEntity(
       };
       break;
     }
+    case 'wall': {
+      const s = map(entity.geometry.start);
+      const e = map(entity.geometry.end);
+      if (!s || !e) return null;
+      next = {
+        ...entity,
+        id: newId,
+        geometry: { ...entity.geometry, start: s, end: e },
+      };
+      break;
+    }
+    case 'door':
+    case 'window':
+      // Hosted objects mirror with their wall via remapped hostWallId in command layer.
+      // Standalone mirror without host remap is invalid.
+      return null;
   }
   return validateEntityGeometry(next) ? next : null;
 }
@@ -856,6 +884,21 @@ export function rotateEntity(
         },
       };
       break;
+    case 'wall':
+      next = {
+        ...entity,
+        geometry: {
+          ...entity.geometry,
+          start: map(entity.geometry.start),
+          end: map(entity.geometry.end),
+        },
+      };
+      break;
+    case 'door':
+    case 'window':
+      // Parametric on host — rotate is a no-op on door/window records.
+      next = { ...entity };
+      break;
   }
   return validateEntityGeometry(next) ? next : null;
 }
@@ -939,6 +982,12 @@ export function scaleEntity(
         },
       };
       break;
+    case 'wall':
+    case 'door':
+    case 'window':
+      // Scale is disabled for construction objects — thickness/height/width
+      // must not silently scale into incorrect construction data.
+      return null;
   }
   return validateEntityGeometry(next) ? next : null;
 }

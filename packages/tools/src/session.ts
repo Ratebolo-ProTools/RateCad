@@ -19,7 +19,10 @@ export type ToolId =
   | 'scale'
   | 'dimension'
   | 'text'
-  | 'leader';
+  | 'leader'
+  | 'wall'
+  | 'door'
+  | 'window';
 
 export type InteractionMode =
   | 'idle'
@@ -128,6 +131,12 @@ export function toolStatus(tool: ToolId, dimKind: DimensionKind = 'aligned'): st
       return 'Text: specify insertion point';
     case 'leader':
       return 'Leader: specify arrow point';
+    case 'wall':
+      return 'Wall: specify first point (type thickness+Enter first)';
+    case 'door':
+      return 'Door: select host wall';
+    case 'window':
+      return 'Window: select host wall';
   }
 }
 
