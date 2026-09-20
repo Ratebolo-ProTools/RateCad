@@ -16,3 +16,14 @@ export {
 
 export type { SnapCandidate, SnapKind, SnapOptions, SnapResult } from './snap.js';
 export { collectSnapCandidates, resolveSnap } from './snap.js';
+
+export type { GripEditTarget } from './transform.js';
+export {
+  applyGripEdit,
+  cloneEntityWithNewId,
+  isFiniteVec2,
+  translateEntity,
+  translatePoint,
+  validateEntityGeometry,
+  vecDelta,
+} from './transform.js';

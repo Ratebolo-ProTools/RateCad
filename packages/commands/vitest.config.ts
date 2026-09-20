@@ -12,6 +12,7 @@ export default defineConfig({
     alias: {
       '@ratecad/core': path.resolve(root, '../core/src'),
       '@ratecad/geometry': path.resolve(root, '../geometry/src'),
+      '@ratecad/viewport': path.resolve(root, '../viewport/src'),
     },
   },
 });

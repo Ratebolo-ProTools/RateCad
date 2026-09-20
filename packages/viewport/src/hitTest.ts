@@ -114,3 +114,70 @@ export function isPointNearEntityBounds(
   if (!bounds) return false;
   return pointInAABB(point, bounds, pad);
 }
+
+export type SelectionMode = 'window' | 'crossing';
+
+function entityFullyInside(
+  entity: Entity,
+  box: { minX: number; minY: number; maxX: number; maxY: number },
+): boolean {
+  const bounds = entityBounds(entity);
+  if (!bounds) return false;
+  return (
+    bounds.minX >= box.minX &&
+    bounds.maxX <= box.maxX &&
+    bounds.minY >= box.minY &&
+    bounds.maxY <= box.maxY
+  );
+}
+
+function entityIntersectsBox(
+  entity: Entity,
+  box: { minX: number; minY: number; maxX: number; maxY: number },
+): boolean {
+  const bounds = entityBounds(entity);
+  if (!bounds) return false;
+  return !(
+    bounds.maxX < box.minX ||
+    bounds.minX > box.maxX ||
+    bounds.maxY < box.minY ||
+    bounds.minY > box.maxY
+  );
+}
+
+/**
+ * Window selection: entities whose bounds are fully inside the rectangle.
+ * Crossing selection: entities whose bounds intersect the rectangle.
+ * Direction heuristic (CAD-style): left→right = window, right→left = crossing
+ * when mode is auto via corners.
+ */
+export function selectByRectangle(
+  doc: DrawingDocument,
+  cornerA: Vec2,
+  cornerB: Vec2,
+  mode: SelectionMode | 'auto' = 'auto',
+): EntityId[] {
+  const minX = Math.min(cornerA.x, cornerB.x);
+  const maxX = Math.max(cornerA.x, cornerB.x);
+  const minY = Math.min(cornerA.y, cornerB.y);
+  const maxY = Math.max(cornerA.y, cornerB.y);
+  const box = { minX, minY, maxX, maxY };
+
+  let resolved: SelectionMode = mode === 'auto'
+    ? cornerB.x >= cornerA.x
+      ? 'window'
+      : 'crossing'
+    : mode;
+
+  const ids: EntityId[] = [];
+  for (const entity of doc.entities) {
+    if (!entity.visible || entity.locked) continue;
+    const hit =
+      resolved === 'window'
+        ? entityFullyInside(entity, box)
+        : entityIntersectsBox(entity, box);
+    if (hit) ids.push(entity.id);
+  }
+  return ids;
+}
+

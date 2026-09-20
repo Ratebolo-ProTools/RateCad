@@ -7,3 +7,9 @@ export {
   CreateRectangleCommand,
   DeleteEntitiesCommand,
 } from './entityCommands.js';
+export {
+  CopyEntitiesCommand,
+  MoveEntitiesCommand,
+  MoveEntityGripCommand,
+  ReplaceEntityCommand,
+} from './modifyCommands.js';

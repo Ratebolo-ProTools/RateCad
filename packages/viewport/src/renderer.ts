@@ -21,9 +21,15 @@ export interface RenderOptions {
   camera: Camera;
   document: DrawingDocument;
   preview?: PreviewGeometry | null;
+  /** Live entity previews for move/copy/grip (not committed). */
+  previewEntities?: Entity[] | null;
+  /** Transient selection window (world coords). */
+  selectionRect?: { a: Vec2; b: Vec2 } | null;
   cursorWorld?: Vec2 | null;
   snap?: SnapResult | null;
   grips?: Grip[];
+  /** Hide selected originals while showing previewEntities (move). */
+  hideEntityIds?: string[];
   theme?: {
     background: string;
     gridMajor: string;
@@ -35,6 +41,8 @@ export interface RenderOptions {
     snap: string;
     grip: string;
     gripFill: string;
+    windowSelect: string;
+    crossingSelect: string;
   };
 }
 
@@ -49,6 +57,8 @@ const DEFAULT_THEME = {
   snap: '#ffcc33',
   grip: '#4da3ff',
   gripFill: '#0f141a',
+  windowSelect: 'rgba(77, 163, 255, 0.15)',
+  crossingSelect: 'rgba(77, 200, 120, 0.15)',
 };
 
 function strokeEntity(
@@ -318,6 +328,7 @@ export function renderDocument(
 ): void {
   const theme = { ...DEFAULT_THEME, ...options.theme };
   const { width, height, camera, document: doc } = options;
+  const hidden = new Set(options.hideEntityIds ?? []);
 
   ctx.clearRect(0, 0, width, height);
   ctx.fillStyle = theme.background;
@@ -330,6 +341,7 @@ export function renderDocument(
 
   for (const entity of doc.entities) {
     if (!entity.visible) continue;
+    if (hidden.has(entity.id)) continue;
     const layer = doc.layers.find((l) => l.id === entity.layerId);
     if (layer && !layer.visible) continue;
 
@@ -343,13 +355,39 @@ export function renderDocument(
       isSelected ? theme.selected : entity.properties.color ?? layer?.color ?? theme.entity,
       isSelected ? 2 : 1.25,
     );
-    if (isSelected) {
+    if (isSelected && !options.previewEntities?.length) {
       autoGrips.push(...getEntityGrips(entity));
     }
   }
 
+  if (options.previewEntities?.length) {
+    ctx.save();
+    ctx.setLineDash([5, 4]);
+    for (const entity of options.previewEntities) {
+      strokeEntity(ctx, entity, camera, width, height, theme.preview, 1.5);
+    }
+    ctx.restore();
+  }
+
   if (options.preview) {
     drawPreview(ctx, options.preview, camera, width, height, theme.preview);
+  }
+
+  if (options.selectionRect) {
+    const a = worldToScreen(options.selectionRect.a, camera, width, height);
+    const b = worldToScreen(options.selectionRect.b, camera, width, height);
+    const x = Math.min(a.x, b.x);
+    const y = Math.min(a.y, b.y);
+    const w = Math.abs(b.x - a.x);
+    const h = Math.abs(b.y - a.y);
+    const isWindow = options.selectionRect.b.x >= options.selectionRect.a.x;
+    ctx.fillStyle = isWindow ? theme.windowSelect : theme.crossingSelect;
+    ctx.strokeStyle = isWindow ? theme.selected : '#3ecf8e';
+    ctx.lineWidth = 1;
+    ctx.setLineDash(isWindow ? [] : [4, 3]);
+    ctx.fillRect(x, y, w, h);
+    ctx.strokeRect(x, y, w, h);
+    ctx.setLineDash([]);
   }
 
   const grips = options.grips ?? autoGrips;
@@ -361,3 +399,4 @@ export function renderDocument(
     drawSnapIndicator(ctx, options.snap, camera, width, height, theme);
   }
 }
+

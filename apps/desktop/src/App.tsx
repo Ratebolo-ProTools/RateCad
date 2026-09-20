@@ -22,6 +22,7 @@ import {
   finishPolyline,
   handleToolPointerDown,
   handleToolPointerMove,
+  handleToolPointerUp,
   setActiveTool,
   type ToolId,
   type ToolSession,
@@ -42,6 +43,8 @@ const DRAW_TOOLS: Array<{ id: ToolId; label: string; glyph: string }> = [
   { id: 'rectangle', label: 'Rect', glyph: '▭' },
   { id: 'circle', label: 'Circle', glyph: '○' },
   { id: 'polyline', label: 'PLine', glyph: '⌇' },
+  { id: 'move', label: 'Move', glyph: '↔' },
+  { id: 'copy', label: 'Copy', glyph: '⧉' },
   { id: 'pan', label: 'Pan', glyph: '✥' },
 ];
 
@@ -192,14 +195,18 @@ export function App() {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const sess = sessionRef.current;
     renderDocument(ctx, {
       width: size.width,
       height: size.height,
       camera: cameraRef.current,
       document: doc,
-      preview: sessionRef.current.preview,
+      preview: sess.preview,
+      previewEntities: sess.previewEntities,
+      selectionRect: sess.selectionRect,
+      hideEntityIds: sess.hideEntityIds,
       cursorWorld,
-      snap: sessionRef.current.lastSnap,
+      snap: sess.lastSnap,
     });
   }, [doc, session, camera, size, cursorWorld]);
 
@@ -483,12 +490,20 @@ export function App() {
         return;
       }
       if (event.key === 'Escape') {
-        if (sessionRef.current.vertices.length > 0 || sessionRef.current.anchor) {
-          syncSession(cancelTool(sessionRef.current));
-        } else if (sessionRef.current.activeTool !== 'select') {
+        const s = sessionRef.current;
+        const inProgress =
+          s.mode !== 'idle' ||
+          !!s.anchor ||
+          s.vertices.length > 0 ||
+          !!s.grip ||
+          !!s.previewEntities ||
+          !!s.selectionRect;
+        if (inProgress) {
+          syncSession(cancelTool(s));
+        } else if (s.activeTool !== 'select') {
           activateTool('select');
         } else {
-          syncSession(cancelTool(sessionRef.current));
+          syncSession(cancelTool(s));
         }
         return;
       }
@@ -509,6 +524,8 @@ export function App() {
           r: 'rectangle',
           c: 'circle',
           p: 'polyline',
+          m: 'move',
+          t: 'copy',
           h: 'pan',
         };
         const tool = map[event.key.toLowerCase()];
@@ -590,7 +607,14 @@ export function App() {
       world,
       camera: cameraRef.current,
       detail: event.detail,
+      ctrlKey: event.ctrlKey,
+      metaKey: event.metaKey,
+      shiftKey: event.shiftKey,
     });
+    // Capture for grip drag / window select so pointerUp always arrives
+    if (next.mode === 'grip' || next.mode === 'window') {
+      canvas.setPointerCapture(event.pointerId);
+    }
     syncSession(next);
   };
 
@@ -613,6 +637,9 @@ export function App() {
     const next = handleToolPointerMove(sessionRef.current, busRef.current, {
       world,
       camera: cameraRef.current,
+      ctrlKey: event.ctrlKey,
+      metaKey: event.metaKey,
+      shiftKey: event.shiftKey,
     });
     if (next !== sessionRef.current) {
       syncSession(next);
@@ -620,11 +647,25 @@ export function App() {
   };
 
   const onPointerUp = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    const wasPanning = isPanningRef.current;
     isPanningRef.current = false;
     lastPointerRef.current = null;
     const canvas = canvasRef.current;
     if (canvas?.hasPointerCapture(event.pointerId)) {
       canvas.releasePointerCapture(event.pointerId);
+    }
+    if (wasPanning || event.button !== 0) return;
+
+    const world = getWorldFromEvent(event);
+    const next = handleToolPointerUp(sessionRef.current, busRef.current, {
+      world,
+      camera: cameraRef.current,
+      ctrlKey: event.ctrlKey,
+      metaKey: event.metaKey,
+      shiftKey: event.shiftKey,
+    });
+    if (next !== sessionRef.current) {
+      syncSession(next);
     }
   };
 
@@ -650,7 +691,10 @@ export function App() {
   };
 
   const selected = useMemo(() => getSelectedEntities(doc), [doc]);
-  const selectedProps = selected[0] ? describeEntity(selected[0]) : null;
+  const selectedProps =
+    selected.length === 1 && selected[0] ? describeEntity(selected[0]) : null;
+  const multiSelectLabel =
+    selected.length > 1 ? `${selected.length} objects selected` : null;
   const displayName = `${doc.meta.name}${dirty ? ' *' : ''}`;
   const snapLabel = session.lastSnap?.snapped ? session.lastSnap.label : null;
 
@@ -832,7 +876,9 @@ export function App() {
 
           <section className="panel-section">
             <h2 className="panel-title">Properties</h2>
-            {selectedProps ? (
+            {multiSelectLabel ? (
+              <p className="empty-props">{multiSelectLabel}</p>
+            ) : selectedProps ? (
               selectedProps.map((row) => (
                 <div className="prop-row" key={row.label}>
                   <label>{row.label}</label>
@@ -841,8 +887,8 @@ export function App() {
               ))
             ) : (
               <p className="empty-props">
-                Select an object to inspect its properties. Grips show on
-                selection (visual only in M2).
+                Select an object to inspect its properties. Drag grips to edit;
+                use Move / Copy for transforms.
               </p>
             )}
           </section>

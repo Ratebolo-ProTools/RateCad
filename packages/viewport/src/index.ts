@@ -19,6 +19,8 @@ export {
   hitTestDocument,
   hitTestEntity,
   isPointNearEntityBounds,
+  selectByRectangle,
+  type SelectionMode,
 } from './hitTest.js';
 
 export {
@@ -27,4 +29,5 @@ export {
   firstSegmentMidpoint,
   getEntityGrips,
   getSelectionGrips,
+  hitTestGrip,
 } from './grips.js';

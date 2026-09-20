@@ -105,6 +105,19 @@ export function setSelection(
   };
 }
 
+export function toggleSelectionId(
+  doc: DrawingDocument,
+  id: EntityId,
+): DrawingDocument {
+  const set = new Set(doc.selection);
+  if (set.has(id)) {
+    set.delete(id);
+  } else {
+    set.add(id);
+  }
+  return setSelection(doc, [...set]);
+}
+
 export function clearSelection(doc: DrawingDocument): DrawingDocument {
   return setSelection(doc, []);
 }

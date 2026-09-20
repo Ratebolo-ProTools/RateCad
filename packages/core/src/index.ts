@@ -36,5 +36,6 @@ export {
   replaceEntity,
   resetIdCounter,
   setSelection,
+  toggleSelectionId,
   touchDocument,
 } from './document.js';
