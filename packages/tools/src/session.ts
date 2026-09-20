@@ -1,4 +1,4 @@
-import type { Entity, EntityId, Vec2 } from '@ratecad/core';
+import type { DimensionKind, Entity, EntityId, Vec2 } from '@ratecad/core';
 import type { SnapResult } from '@ratecad/geometry';
 import type { Camera, Grip, PreviewGeometry } from '@ratecad/viewport';
 
@@ -16,7 +16,10 @@ export type ToolId =
   | 'offset'
   | 'mirror'
   | 'rotate'
-  | 'scale';
+  | 'scale'
+  | 'dimension'
+  | 'text'
+  | 'leader';
 
 export type InteractionMode =
   | 'idle'
@@ -30,7 +33,11 @@ export type InteractionMode =
   | 'offset'
   | 'mirror'
   | 'rotate'
-  | 'scale';
+  | 'scale'
+  | 'dimension'
+  | 'text'
+  | 'leader'
+  | 'text-input';
 
 export interface ToolSession {
   activeTool: ToolId;
@@ -55,6 +62,10 @@ export interface ToolSession {
   referenceAngle: number | null;
   /** Scale: first reference length from base point */
   scaleRefLength: number | null;
+  /** Dimension kind when Dimension tool is active */
+  dimKind: DimensionKind;
+  /** Pending text content for text/leader placement dialog */
+  pendingText: string | null;
 }
 
 export function createToolSession(tool: ToolId = 'select'): ToolSession {
@@ -76,10 +87,12 @@ export function createToolSession(tool: ToolId = 'select'): ToolSession {
     inputBuffer: '',
     referenceAngle: null,
     scaleRefLength: null,
+    dimKind: 'aligned',
+    pendingText: null,
   };
 }
 
-export function toolStatus(tool: ToolId): string {
+export function toolStatus(tool: ToolId, dimKind: DimensionKind = 'aligned'): string {
   switch (tool) {
     case 'select':
       return 'Select: click object, Ctrl+click multi, drag window';
@@ -109,14 +122,26 @@ export function toolStatus(tool: ToolId): string {
       return 'Rotate: select object(s), then specify base point';
     case 'scale':
       return 'Scale: select object(s), then specify base point';
+    case 'dimension':
+      return `Dimension (${dimKind}): specify first point`;
+    case 'text':
+      return 'Text: specify insertion point';
+    case 'leader':
+      return 'Leader: specify arrow point';
   }
 }
 
-export function setActiveTool(session: ToolSession, tool: ToolId): ToolSession {
+export function setActiveTool(
+  session: ToolSession,
+  tool: ToolId,
+  opts?: { dimKind?: DimensionKind },
+): ToolSession {
+  const dimKind = opts?.dimKind ?? session.dimKind ?? 'aligned';
   return {
     ...createToolSession(tool),
     activeTool: tool,
-    statusMessage: toolStatus(tool),
+    dimKind,
+    statusMessage: toolStatus(tool, dimKind),
   };
 }
 
@@ -124,7 +149,8 @@ export function cancelTool(session: ToolSession): ToolSession {
   return {
     ...createToolSession(session.activeTool),
     activeTool: session.activeTool,
-    statusMessage: toolStatus(session.activeTool),
+    dimKind: session.dimKind,
+    statusMessage: toolStatus(session.activeTool, session.dimKind),
   };
 }
 

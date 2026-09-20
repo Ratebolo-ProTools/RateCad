@@ -11,6 +11,7 @@ import {
 import {
   getEntity,
   getSelectedEntities,
+  isEntityModifiable,
   setSelection,
   toggleSelectionId,
   type Entity,
@@ -31,6 +32,15 @@ import {
   screenToleranceToWorld,
   selectByRectangle,
 } from '@ratecad/viewport';
+import {
+  commitLeaderContent,
+  commitTextContent,
+  handleDimensionPointerDown,
+  handleDimensionPointerMove,
+  handleLeaderPointerDown,
+  handleLeaderPointerMove,
+  handleTextPointerDown,
+} from './annotationTools.js';
 import {
   commitOffsetDistance,
   commitRotateAngle,
@@ -75,6 +85,10 @@ export {
   commitRotateAngle,
   commitScaleFactor,
 } from './cadModifyTools.js';
+export {
+  commitLeaderContent,
+  commitTextContent,
+} from './annotationTools.js';
 
 function snapPoint(
   world: Vec2,
@@ -93,11 +107,21 @@ function selectedOrMessage(bus: CommandBus): Entity[] {
   return getSelectedEntities(bus.getDocument());
 }
 
+function modifiableSelected(bus: CommandBus): Entity[] {
+  const doc = bus.getDocument();
+  return getSelectedEntities(doc).filter((e) => isEntityModifiable(doc, e));
+}
+
 export function handleToolPointerDown(
   session: ToolSession,
   bus: CommandBus,
   input: PointerInput,
 ): ToolSession {
+  // Block drawing tools while text dialog is open
+  if (session.mode === 'text-input') {
+    return session;
+  }
+
   const snap = snapPoint(input.world, bus, input.camera);
   const point = snap.point;
   const multi = !!(input.ctrlKey || input.metaKey);
@@ -115,6 +139,13 @@ export function handleToolPointerDown(
       if (grip) {
         const entity = getEntity(bus.getDocument(), grip.entityId);
         if (entity) {
+          if (!isEntityModifiable(bus.getDocument(), entity)) {
+            return {
+              ...session,
+              lastSnap: snap,
+              statusMessage: 'Locked layer — cannot edit',
+            };
+          }
           return {
             ...session,
             mode: 'grip',
@@ -165,6 +196,16 @@ export function handleToolPointerDown(
     return { ...session, lastSnap: snap };
   }
 
+  if (session.activeTool === 'dimension') {
+    return handleDimensionPointerDown(session, bus, point, snap);
+  }
+  if (session.activeTool === 'text') {
+    return handleTextPointerDown(session, point, snap);
+  }
+  if (session.activeTool === 'leader') {
+    return handleLeaderPointerDown(session, bus, point, snap);
+  }
+
   if (session.activeTool === 'trim') {
     return handleTrimPointerDown(session, bus, input, point, snap);
   }
@@ -185,17 +226,33 @@ export function handleToolPointerDown(
   }
 
   if (session.activeTool === 'move') {
-    const selected = selectedOrMessage(bus);
+    const selected = modifiableSelected(bus);
     if (selected.length === 0) {
       const tol = screenToleranceToWorld(input.camera, 8);
       const id = hitTestDocument(bus.getDocument(), point, tol);
       if (id) {
+        const ent = getEntity(bus.getDocument(), id);
+        if (ent && !isEntityModifiable(bus.getDocument(), ent)) {
+          return {
+            ...session,
+            lastSnap: snap,
+            statusMessage: 'Locked layer — cannot move',
+          };
+        }
         bus.updateWithoutHistory((doc) => setSelection(doc, [id]));
         return {
           ...session,
           mode: 'idle',
           lastSnap: snap,
           statusMessage: 'Move: specify base point',
+        };
+      }
+      const all = selectedOrMessage(bus);
+      if (all.length > 0) {
+        return {
+          ...session,
+          lastSnap: snap,
+          statusMessage: 'Move: selection is locked',
         };
       }
       return {
@@ -235,8 +292,13 @@ export function handleToolPointerDown(
   }
 
   if (session.activeTool === 'copy') {
-    const selected = selectedOrMessage(bus);
-    if (selected.length === 0) {
+    const selected = modifiableSelected(bus);
+    // Copy is allowed from locked layers visually but creates new entities —
+    // still require source to be selectable; allow copy of locked for organization?
+    // Spec: locked cannot be modified. Copy doesn't modify source — allow all selected.
+    const toCopy =
+      selected.length > 0 ? selected : selectedOrMessage(bus);
+    if (toCopy.length === 0) {
       const tol = screenToleranceToWorld(input.camera, 8);
       const id = hitTestDocument(bus.getDocument(), point, tol);
       if (id) {
@@ -260,7 +322,7 @@ export function handleToolPointerDown(
         ...session,
         mode: 'copy',
         anchor: point,
-        previewEntities: selected.map((e) => structuredClone(e)),
+        previewEntities: toCopy.map((e) => structuredClone(e)),
         hideEntityIds: [],
         lastSnap: snap,
         statusMessage: 'Copy: specify destination (Esc to finish)',
@@ -269,15 +331,15 @@ export function handleToolPointerDown(
 
     const delta = vecDelta(session.anchor, point);
     try {
-      bus.execute(new CopyEntitiesCommand(selected, delta));
+      bus.execute(new CopyEntitiesCommand(toCopy, delta));
       return {
         ...session,
         mode: 'copy',
         anchor: session.anchor,
-        previewEntities: selected.map((e) => structuredClone(e)),
+        previewEntities: toCopy.map((e) => structuredClone(e)),
         hideEntityIds: [],
         lastSnap: snap,
-        statusMessage: `Copied ${selected.length} — click next destination or Esc`,
+        statusMessage: `Copied ${toCopy.length} — click next destination or Esc`,
       };
     } catch {
       return {
@@ -381,6 +443,10 @@ export function handleToolPointerMove(
   bus: CommandBus,
   input: PointerInput,
 ): ToolSession {
+  if (session.mode === 'text-input') {
+    return session;
+  }
+
   const snap = snapPoint(input.world, bus, input.camera);
   const point = snap.point;
 
@@ -411,7 +477,10 @@ export function handleToolPointerMove(
   }
 
   if ((session.mode === 'move' || session.mode === 'copy') && session.anchor) {
-    const selected = selectedOrMessage(bus);
+    const selected =
+      session.mode === 'move'
+        ? modifiableSelected(bus)
+        : selectedOrMessage(bus);
     const delta = vecDelta(session.anchor, point);
     const previewEntities = selected
       .map((e) => translateEntity(e, delta))
@@ -422,6 +491,13 @@ export function handleToolPointerMove(
       previewEntities,
       hideEntityIds: session.mode === 'move' ? selected.map((e) => e.id) : [],
     };
+  }
+
+  if (session.activeTool === 'dimension') {
+    return handleDimensionPointerMove(session, bus, point, snap);
+  }
+  if (session.activeTool === 'leader') {
+    return handleLeaderPointerMove(session, bus, point, snap);
   }
 
   if (session.activeTool === 'trim') {
@@ -443,7 +519,7 @@ export function handleToolPointerMove(
     return handleScalePointerMove(session, bus, point, snap);
   }
 
-  if (session.activeTool === 'select' || session.activeTool === 'pan') {
+  if (session.activeTool === 'select' || session.activeTool === 'pan' || session.activeTool === 'text') {
     return { ...session, lastSnap: snap };
   }
 
@@ -496,6 +572,13 @@ export function handleToolPointerUp(
   const point = snap.point;
 
   if (session.mode === 'grip' && session.grip && session.gripEntity) {
+    if (!isEntityModifiable(bus.getDocument(), session.gripEntity)) {
+      return {
+        ...cancelTool(session),
+        lastSnap: snap,
+        statusMessage: 'Locked layer — grip edit canceled',
+      };
+    }
     try {
       bus.execute(
         new MoveEntityGripCommand(
@@ -578,7 +661,6 @@ export function commitNumericInput(
   }
   if (session.activeTool === 'rotate' && session.anchor) {
     const next = commitRotateAngle(session, buffer);
-    // If angle set and we already have selection, wait for click to confirm
     return next;
   }
   if (session.activeTool === 'scale' && session.anchor) {

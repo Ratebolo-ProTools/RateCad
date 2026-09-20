@@ -69,6 +69,9 @@ export function entitySegments(entity: Entity): Array<{ a: Vec2; b: Vec2 }> {
       return segs;
     }
     case 'circle':
+    case 'dimension':
+    case 'text':
+    case 'leader':
       return [];
   }
 }
@@ -329,6 +332,10 @@ export function trimEntity(
     }
     case 'circle':
       return trimCircleEntity(target, cutter, pickPoint);
+    case 'dimension':
+    case 'text':
+    case 'leader':
+      return fail(`Cannot trim ${target.type}`);
   }
 }
 
@@ -465,7 +472,10 @@ export function extendEntity(
     case 'rectangle':
       return fail('Rectangle extend not supported — explode or use lines');
     case 'circle':
-      return fail('Circle extend not supported');
+    case 'dimension':
+    case 'text':
+    case 'leader':
+      return fail(`${target.type} extend not supported`);
   }
 }
 
@@ -639,7 +649,10 @@ export function offsetEntity(
     case 'rectangle':
       return offsetRectangleEntity(entity, distanceValue, sidePoint, newId);
     case 'circle':
-      return fail('Circle offset not supported in M4');
+    case 'dimension':
+    case 'text':
+    case 'leader':
+      return fail(`${entity.type} offset not supported`);
   }
 }
 
@@ -692,6 +705,48 @@ export function mirrorEntity(
         ...entity,
         id: newId,
         geometry: { ...entity.geometry, vertices },
+      };
+      break;
+    }
+    case 'dimension': {
+      const s = map(entity.geometry.start);
+      const e = map(entity.geometry.end);
+      if (!s || !e) return null;
+      next = {
+        ...entity,
+        id: newId,
+        geometry: {
+          ...entity.geometry,
+          start: s,
+          end: e,
+          offset: -entity.geometry.offset,
+        },
+      };
+      break;
+    }
+    case 'text': {
+      const p = map(entity.geometry.position);
+      if (!p) return null;
+      next = {
+        ...entity,
+        id: newId,
+        geometry: { ...entity.geometry, position: p },
+      };
+      break;
+    }
+    case 'leader': {
+      const arrow = map(entity.geometry.arrow);
+      if (!arrow) return null;
+      const vertices: Vec2[] = [];
+      for (const v of entity.geometry.vertices) {
+        const m = map(v);
+        if (!m) return null;
+        vertices.push(m);
+      }
+      next = {
+        ...entity,
+        id: newId,
+        geometry: { ...entity.geometry, arrow, vertices },
       };
       break;
     }
@@ -771,6 +826,36 @@ export function rotateEntity(
         },
       };
       break;
+    case 'dimension':
+      next = {
+        ...entity,
+        geometry: {
+          ...entity.geometry,
+          start: map(entity.geometry.start),
+          end: map(entity.geometry.end),
+        },
+      };
+      break;
+    case 'text':
+      next = {
+        ...entity,
+        geometry: {
+          ...entity.geometry,
+          position: map(entity.geometry.position),
+          rotation: entity.geometry.rotation + radians,
+        },
+      };
+      break;
+    case 'leader':
+      next = {
+        ...entity,
+        geometry: {
+          ...entity.geometry,
+          arrow: map(entity.geometry.arrow),
+          vertices: entity.geometry.vertices.map(map),
+        },
+      };
+      break;
   }
   return validateEntityGeometry(next) ? next : null;
 }
@@ -819,6 +904,38 @@ export function scaleEntity(
         geometry: {
           ...entity.geometry,
           vertices: entity.geometry.vertices.map(map),
+        },
+      };
+      break;
+    case 'dimension':
+      next = {
+        ...entity,
+        geometry: {
+          ...entity.geometry,
+          start: map(entity.geometry.start),
+          end: map(entity.geometry.end),
+          offset: entity.geometry.offset * factor,
+        },
+      };
+      break;
+    case 'text':
+      next = {
+        ...entity,
+        geometry: {
+          ...entity.geometry,
+          position: map(entity.geometry.position),
+          height: entity.geometry.height * factor,
+        },
+      };
+      break;
+    case 'leader':
+      next = {
+        ...entity,
+        geometry: {
+          ...entity.geometry,
+          arrow: map(entity.geometry.arrow),
+          vertices: entity.geometry.vertices.map(map),
+          textHeight: entity.geometry.textHeight * factor,
         },
       };
       break;

@@ -11,6 +11,7 @@ import {
   createEntityId,
   getEntity,
   getSelectedEntities,
+  isEntityModifiable,
   setSelection,
   type Entity,
   type EntityId,
@@ -41,6 +42,11 @@ function selected(bus: CommandBus): Entity[] {
   return getSelectedEntities(bus.getDocument());
 }
 
+function modifiableSelected(bus: CommandBus): Entity[] {
+  const doc = bus.getDocument();
+  return getSelectedEntities(doc).filter((e) => isEntityModifiable(doc, e));
+}
+
 function pickEntity(
   bus: CommandBus,
   point: Vec2,
@@ -51,6 +57,21 @@ function pickEntity(
   const id = hitTestDocument(bus.getDocument(), point, tol);
   if (!id || id === exclude) return null;
   return getEntity(bus.getDocument(), id) ?? null;
+}
+
+function assertModifiable(
+  bus: CommandBus,
+  entity: Entity,
+  snap: ToolSession['lastSnap'],
+  session: ToolSession,
+  action: string,
+): ToolSession | null {
+  if (isEntityModifiable(bus.getDocument(), entity)) return null;
+  return {
+    ...session,
+    lastSnap: snap,
+    statusMessage: `Locked layer — cannot ${action}`,
+  };
 }
 
 export function handleTrimPointerDown(
@@ -98,6 +119,8 @@ export function handleTrimPointerDown(
       statusMessage: 'Trim: select object to trim',
     };
   }
+  const locked = assertModifiable(bus, target, snap, session, 'trim');
+  if (locked) return locked;
 
   // Use snapped point for geometry when near intersections; else raw pick
   const pickPoint = snapPoint;
@@ -240,6 +263,8 @@ export function handleExtendPointerDown(
       statusMessage: 'Extend: select object to extend',
     };
   }
+  const locked = assertModifiable(bus, target, snap, session, 'extend');
+  if (locked) return locked;
 
   try {
     bus.execute(new ExtendEntityCommand(target, boundary, pickAt));
@@ -364,6 +389,8 @@ export function handleOffsetPointerDown(
 
   const source = getEntity(bus.getDocument(), session.refEntityId);
   if (!source) return { ...cancelTool(session), lastSnap: snap };
+  const locked = assertModifiable(bus, source, snap, session, 'offset');
+  if (locked) return locked;
 
   const dist =
     session.numericValue != null
@@ -459,7 +486,7 @@ export function handleMirrorPointerDown(
   snapPoint: Vec2,
   snap: ToolSession['lastSnap'],
 ): ToolSession {
-  let sel = selected(bus);
+  let sel = modifiableSelected(bus);
   if (sel.length === 0) {
     const ent = pickEntity(bus, snapPoint, input.camera);
     if (!ent) {
@@ -467,6 +494,13 @@ export function handleMirrorPointerDown(
         ...session,
         lastSnap: snap,
         statusMessage: 'Mirror: select object(s) first',
+      };
+    }
+    if (!isEntityModifiable(bus.getDocument(), ent)) {
+      return {
+        ...session,
+        lastSnap: snap,
+        statusMessage: 'Locked layer — cannot mirror',
       };
     }
     bus.updateWithoutHistory((doc) => setSelection(doc, [ent.id]));
@@ -536,7 +570,7 @@ export function handleRotatePointerDown(
   snapPoint: Vec2,
   snap: ToolSession['lastSnap'],
 ): ToolSession {
-  const sel = selected(bus);
+  const sel = modifiableSelected(bus);
   if (sel.length === 0) {
     const ent = pickEntity(bus, snapPoint, input.camera);
     if (!ent) {
@@ -544,6 +578,13 @@ export function handleRotatePointerDown(
         ...session,
         lastSnap: snap,
         statusMessage: 'Rotate: select object(s) first',
+      };
+    }
+    if (!isEntityModifiable(bus.getDocument(), ent)) {
+      return {
+        ...session,
+        lastSnap: snap,
+        statusMessage: 'Locked layer — cannot rotate',
       };
     }
     bus.updateWithoutHistory((doc) => setSelection(doc, [ent.id]));
@@ -657,7 +698,7 @@ export function handleScalePointerDown(
   snapPoint: Vec2,
   snap: ToolSession['lastSnap'],
 ): ToolSession {
-  const sel = selected(bus);
+  const sel = modifiableSelected(bus);
   if (sel.length === 0) {
     const ent = pickEntity(bus, snapPoint, input.camera);
     if (!ent) {
@@ -665,6 +706,13 @@ export function handleScalePointerDown(
         ...session,
         lastSnap: snap,
         statusMessage: 'Scale: select object(s) first',
+      };
+    }
+    if (!isEntityModifiable(bus.getDocument(), ent)) {
+      return {
+        ...session,
+        lastSnap: snap,
+        statusMessage: 'Locked layer — cannot scale',
       };
     }
     bus.updateWithoutHistory((doc) => setSelection(doc, [ent.id]));

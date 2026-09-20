@@ -73,12 +73,79 @@ export interface PolylineEntity extends EntityBase {
   };
 }
 
+export type DimensionKind = 'horizontal' | 'vertical' | 'aligned';
+
+/**
+ * Structured dimension — measurement is always derived from start/end.
+ * Offset controls dimension-line placement (world units along the
+ * perpendicular from the measured segment midpoint).
+ */
+export interface DimensionEntity extends EntityBase {
+  type: 'dimension';
+  geometry: {
+    kind: DimensionKind;
+    start: Vec2;
+    end: Vec2;
+    /** Signed offset distance from measured geometry to dimension line. */
+    offset: number;
+    /** Optional text shift along the dimension line (0 = centered). */
+    textOffset?: number;
+  };
+  properties: {
+    color?: string;
+    lineWeight?: number;
+    textHeight?: number;
+    arrowSize?: number;
+    precision?: number;
+  };
+}
+
+export interface TextEntity extends EntityBase {
+  type: 'text';
+  geometry: {
+    position: Vec2;
+    content: string;
+    height: number;
+    rotation: number;
+  };
+  properties: {
+    color?: string;
+  };
+}
+
+export interface LeaderEntity extends EntityBase {
+  type: 'leader';
+  geometry: {
+    /** Tip of the arrow (callout point). */
+    arrow: Vec2;
+    /** Landing / elbow points ending at text anchor. */
+    vertices: Vec2[];
+    content: string;
+    textHeight: number;
+  };
+  properties: {
+    color?: string;
+    arrowSize?: number;
+  };
+}
+
 export type Entity =
   | LineEntity
   | RectangleEntity
   | CircleEntity
-  | PolylineEntity;
+  | PolylineEntity
+  | DimensionEntity
+  | TextEntity
+  | LeaderEntity;
 export type EntityType = Entity['type'];
+
+export interface DimensionStyle {
+  textHeight: number;
+  arrowSize: number;
+  precision: number;
+  extensionGap: number;
+  extensionBeyond: number;
+}
 
 export interface DrawingSettings {
   units: LengthUnit;
@@ -86,6 +153,7 @@ export interface DrawingSettings {
   gridSize: number;
   /** Master snap toggle (grid + object snaps). */
   snapToGrid: boolean;
+  dimensionStyle: DimensionStyle;
 }
 
 export interface DrawingMeta {
@@ -100,11 +168,21 @@ export interface DrawingDocument {
   meta: DrawingMeta;
   settings: DrawingSettings;
   layers: Layer[];
+  /** Layer used for newly created entities. */
+  currentLayerId: LayerId;
   entities: Entity[];
   /** Session selection — not required in persisted files */
   selection: EntityId[];
 }
 
 export const DEFAULT_LAYER_ID = 'layer-0' as LayerId;
-export const SCHEMA_VERSION = 1;
-export const APP_VERSION = '0.2.0';
+export const SCHEMA_VERSION = 2;
+export const APP_VERSION = '0.3.0';
+
+export const DEFAULT_DIMENSION_STYLE: DimensionStyle = {
+  textHeight: 0.35,
+  arrowSize: 0.25,
+  precision: 2,
+  extensionGap: 0.1,
+  extensionBeyond: 0.15,
+};

@@ -9,6 +9,7 @@ import type {
 } from './types.js';
 import {
   APP_VERSION,
+  DEFAULT_DIMENSION_STYLE,
   DEFAULT_LAYER_ID,
   SCHEMA_VERSION,
 } from './types.js';
@@ -20,18 +21,31 @@ export function createEntityId(prefix = 'ent'): EntityId {
   return `${prefix}-${Date.now().toString(36)}-${idCounter.toString(36)}`;
 }
 
+export function createLayerId(prefix = 'layer'): LayerId {
+  idCounter += 1;
+  return `${prefix}-${Date.now().toString(36)}-${idCounter.toString(36)}` as LayerId;
+}
+
 export function resetIdCounter(): void {
   idCounter = 0;
 }
 
+export function createDefaultLayers(): Layer[] {
+  return [
+    { id: DEFAULT_LAYER_ID, name: '0', color: '#d4d4d4', visible: true, locked: false },
+    { id: 'layer-walls' as LayerId, name: 'Walls', color: '#e8e8e8', visible: true, locked: false },
+    { id: 'layer-doors' as LayerId, name: 'Doors', color: '#8ec8ff', visible: true, locked: false },
+    { id: 'layer-windows' as LayerId, name: 'Windows', color: '#7ad4c8', visible: true, locked: false },
+    { id: 'layer-dimensions' as LayerId, name: 'Dimensions', color: '#f0c674', visible: true, locked: false },
+    { id: 'layer-text' as LayerId, name: 'Text', color: '#c8ced6', visible: true, locked: false },
+    { id: 'layer-construction' as LayerId, name: 'Construction', color: '#6a737d', visible: true, locked: false },
+    { id: 'layer-annotations' as LayerId, name: 'Annotations', color: '#d2a8ff', visible: true, locked: false },
+  ];
+}
+
+/** @deprecated use createDefaultLayers — kept for callers expecting a single layer */
 export function createDefaultLayer(): Layer {
-  return {
-    id: DEFAULT_LAYER_ID,
-    name: '0',
-    color: '#d4d4d4',
-    visible: true,
-    locked: false,
-  };
+  return createDefaultLayers()[0]!;
 }
 
 export function createEmptyDocument(
@@ -46,6 +60,8 @@ export function createEmptyDocument(
     appVersion: APP_VERSION,
   };
 
+  const layers = createDefaultLayers();
+
   return {
     schemaVersion: SCHEMA_VERSION,
     meta,
@@ -55,8 +71,13 @@ export function createEmptyDocument(
       gridSize: 1,
       snapToGrid: true,
       ...settings,
+      dimensionStyle: {
+        ...DEFAULT_DIMENSION_STYLE,
+        ...(settings?.dimensionStyle ?? {}),
+      },
     },
-    layers: [createDefaultLayer()],
+    layers,
+    currentLayerId: DEFAULT_LAYER_ID,
     entities: [],
     selection: [],
   };
@@ -88,6 +109,10 @@ export function getLayer(
   id: LayerId,
 ): Layer | undefined {
   return doc.layers.find((l) => l.id === id);
+}
+
+export function getCurrentLayer(doc: DrawingDocument): Layer {
+  return getLayer(doc, doc.currentLayerId) ?? doc.layers[0]!;
 }
 
 export function getSelectedEntities(doc: DrawingDocument): Entity[] {
@@ -155,4 +180,76 @@ export function replaceEntity(
   const entities = [...doc.entities];
   entities[index] = entity;
   return touchDocument({ ...doc, entities });
+}
+
+export function setCurrentLayer(
+  doc: DrawingDocument,
+  layerId: LayerId,
+): DrawingDocument {
+  if (!getLayer(doc, layerId)) return doc;
+  return touchDocument({ ...doc, currentLayerId: layerId });
+}
+
+export function addLayer(doc: DrawingDocument, layer: Layer): DrawingDocument {
+  if (doc.layers.some((l) => l.id === layer.id)) return doc;
+  return touchDocument({
+    ...doc,
+    layers: [...doc.layers, layer],
+  });
+}
+
+export function updateLayer(
+  doc: DrawingDocument,
+  layerId: LayerId,
+  patch: Partial<Omit<Layer, 'id'>>,
+): DrawingDocument {
+  const layers = doc.layers.map((l) =>
+    l.id === layerId ? { ...l, ...patch, id: l.id } : l,
+  );
+  return touchDocument({ ...doc, layers });
+}
+
+export function removeLayer(
+  doc: DrawingDocument,
+  layerId: LayerId,
+  moveToLayerId?: LayerId,
+): DrawingDocument {
+  if (layerId === DEFAULT_LAYER_ID) {
+    throw new Error('Cannot delete the default layer "0"');
+  }
+  const hasEntities = doc.entities.some((e) => e.layerId === layerId);
+  if (hasEntities) {
+    if (!moveToLayerId || !getLayer(doc, moveToLayerId)) {
+      throw new Error('Move entities to another layer before deleting');
+    }
+  }
+  const target = moveToLayerId ?? DEFAULT_LAYER_ID;
+  const entities = doc.entities.map((e) =>
+    e.layerId === layerId ? { ...e, layerId: target } : e,
+  );
+  const layers = doc.layers.filter((l) => l.id !== layerId);
+  const currentLayerId =
+    doc.currentLayerId === layerId ? target : doc.currentLayerId;
+  return touchDocument({
+    ...doc,
+    layers,
+    entities,
+    currentLayerId,
+  });
+}
+
+export function isEntityModifiable(doc: DrawingDocument, entity: Entity): boolean {
+  if (entity.locked) return false;
+  const layer = getLayer(doc, entity.layerId);
+  if (!layer) return true;
+  if (!layer.visible) return false;
+  if (layer.locked) return false;
+  return true;
+}
+
+export function isEntitySelectable(doc: DrawingDocument, entity: Entity): boolean {
+  if (!entity.visible) return false;
+  const layer = getLayer(doc, entity.layerId);
+  if (layer && !layer.visible) return false;
+  return true;
 }

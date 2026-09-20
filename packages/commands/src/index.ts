@@ -21,3 +21,15 @@ export {
   ScaleEntitiesCommand,
   TrimEntityCommand,
 } from './cadModifyCommands.js';
+export {
+  CreateDimensionCommand,
+  CreateLayerCommand,
+  CreateLeaderCommand,
+  CreateTextCommand,
+  DeleteLayerCommand,
+  SetCurrentLayerCommand,
+  SetEntityLayerCommand,
+  UpdateDimensionOffsetCommand,
+  UpdateLayerCommand,
+  UpdateTextCommand,
+} from './annotationCommands.js';

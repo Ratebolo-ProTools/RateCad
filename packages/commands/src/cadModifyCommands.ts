@@ -31,6 +31,12 @@ function prefixFor(type: Entity['type']): string {
       return 'circle';
     case 'polyline':
       return 'pline';
+    case 'dimension':
+      return 'dim';
+    case 'text':
+      return 'text';
+    case 'leader':
+      return 'leader';
   }
 }
 

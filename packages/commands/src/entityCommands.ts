@@ -1,11 +1,12 @@
 import {
   addEntity,
   createEntityId,
-  DEFAULT_LAYER_ID,
+  getCurrentLayer,
   removeEntities,
   type CircleEntity,
   type DrawingDocument,
   type EntityId,
+  type LayerId,
   type LineEntity,
   type PolylineEntity,
   type RectangleEntity,
@@ -21,7 +22,7 @@ export class CreateLineCommand implements Command {
     private readonly start: Vec2,
     private readonly end: Vec2,
     entityId?: EntityId,
-    private readonly layerId = DEFAULT_LAYER_ID,
+    private readonly layerId?: LayerId,
   ) {
     this.entityId = entityId ?? createEntityId('line');
   }
@@ -34,7 +35,7 @@ export class CreateLineCommand implements Command {
     const entity: LineEntity = {
       id: this.entityId,
       type: 'line',
-      layerId: this.layerId,
+      layerId: this.layerId ?? getCurrentLayer(doc).id,
       visible: true,
       locked: false,
       geometry: {
@@ -59,7 +60,7 @@ export class CreateRectangleCommand implements Command {
     private readonly corner1: Vec2,
     private readonly corner2: Vec2,
     entityId?: EntityId,
-    private readonly layerId = DEFAULT_LAYER_ID,
+    private readonly layerId?: LayerId,
   ) {
     this.entityId = entityId ?? createEntityId('rect');
   }
@@ -72,7 +73,7 @@ export class CreateRectangleCommand implements Command {
     const entity: RectangleEntity = {
       id: this.entityId,
       type: 'rectangle',
-      layerId: this.layerId,
+      layerId: this.layerId ?? getCurrentLayer(doc).id,
       visible: true,
       locked: false,
       geometry: {
@@ -97,7 +98,7 @@ export class CreateCircleCommand implements Command {
     private readonly center: Vec2,
     private readonly radius: number,
     entityId?: EntityId,
-    private readonly layerId = DEFAULT_LAYER_ID,
+    private readonly layerId?: LayerId,
   ) {
     this.entityId = entityId ?? createEntityId('circle');
   }
@@ -110,7 +111,7 @@ export class CreateCircleCommand implements Command {
     const entity: CircleEntity = {
       id: this.entityId,
       type: 'circle',
-      layerId: this.layerId,
+      layerId: this.layerId ?? getCurrentLayer(doc).id,
       visible: true,
       locked: false,
       geometry: {
@@ -136,7 +137,7 @@ export class CreatePolylineCommand implements Command {
     vertices: Vec2[],
     entityId?: EntityId,
     private readonly closed = false,
-    private readonly layerId = DEFAULT_LAYER_ID,
+    private readonly layerId?: LayerId,
   ) {
     if (vertices.length < 2) {
       throw new Error('Polyline requires at least 2 vertices');
@@ -153,7 +154,7 @@ export class CreatePolylineCommand implements Command {
     const entity: PolylineEntity = {
       id: this.entityId,
       type: 'polyline',
-      layerId: this.layerId,
+      layerId: this.layerId ?? getCurrentLayer(doc).id,
       visible: true,
       locked: false,
       geometry: {

@@ -1,5 +1,10 @@
 import type { Entity, EntityId, Vec2 } from '@ratecad/core';
-import { distance, midpoint, type GripEditTarget } from '@ratecad/geometry';
+import {
+  dimensionLayout,
+  distance,
+  midpoint,
+  type GripEditTarget,
+} from '@ratecad/geometry';
 
 export type GripRole =
   | 'start'
@@ -98,6 +103,60 @@ export function getEntityGrips(entity: Entity): Grip[] {
         index,
         editTarget: { kind: 'polyline-vertex' as const, index },
       }));
+    case 'dimension': {
+      const layout = dimensionLayout(entity.geometry);
+      const mid = layout
+        ? {
+            x: (layout.dimStart.x + layout.dimEnd.x) / 2,
+            y: (layout.dimStart.y + layout.dimEnd.y) / 2,
+          }
+        : midpoint(entity.geometry.start, entity.geometry.end);
+      return [
+        {
+          role: 'start' as const,
+          point: { ...entity.geometry.start },
+          entityId: entity.id,
+          editTarget: { kind: 'dim-start' as const },
+        },
+        {
+          role: 'end' as const,
+          point: { ...entity.geometry.end },
+          entityId: entity.id,
+          editTarget: { kind: 'dim-end' as const },
+        },
+        {
+          role: 'center' as const,
+          point: mid,
+          entityId: entity.id,
+          editTarget: { kind: 'dim-offset' as const },
+        },
+      ];
+    }
+    case 'text':
+      return [
+        {
+          role: 'center' as const,
+          point: { ...entity.geometry.position },
+          entityId: entity.id,
+          editTarget: { kind: 'text-origin' as const },
+        },
+      ];
+    case 'leader':
+      return [
+        {
+          role: 'start' as const,
+          point: { ...entity.geometry.arrow },
+          entityId: entity.id,
+          editTarget: { kind: 'leader-arrow' as const },
+        },
+        ...entity.geometry.vertices.map((v, index) => ({
+          role: 'vertex' as const,
+          point: { ...v },
+          entityId: entity.id,
+          index,
+          editTarget: { kind: 'leader-vertex' as const, index },
+        })),
+      ];
   }
 }
 

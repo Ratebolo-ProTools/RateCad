@@ -135,6 +135,62 @@ function collectEntityCandidates(entity: Entity): SnapCandidate[] {
       }
       break;
     }
+    case 'dimension': {
+      const { start, end } = entity.geometry;
+      out.push(
+        {
+          kind: 'endpoint',
+          point: { ...start },
+          priority: KIND_PRIORITY.endpoint,
+          entityId: entity.id,
+          label: 'Endpoint',
+        },
+        {
+          kind: 'endpoint',
+          point: { ...end },
+          priority: KIND_PRIORITY.endpoint,
+          entityId: entity.id,
+          label: 'Endpoint',
+        },
+        {
+          kind: 'midpoint',
+          point: midpoint(start, end),
+          priority: KIND_PRIORITY.midpoint,
+          entityId: entity.id,
+          label: 'Midpoint',
+        },
+      );
+      break;
+    }
+    case 'text': {
+      out.push({
+        kind: 'endpoint',
+        point: { ...entity.geometry.position },
+        priority: KIND_PRIORITY.endpoint,
+        entityId: entity.id,
+        label: 'Endpoint',
+      });
+      break;
+    }
+    case 'leader': {
+      out.push({
+        kind: 'endpoint',
+        point: { ...entity.geometry.arrow },
+        priority: KIND_PRIORITY.endpoint,
+        entityId: entity.id,
+        label: 'Endpoint',
+      });
+      for (const v of entity.geometry.vertices) {
+        out.push({
+          kind: 'endpoint',
+          point: { ...v },
+          priority: KIND_PRIORITY.endpoint,
+          entityId: entity.id,
+          label: 'Endpoint',
+        });
+      }
+      break;
+    }
   }
   return out;
 }
@@ -147,6 +203,8 @@ export function collectSnapCandidates(
   const candidates: SnapCandidate[] = [];
   for (const entity of doc.entities) {
     if (!entity.visible) continue;
+    const layer = doc.layers.find((l) => l.id === entity.layerId);
+    if (layer && !layer.visible) continue;
     candidates.push(...collectEntityCandidates(entity));
   }
   return candidates;

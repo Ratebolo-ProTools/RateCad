@@ -51,10 +51,112 @@ describe('.ratecad IO', () => {
     expect(opened.meta.name).toBe('Floor Plan');
     expect(opened.schemaVersion).toBe(original.schemaVersion);
     expect(opened.settings.units).toBe('ft');
-    expect(opened.layers).toHaveLength(1);
+    expect(opened.layers.length).toBeGreaterThanOrEqual(8);
+    expect(opened.currentLayerId).toBe(original.currentLayerId);
+    expect(opened.settings.dimensionStyle).toBeDefined();
     expect(opened.entities).toHaveLength(2);
     expect(opened.entities.map((e) => e.type)).toEqual(['line', 'polyline']);
     expect(opened.selection).toEqual([]);
+  });
+
+  it('round-trips dimensions, text, leaders', () => {
+    const base = createEmptyDocument('Anno');
+    const doc: DrawingDocument = {
+      ...base,
+      entities: [
+        {
+          id: 'dim-1',
+          type: 'dimension',
+          layerId: 'layer-dimensions',
+          visible: true,
+          locked: false,
+          geometry: {
+            kind: 'horizontal',
+            start: { x: 0, y: 0 },
+            end: { x: 12, y: 0 },
+            offset: 2,
+          },
+          properties: {},
+        },
+        {
+          id: 'text-1',
+          type: 'text',
+          layerId: 'layer-text',
+          visible: true,
+          locked: false,
+          geometry: {
+            position: { x: 1, y: 2 },
+            content: 'Label',
+            height: 0.4,
+            rotation: 0,
+          },
+          properties: {},
+        },
+        {
+          id: 'leader-1',
+          type: 'leader',
+          layerId: 'layer-annotations',
+          visible: true,
+          locked: false,
+          geometry: {
+            arrow: { x: 0, y: 0 },
+            vertices: [{ x: 2, y: 1 }],
+            content: 'Existing column',
+            textHeight: 0.35,
+          },
+          properties: {},
+        },
+      ],
+    };
+    const opened = parseDocument(serializeDocument(doc));
+    expect(opened.entities.map((e) => e.type)).toEqual([
+      'dimension',
+      'text',
+      'leader',
+    ]);
+  });
+
+  it('migrates schema v1 documents to v2', () => {
+    const v1 = {
+      format: 'ratecad',
+      schemaVersion: 1,
+      document: {
+        schemaVersion: 1,
+        meta: {
+          name: 'Old',
+          createdAt: '2020-01-01T00:00:00.000Z',
+          updatedAt: '2020-01-01T00:00:00.000Z',
+          appVersion: '0.1.0',
+        },
+        settings: { units: 'ft', precision: 2, gridSize: 1, snapToGrid: true },
+        layers: [
+          {
+            id: 'layer-0',
+            name: '0',
+            color: '#d4d4d4',
+            visible: true,
+            locked: false,
+          },
+        ],
+        entities: [
+          {
+            id: 'line-1',
+            type: 'line',
+            layerId: 'layer-0',
+            visible: true,
+            locked: false,
+            geometry: { start: { x: 0, y: 0 }, end: { x: 1, y: 0 } },
+            properties: {},
+          },
+        ],
+      },
+    };
+    const opened = parseDocument(JSON.stringify(v1));
+    expect(opened.schemaVersion).toBe(2);
+    expect(opened.currentLayerId).toBe('layer-0');
+    expect(opened.settings.dimensionStyle).toBeDefined();
+    expect(opened.layers.length).toBeGreaterThan(1);
+    expect(opened.entities).toHaveLength(1);
   });
 
   it('preserves polyline vertices on open', () => {

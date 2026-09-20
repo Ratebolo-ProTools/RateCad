@@ -1,5 +1,18 @@
-import type { DrawingDocument, Entity, Vec2 } from '@ratecad/core';
-import { distance, type SnapResult } from '@ratecad/geometry';
+import type {
+  DimensionEntity,
+  DrawingDocument,
+  Entity,
+  LeaderEntity,
+  TextEntity,
+  Vec2,
+} from '@ratecad/core';
+import {
+  dimensionLayout,
+  distance,
+  formatLengthInUnits,
+  measuredLength,
+  type SnapResult,
+} from '@ratecad/geometry';
 import {
   type Camera,
   screenToWorld,
@@ -61,28 +74,278 @@ const DEFAULT_THEME = {
   crossingSelect: 'rgba(77, 200, 120, 0.15)',
 };
 
-function strokeEntity(
+function drawArrowHead(
   ctx: CanvasRenderingContext2D,
-  entity: Entity,
+  tip: Vec2,
+  dir: Vec2,
+  size: number,
+  camera: Camera,
+  width: number,
+  height: number,
+): void {
+  const len = Math.hypot(dir.x, dir.y) || 1;
+  const ux = dir.x / len;
+  const uy = dir.y / len;
+  const px = -uy;
+  const py = ux;
+  const base = { x: tip.x - ux * size, y: tip.y - uy * size };
+  const left = {
+    x: base.x + px * size * 0.45,
+    y: base.y + py * size * 0.45,
+  };
+  const right = {
+    x: base.x - px * size * 0.45,
+    y: base.y - py * size * 0.45,
+  };
+  const t = worldToScreen(tip, camera, width, height);
+  const l = worldToScreen(left, camera, width, height);
+  const r = worldToScreen(right, camera, width, height);
+  ctx.beginPath();
+  ctx.moveTo(t.x, t.y);
+  ctx.lineTo(l.x, l.y);
+  ctx.lineTo(r.x, r.y);
+  ctx.closePath();
+  ctx.fill();
+}
+
+function strokeDimension(
+  ctx: CanvasRenderingContext2D,
+  entity: DimensionEntity,
+  doc: DrawingDocument,
   camera: Camera,
   width: number,
   height: number,
   color: string,
   lineWidth: number,
 ): void {
+  const layout = dimensionLayout(entity.geometry);
+  if (!layout) return;
+
+  const style = doc.settings.dimensionStyle;
+  const gap = style.extensionGap;
+  const beyond = style.extensionBeyond;
+  const arrow =
+    entity.properties.arrowSize ?? style.arrowSize;
+  const textH =
+    entity.properties.textHeight ?? style.textHeight;
+  const precision =
+    entity.properties.precision ?? style.precision;
+
+  const { start, end } = entity.geometry;
+  const { dimStart, dimEnd, textPos, measuredDir, perp } = layout;
+
+  // Extension lines (with gap from geometry, beyond dim line)
+  const ext1a = {
+    x: start.x + perp.x * Math.sign(entity.geometry.offset || 1) * gap,
+    y: start.y + perp.y * Math.sign(entity.geometry.offset || 1) * gap,
+  };
+  // Prefer using offset direction from measured to dim
+  const offSign = entity.geometry.offset >= 0 ? 1 : -1;
+  const ext1Start = {
+    x: start.x + perp.x * offSign * gap,
+    y: start.y + perp.y * offSign * gap,
+  };
+  const ext1End = {
+    x: dimStart.x + perp.x * offSign * beyond,
+    y: dimStart.y + perp.y * offSign * beyond,
+  };
+  const ext2Start = {
+    x: end.x + perp.x * offSign * gap,
+    y: end.y + perp.y * offSign * gap,
+  };
+  const ext2End = {
+    x: dimEnd.x + perp.x * offSign * beyond,
+    y: dimEnd.y + perp.y * offSign * beyond,
+  };
+  void ext1a;
+
   ctx.strokeStyle = color;
+  ctx.fillStyle = color;
   ctx.lineWidth = lineWidth;
   ctx.beginPath();
+  const e1s = worldToScreen(ext1Start, camera, width, height);
+  const e1e = worldToScreen(ext1End, camera, width, height);
+  const e2s = worldToScreen(ext2Start, camera, width, height);
+  const e2e = worldToScreen(ext2End, camera, width, height);
+  ctx.moveTo(e1s.x, e1s.y);
+  ctx.lineTo(e1e.x, e1e.y);
+  ctx.moveTo(e2s.x, e2s.y);
+  ctx.lineTo(e2e.x, e2e.y);
+  const ds = worldToScreen(dimStart, camera, width, height);
+  const de = worldToScreen(dimEnd, camera, width, height);
+  ctx.moveTo(ds.x, ds.y);
+  ctx.lineTo(de.x, de.y);
+  ctx.stroke();
 
+  // Arrow heads point inward along dim line
+  drawArrowHead(
+    ctx,
+    dimStart,
+    measuredDir,
+    arrow,
+    camera,
+    width,
+    height,
+  );
+  drawArrowHead(
+    ctx,
+    dimEnd,
+    { x: -measuredDir.x, y: -measuredDir.y },
+    arrow,
+    camera,
+    width,
+    height,
+  );
+
+  const value = measuredLength(start, end, entity.geometry.kind);
+  const label = formatLengthInUnits(
+    value,
+    doc.settings.units,
+    precision,
+  );
+
+  // Screen-stable minimum text size so annotations stay readable when zoomed out
+  const screenHeight = Math.max(textH * camera.zoom, 11);
+  const tp = worldToScreen(textPos, camera, width, height);
+  const angle = Math.atan2(measuredDir.y, measuredDir.x);
+  // Keep text upright-ish
+  let drawAngle = -angle; // canvas y is flipped via worldToScreen
+  // Recompute from screen direction for correct canvas orientation
+  const ds2 = worldToScreen(
+    { x: textPos.x + measuredDir.x, y: textPos.y + measuredDir.y },
+    camera,
+    width,
+    height,
+  );
+  drawAngle = Math.atan2(ds2.y - tp.y, ds2.x - tp.x);
+  if (drawAngle > Math.PI / 2 || drawAngle < -Math.PI / 2) {
+    drawAngle += Math.PI;
+  }
+
+  ctx.save();
+  ctx.translate(tp.x, tp.y);
+  ctx.rotate(drawAngle);
+  ctx.font = `${screenHeight}px Cascadia Mono, SF Mono, Consolas, monospace`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'bottom';
+  // Halo for readability
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = DEFAULT_THEME.background;
+  ctx.strokeText(label, 0, -2);
+  ctx.fillStyle = color;
+  ctx.fillText(label, 0, -2);
+  ctx.restore();
+}
+
+function strokeTextEntity(
+  ctx: CanvasRenderingContext2D,
+  entity: TextEntity,
+  camera: Camera,
+  width: number,
+  height: number,
+  color: string,
+): void {
+  const p = worldToScreen(entity.geometry.position, camera, width, height);
+  const screenHeight = Math.max(entity.geometry.height * camera.zoom, 10);
+  const rot = -entity.geometry.rotation; // world CCW → screen (y-down) CW
+  // Match screen rotation from a world unit vector
+  const tip = worldToScreen(
+    {
+      x:
+        entity.geometry.position.x + Math.cos(entity.geometry.rotation),
+      y:
+        entity.geometry.position.y + Math.sin(entity.geometry.rotation),
+    },
+    camera,
+    width,
+    height,
+  );
+  const angle = Math.atan2(tip.y - p.y, tip.x - p.x);
+  void rot;
+
+  ctx.save();
+  ctx.translate(p.x, p.y);
+  ctx.rotate(angle);
+  ctx.font = `${screenHeight}px Cascadia Mono, SF Mono, Consolas, monospace`;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'bottom';
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = DEFAULT_THEME.background;
+  ctx.strokeText(entity.geometry.content, 0, 0);
+  ctx.fillStyle = color;
+  ctx.fillText(entity.geometry.content, 0, 0);
+  ctx.restore();
+}
+
+function strokeLeader(
+  ctx: CanvasRenderingContext2D,
+  entity: LeaderEntity,
+  camera: Camera,
+  width: number,
+  height: number,
+  color: string,
+  lineWidth: number,
+): void {
+  const pts = [entity.geometry.arrow, ...entity.geometry.vertices];
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+  ctx.lineWidth = lineWidth;
+  ctx.beginPath();
+  const first = worldToScreen(pts[0]!, camera, width, height);
+  ctx.moveTo(first.x, first.y);
+  for (let i = 1; i < pts.length; i += 1) {
+    const p = worldToScreen(pts[i]!, camera, width, height);
+    ctx.lineTo(p.x, p.y);
+  }
+  ctx.stroke();
+
+  const arrowSize = entity.properties.arrowSize ?? 0.2;
+  if (pts.length >= 2) {
+    const dir = {
+      x: pts[1]!.x - pts[0]!.x,
+      y: pts[1]!.y - pts[0]!.y,
+    };
+    drawArrowHead(ctx, pts[0]!, dir, arrowSize, camera, width, height);
+  }
+
+  const last = pts[pts.length - 1]!;
+  const screenHeight = Math.max(entity.geometry.textHeight * camera.zoom, 10);
+  const tp = worldToScreen(last, camera, width, height);
+  ctx.font = `${screenHeight}px Cascadia Mono, SF Mono, Consolas, monospace`;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = DEFAULT_THEME.background;
+  ctx.strokeText(entity.geometry.content, tp.x + 4, tp.y);
+  ctx.fillStyle = color;
+  ctx.fillText(entity.geometry.content, tp.x + 4, tp.y);
+}
+
+function strokeEntity(
+  ctx: CanvasRenderingContext2D,
+  entity: Entity,
+  doc: DrawingDocument,
+  camera: Camera,
+  width: number,
+  height: number,
+  color: string,
+  lineWidth: number,
+): void {
   switch (entity.type) {
     case 'line': {
+      ctx.strokeStyle = color;
+      ctx.lineWidth = lineWidth;
+      ctx.beginPath();
       const s = worldToScreen(entity.geometry.start, camera, width, height);
       const e = worldToScreen(entity.geometry.end, camera, width, height);
       ctx.moveTo(s.x, s.y);
       ctx.lineTo(e.x, e.y);
+      ctx.stroke();
       break;
     }
     case 'rectangle': {
+      ctx.strokeStyle = color;
+      ctx.lineWidth = lineWidth;
       const a = worldToScreen(entity.geometry.corner1, camera, width, height);
       const b = worldToScreen(entity.geometry.corner2, camera, width, height);
       const x = Math.min(a.x, b.x);
@@ -93,12 +356,19 @@ function strokeEntity(
       break;
     }
     case 'circle': {
+      ctx.strokeStyle = color;
+      ctx.lineWidth = lineWidth;
+      ctx.beginPath();
       const c = worldToScreen(entity.geometry.center, camera, width, height);
       const r = entity.geometry.radius * camera.zoom;
       ctx.arc(c.x, c.y, Math.max(r, 0.5), 0, Math.PI * 2);
+      ctx.stroke();
       break;
     }
     case 'polyline': {
+      ctx.strokeStyle = color;
+      ctx.lineWidth = lineWidth;
+      ctx.beginPath();
       const verts = entity.geometry.vertices;
       if (verts.length === 0) break;
       const first = worldToScreen(verts[0]!, camera, width, height);
@@ -110,11 +380,19 @@ function strokeEntity(
       if (entity.geometry.closed && verts.length > 2) {
         ctx.closePath();
       }
+      ctx.stroke();
       break;
     }
+    case 'dimension':
+      strokeDimension(ctx, entity, doc, camera, width, height, color, lineWidth);
+      break;
+    case 'text':
+      strokeTextEntity(ctx, entity, camera, width, height, color);
+      break;
+    case 'leader':
+      strokeLeader(ctx, entity, camera, width, height, color, lineWidth);
+      break;
   }
-
-  ctx.stroke();
 }
 
 function drawGrid(
@@ -135,7 +413,6 @@ function drawGrid(
   const minY = Math.min(topLeft.y, bottomRight.y);
   const maxY = Math.max(topLeft.y, bottomRight.y);
 
-  // Avoid drawing millions of lines when zoomed out
   const screenSpacing = gridSize * camera.zoom;
   let step = gridSize;
   let majorEvery = 5;
@@ -272,12 +549,10 @@ function drawSnapIndicator(
 
   switch (snap.kind) {
     case 'endpoint': {
-      // Square
       ctx.strokeRect(p.x - 6, p.y - 6, 12, 12);
       break;
     }
     case 'midpoint': {
-      // Triangle
       ctx.beginPath();
       ctx.moveTo(p.x, p.y - 7);
       ctx.lineTo(p.x + 7, p.y + 5);
@@ -287,7 +562,6 @@ function drawSnapIndicator(
       break;
     }
     case 'center': {
-      // Circle with cross
       ctx.beginPath();
       ctx.arc(p.x, p.y, 7, 0, Math.PI * 2);
       ctx.stroke();
@@ -300,7 +574,6 @@ function drawSnapIndicator(
       break;
     }
     case 'grid': {
-      // Small crosshair
       ctx.beginPath();
       ctx.moveTo(p.x - 5, p.y);
       ctx.lineTo(p.x + 5, p.y);
@@ -349,6 +622,7 @@ export function renderDocument(
     strokeEntity(
       ctx,
       entity,
+      doc,
       camera,
       width,
       height,
@@ -364,7 +638,7 @@ export function renderDocument(
     ctx.save();
     ctx.setLineDash([5, 4]);
     for (const entity of options.previewEntities) {
-      strokeEntity(ctx, entity, camera, width, height, theme.preview, 1.5);
+      strokeEntity(ctx, entity, doc, camera, width, height, theme.preview, 1.5);
     }
     ctx.restore();
   }
@@ -399,4 +673,3 @@ export function renderDocument(
     drawSnapIndicator(ctx, options.snap, camera, width, height, theme);
   }
 }
-

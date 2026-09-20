@@ -21,12 +21,16 @@ export type { GripEditTarget } from './transform.js';
 export {
   applyGripEdit,
   cloneEntityWithNewId,
+  dimensionLayout,
   isFiniteVec2,
+  offsetFromPlacement,
   translateEntity,
   translatePoint,
   validateEntityGeometry,
   vecDelta,
 } from './transform.js';
+
+export { formatLengthInUnits, measuredLength } from './units.js';
 
 export {
   angleBetween,

@@ -7,19 +7,35 @@ import {
   type PointerEvent as ReactPointerEvent,
   type WheelEvent as ReactWheelEvent,
 } from 'react';
-import { CommandBus, DeleteEntitiesCommand } from '@ratecad/commands';
+import {
+  CommandBus,
+  CreateLayerCommand,
+  DeleteEntitiesCommand,
+  DeleteLayerCommand,
+  SetCurrentLayerCommand,
+  UpdateLayerCommand,
+  UpdateTextCommand,
+} from '@ratecad/commands';
 import {
   createEmptyDocument,
+  getLayer,
   getSelectedEntities,
+  isEntityModifiable,
+  type DimensionKind,
   type DrawingDocument,
   type Entity,
+  type Layer,
+  type LengthUnit,
+  type TextEntity,
 } from '@ratecad/core';
-import { formatLength } from '@ratecad/geometry';
+import { formatLength, formatLengthInUnits, measuredLength } from '@ratecad/geometry';
 import { serializeDocument, tryParseDocument } from '@ratecad/io';
 import {
   appendInputBuffer,
   cancelTool,
+  commitLeaderContent,
   commitNumericInput,
+  commitTextContent,
   createToolSession,
   finishPolyline,
   handleToolPointerDown,
@@ -39,12 +55,22 @@ import {
 } from '@ratecad/viewport';
 import './styles/app.css';
 
-const DRAW_TOOLS: Array<{ id: ToolId; label: string; glyph: string }> = [
+const DRAW_TOOLS: Array<{
+  id: ToolId;
+  label: string;
+  glyph: string;
+  dimKind?: DimensionKind;
+}> = [
   { id: 'select', label: 'Select', glyph: '⌖' },
   { id: 'line', label: 'Line', glyph: '/' },
   { id: 'rectangle', label: 'Rect', glyph: '▭' },
   { id: 'circle', label: 'Circle', glyph: '○' },
   { id: 'polyline', label: 'PLine', glyph: '⌇' },
+  { id: 'dimension', label: 'DimH', glyph: '↔', dimKind: 'horizontal' },
+  { id: 'dimension', label: 'DimV', glyph: '↕', dimKind: 'vertical' },
+  { id: 'dimension', label: 'DimA', glyph: '⤡', dimKind: 'aligned' },
+  { id: 'text', label: 'Text', glyph: 'T' },
+  { id: 'leader', label: 'Leader', glyph: '⤷' },
   { id: 'move', label: 'Move', glyph: '↔' },
   { id: 'copy', label: 'Copy', glyph: '⧉' },
   { id: 'trim', label: 'Trim', glyph: '✂' },
@@ -63,7 +89,12 @@ const COMMAND_ALIASES: Record<string, ToolId> = {
   mi: 'mirror',
   ro: 'rotate',
   sc: 'scale',
+  di: 'dimension',
+  le: 'leader',
 };
+
+const UNIT_OPTIONS: LengthUnit[] = ['ft', 'in', 'm', 'mm'];
+
 function createBus(): CommandBus {
   return new CommandBus(createEmptyDocument('Untitled Drawing'));
 }
@@ -73,11 +104,18 @@ function basename(filePath: string): string {
   return parts[parts.length - 1] || filePath;
 }
 
-function describeEntity(entity: Entity): Array<{ label: string; value: string }> {
+function layerName(doc: DrawingDocument, layerId: string): string {
+  return getLayer(doc, layerId)?.name ?? layerId;
+}
+
+function describeEntity(
+  entity: Entity,
+  doc: DrawingDocument,
+): Array<{ label: string; value: string }> {
   const common = [
     { label: 'ID', value: entity.id },
     { label: 'Type', value: entity.type },
-    { label: 'Layer', value: entity.layerId },
+    { label: 'Layer', value: layerName(doc, entity.layerId) },
   ];
 
   switch (entity.type) {
@@ -120,6 +158,54 @@ function describeEntity(entity: Entity): Array<{ label: string; value: string }>
         { label: 'Vertices', value: String(entity.geometry.vertices.length) },
         { label: 'Closed', value: entity.geometry.closed ? 'Yes' : 'No' },
       ];
+    case 'dimension': {
+      const measured = measuredLength(
+        entity.geometry.start,
+        entity.geometry.end,
+        entity.geometry.kind,
+      );
+      const precision =
+        entity.properties.precision ?? doc.settings.dimensionStyle.precision;
+      return [
+        ...common,
+        { label: 'Kind', value: entity.geometry.kind },
+        {
+          label: 'Measured',
+          value: formatLengthInUnits(measured, doc.settings.units, precision),
+        },
+        { label: 'Units', value: doc.settings.units },
+        { label: 'Precision', value: String(precision) },
+        { label: 'Offset', value: formatLength(entity.geometry.offset) },
+        {
+          label: 'Text Δ',
+          value: formatLength(entity.geometry.textOffset ?? 0),
+        },
+      ];
+    }
+    case 'text':
+      return [
+        ...common,
+        { label: 'Content', value: entity.geometry.content },
+        { label: 'Size', value: formatLength(entity.geometry.height) },
+        {
+          label: 'Rotation',
+          value: `${((entity.geometry.rotation * 180) / Math.PI).toFixed(1)}°`,
+        },
+        {
+          label: 'Position',
+          value: `${formatLength(entity.geometry.position.x)}, ${formatLength(entity.geometry.position.y)}`,
+        },
+      ];
+    case 'leader':
+      return [
+        ...common,
+        { label: 'Content', value: entity.geometry.content },
+        { label: 'Size', value: formatLength(entity.geometry.textHeight) },
+        {
+          label: 'Arrow',
+          value: `${formatLength(entity.geometry.arrow.x)}, ${formatLength(entity.geometry.arrow.y)}`,
+        },
+      ];
   }
 }
 
@@ -153,6 +239,8 @@ export function App() {
   const [discardPrompt, setDiscardPrompt] = useState<{
     resolve: (ok: boolean) => void;
   } | null>(null);
+  const [textPrompt, setTextPrompt] = useState('');
+  const textInputRef = useRef<HTMLInputElement | null>(null);
 
   const syncSession = useCallback((next: ToolSession) => {
     sessionRef.current = next;
@@ -248,10 +336,12 @@ export function App() {
   );
 
   const activateTool = useCallback(
-    (tool: ToolId) => {
+    (tool: ToolId, dimKind?: DimensionKind) => {
       isPanningRef.current = false;
       lastPointerRef.current = null;
-      syncSession(setActiveTool(sessionRef.current, tool));
+      syncSession(
+        setActiveTool(sessionRef.current, tool, dimKind ? { dimKind } : undefined),
+      );
     },
     [syncSession],
   );
@@ -444,9 +534,19 @@ export function App() {
   ]);
 
   const deleteSelection = useCallback(() => {
-    const selected = busRef.current.getDocument().selection;
-    if (selected.length === 0) return;
-    busRef.current.execute(new DeleteEntitiesCommand(selected));
+    const doc = busRef.current.getDocument();
+    const selected = getSelectedEntities(doc).filter((e) =>
+      isEntityModifiable(doc, e),
+    );
+    if (selected.length === 0) {
+      if (doc.selection.length > 0) {
+        setStatusExtra('Locked layer — cannot delete');
+      }
+      return;
+    }
+    busRef.current.execute(
+      new DeleteEntitiesCommand(selected.map((e) => e.id)),
+    );
   }, []);
 
   const undo = useCallback(() => busRef.current.undo(), []);
@@ -457,8 +557,101 @@ export function App() {
       ...d,
       settings: { ...d.settings, snapToGrid: !d.settings.snapToGrid },
     }));
-    // Don't mark dirty for snap toggle? It is a document setting — keep dirty via subscribe.
   }, []);
+
+  const setUnits = useCallback((units: LengthUnit) => {
+    busRef.current.updateWithoutHistory((d) => ({
+      ...d,
+      settings: { ...d.settings, units },
+    }));
+  }, []);
+
+  const setCurrentLayer = useCallback((layerId: string) => {
+    const doc = busRef.current.getDocument();
+    if (doc.currentLayerId === layerId) return;
+    busRef.current.execute(
+      new SetCurrentLayerCommand(doc.currentLayerId, layerId),
+    );
+  }, []);
+
+  const toggleLayerVisible = useCallback((layer: Layer) => {
+    busRef.current.execute(
+      new UpdateLayerCommand(layer.id, layer, { visible: !layer.visible }),
+    );
+  }, []);
+
+  const toggleLayerLocked = useCallback((layer: Layer) => {
+    busRef.current.execute(
+      new UpdateLayerCommand(layer.id, layer, { locked: !layer.locked }),
+    );
+  }, []);
+
+  const renameLayer = useCallback((layer: Layer, name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed || trimmed === layer.name) return;
+    busRef.current.execute(
+      new UpdateLayerCommand(layer.id, layer, { name: trimmed }),
+    );
+  }, []);
+
+  const addLayer = useCallback(() => {
+    const name = window.prompt('New layer name', 'New Layer');
+    if (!name?.trim()) return;
+    busRef.current.execute(new CreateLayerCommand(name.trim()));
+  }, []);
+
+  const deleteLayer = useCallback((layer: Layer) => {
+    if (layer.id === 'layer-0') {
+      setStatusExtra('Cannot delete layer 0');
+      return;
+    }
+    try {
+      busRef.current.execute(new DeleteLayerCommand(layer.id, 'layer-0'));
+    } catch (err) {
+      setStatusExtra(
+        err instanceof Error ? err.message : 'Cannot delete layer',
+      );
+    }
+  }, []);
+
+  const confirmTextPrompt = useCallback(() => {
+    const s = sessionRef.current;
+    if (s.activeTool === 'text') {
+      syncSession(commitTextContent(s, busRef.current, textPrompt));
+    } else if (s.activeTool === 'leader') {
+      syncSession(commitLeaderContent(s, busRef.current, textPrompt));
+    }
+    setTextPrompt('');
+  }, [syncSession, textPrompt]);
+
+  const cancelTextPrompt = useCallback(() => {
+    syncSession(cancelTool(sessionRef.current));
+    setTextPrompt('');
+  }, [syncSession]);
+
+  const editSelectedText = useCallback(() => {
+    const selected = getSelectedEntities(busRef.current.getDocument());
+    if (selected.length !== 1 || selected[0]?.type !== 'text') return;
+    const entity = selected[0] as TextEntity;
+    if (!isEntityModifiable(busRef.current.getDocument(), entity)) {
+      setStatusExtra('Locked layer — cannot edit text');
+      return;
+    }
+    const next = window.prompt('Edit text', entity.geometry.content);
+    if (next == null) return;
+    const trimmed = next.trim();
+    if (!trimmed) return;
+    busRef.current.execute(
+      new UpdateTextCommand(entity, { content: trimmed }),
+    );
+  }, []);
+
+  useEffect(() => {
+    if (session.mode === 'text-input') {
+      setTextPrompt(session.pendingText ?? '');
+      requestAnimationFrame(() => textInputRef.current?.focus());
+    }
+  }, [session.mode, session.pendingText]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -534,6 +727,10 @@ export function App() {
           window.clearTimeout(commandAliasTimerRef.current);
           commandAliasTimerRef.current = null;
         }
+        if (sessionRef.current.mode === 'text-input') {
+          cancelTextPrompt();
+          return;
+        }
         const s = sessionRef.current;
         const inProgress =
           s.mode !== 'idle' ||
@@ -556,6 +753,10 @@ export function App() {
       if (event.key === 'Enter' && !inField) {
         event.preventDefault();
         const s = sessionRef.current;
+        if (s.mode === 'text-input') {
+          confirmTextPrompt();
+          return;
+        }
         if (s.activeTool === 'polyline') {
           syncSession(finishPolyline(s, busRef.current));
           return;
@@ -608,6 +809,8 @@ export function App() {
           p: 'polyline',
           h: 'pan',
           o: 'offset',
+          d: 'dimension',
+          a: 'text',
         };
 
         // Delayed single-key tools that are also alias prefixes: t→copy/TR, m→move/MI, r→rect/RO
@@ -701,6 +904,8 @@ export function App() {
     };
   }, [
     activateTool,
+    cancelTextPrompt,
+    confirmTextPrompt,
     deleteSelection,
     newDrawing,
     openDrawing,
@@ -841,11 +1046,23 @@ export function App() {
 
   const selected = useMemo(() => getSelectedEntities(doc), [doc]);
   const selectedProps =
-    selected.length === 1 && selected[0] ? describeEntity(selected[0]) : null;
+    selected.length === 1 && selected[0]
+      ? describeEntity(selected[0], doc)
+      : null;
   const multiSelectLabel =
     selected.length > 1 ? `${selected.length} objects selected` : null;
   const displayName = `${doc.meta.name}${dirty ? ' *' : ''}`;
   const snapLabel = session.lastSnap?.snapped ? session.lastSnap.label : null;
+  const currentLayer = getLayer(doc, doc.currentLayerId) ?? doc.layers[0];
+  const showTextDialog = session.mode === 'text-input';
+
+  const isToolActive = (tool: (typeof DRAW_TOOLS)[number]) => {
+    if (tool.id !== session.activeTool) return false;
+    if (tool.id === 'dimension' && tool.dimKind) {
+      return session.dimKind === tool.dimKind;
+    }
+    return true;
+  };
 
   const canvasClass = [
     'viewport-canvas',
@@ -880,6 +1097,40 @@ export function App() {
                 }}
               >
                 Discard
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {showTextDialog ? (
+        <div className="modal-backdrop" role="dialog" aria-modal="true">
+          <div className="modal-panel">
+            <h3>{session.activeTool === 'leader' ? 'Leader text' : 'Text'}</h3>
+            <p>Enter annotation content, then confirm.</p>
+            <input
+              ref={textInputRef}
+              className="text-prompt-input"
+              value={textPrompt}
+              onChange={(e) => setTextPrompt(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  confirmTextPrompt();
+                }
+                if (e.key === 'Escape') {
+                  e.preventDefault();
+                  cancelTextPrompt();
+                }
+              }}
+              placeholder="Annotation…"
+              aria-label="Annotation text"
+            />
+            <div className="modal-actions">
+              <button type="button" onClick={cancelTextPrompt}>
+                Cancel
+              </button>
+              <button type="button" className="primary" onClick={confirmTextPrompt}>
+                OK
               </button>
             </div>
           </div>
@@ -934,13 +1185,13 @@ export function App() {
         <div className="tool-group">
           {DRAW_TOOLS.map((tool) => (
             <button
-              key={tool.id}
+              key={`${tool.id}-${tool.dimKind ?? tool.label}`}
               type="button"
-              data-testid={`tool-${tool.id}`}
-              className={`tool-btn${session.activeTool === tool.id ? ' active' : ''}`}
+              data-testid={`tool-${tool.id}${tool.dimKind ? `-${tool.dimKind}` : ''}`}
+              className={`tool-btn${isToolActive(tool) ? ' active' : ''}`}
               onClick={(event) => {
                 event.stopPropagation();
-                activateTool(tool.id);
+                activateTool(tool.id, tool.dimKind);
               }}
             >
               {tool.label}
@@ -953,12 +1204,12 @@ export function App() {
         <aside className="left-rail" aria-label="Tools">
           {DRAW_TOOLS.map((tool) => (
             <button
-              key={tool.id}
+              key={`rail-${tool.id}-${tool.dimKind ?? tool.label}`}
               type="button"
-              className={`rail-btn${session.activeTool === tool.id ? ' active' : ''}`}
+              className={`rail-btn${isToolActive(tool) ? ' active' : ''}`}
               onClick={(event) => {
                 event.stopPropagation();
-                activateTool(tool.id);
+                activateTool(tool.id, tool.dimKind);
               }}
               title={tool.label}
             >
@@ -978,7 +1229,10 @@ export function App() {
             onPointerCancel={onPointerUp}
             onWheel={onWheel}
             onContextMenu={(e) => e.preventDefault()}
-            onDoubleClick={(e) => e.preventDefault()}
+            onDoubleClick={(e) => {
+              e.preventDefault();
+              editSelectedText();
+            }}
           />
           <div className="ai-dock">
             <span className="hint">AI Command (coming later)</span>
@@ -1013,7 +1267,18 @@ export function App() {
             </div>
             <div className="prop-row">
               <label>Units</label>
-              <div className="value">{doc.settings.units}</div>
+              <select
+                className="prop-select"
+                value={doc.settings.units}
+                onChange={(e) => setUnits(e.target.value as LengthUnit)}
+                aria-label="Drawing units"
+              >
+                {UNIT_OPTIONS.map((u) => (
+                  <option key={u} value={u}>
+                    {u}
+                  </option>
+                ))}
+              </select>
             </div>
             <div className="prop-row">
               <label>Grid</label>
@@ -1023,6 +1288,75 @@ export function App() {
               <label>Snap</label>
               <div className="value">{doc.settings.snapToGrid ? 'ON' : 'OFF'}</div>
             </div>
+            <div className="prop-row">
+              <label>Current</label>
+              <div className="value">{currentLayer?.name ?? '—'}</div>
+            </div>
+          </section>
+
+          <section className="panel-section layers-section">
+            <div className="panel-title-row">
+              <h2 className="panel-title">Layers</h2>
+              <button type="button" className="mini-btn" onClick={addLayer}>
+                +
+              </button>
+            </div>
+            <ul className="layer-list">
+              {doc.layers.map((layer) => {
+                const isCurrent = layer.id === doc.currentLayerId;
+                return (
+                  <li
+                    key={layer.id}
+                    className={`layer-row${isCurrent ? ' current' : ''}`}
+                  >
+                    <button
+                      type="button"
+                      className="layer-vis"
+                      title={layer.visible ? 'Hide' : 'Show'}
+                      onClick={() => toggleLayerVisible(layer)}
+                    >
+                      {layer.visible ? 'V' : 'H'}
+                    </button>
+                    <button
+                      type="button"
+                      className="layer-lock"
+                      title={layer.locked ? 'Unlock' : 'Lock'}
+                      onClick={() => toggleLayerLocked(layer)}
+                    >
+                      {layer.locked ? 'L' : 'U'}
+                    </button>
+                    <button
+                      type="button"
+                      className="layer-name"
+                      onClick={() => setCurrentLayer(layer.id)}
+                      onDoubleClick={() => {
+                        const next = window.prompt('Rename layer', layer.name);
+                        if (next) renameLayer(layer, next);
+                      }}
+                      title="Click set current · double-click rename"
+                    >
+                      <span
+                        className="layer-swatch"
+                        style={{ background: layer.color }}
+                      />
+                      {layer.name}
+                    </button>
+                    {layer.id !== 'layer-0' ? (
+                      <button
+                        type="button"
+                        className="layer-del"
+                        title="Delete layer"
+                        onClick={() => deleteLayer(layer)}
+                      >
+                        ×
+                      </button>
+                    ) : (
+                      <span className="layer-del spacer" />
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
           </section>
 
           <section className="panel-section">
@@ -1030,12 +1364,23 @@ export function App() {
             {multiSelectLabel ? (
               <p className="empty-props">{multiSelectLabel}</p>
             ) : selectedProps ? (
-              selectedProps.map((row) => (
-                <div className="prop-row" key={row.label}>
-                  <label>{row.label}</label>
-                  <div className="value">{row.value}</div>
-                </div>
-              ))
+              <>
+                {selectedProps.map((row) => (
+                  <div className="prop-row" key={row.label}>
+                    <label>{row.label}</label>
+                    <div className="value">{row.value}</div>
+                  </div>
+                ))}
+                {selected[0]?.type === 'text' ? (
+                  <button
+                    type="button"
+                    className="mini-btn block"
+                    onClick={editSelectedText}
+                  >
+                    Edit text…
+                  </button>
+                ) : null}
+              </>
             ) : (
               <p className="empty-props">
                 Select an object to inspect its properties. Drag grips to edit;
@@ -1054,16 +1399,19 @@ export function App() {
         </div>
         <div className="status-right">
           <span>
-            X: <strong>{formatLength(cursorWorld.x)}</strong>
+            X: <strong>{formatLengthInUnits(cursorWorld.x, doc.settings.units, doc.settings.precision)}</strong>
           </span>
           <span>
-            Y: <strong>{formatLength(cursorWorld.y)}</strong>
+            Y: <strong>{formatLengthInUnits(cursorWorld.y, doc.settings.units, doc.settings.precision)}</strong>
           </span>
           <span>
             Zoom: <strong>{((camera.zoom / 40) * 100).toFixed(0)}%</strong>
           </span>
           <span>
             Units: <strong>{doc.settings.units}</strong>
+          </span>
+          <span>
+            Layer: <strong>{currentLayer?.name ?? '—'}</strong>
           </span>
           <span>
             Snap: <strong>{doc.settings.snapToGrid ? 'ON' : 'OFF'}</strong>

@@ -131,7 +131,13 @@ export class CopyEntitiesCommand implements Command {
             ? 'rect'
             : entity.type === 'circle'
               ? 'circle'
-              : 'pline';
+              : entity.type === 'polyline'
+                ? 'pline'
+                : entity.type === 'dimension'
+                  ? 'dim'
+                  : entity.type === 'text'
+                    ? 'text'
+                    : 'leader';
       const copy = cloneEntityWithNewId(moved, createEntityId(prefix));
       this.created.push(copy);
     }
