@@ -120,6 +120,26 @@ export {
   setRectangleConstraints,
 } from './rectangleConstraints.js';
 export {
+  CadCommandEngine,
+  CadCommandHistory,
+  CadEngineRegistry,
+  createDefaultEngineRegistry,
+  formatDefaultHint,
+  formatOptionsHint,
+  matchOption,
+  parseAngleInput,
+  parseDistanceInput,
+  parsePointInput,
+  pointFromDirectDistance,
+  setEngineRectangleConstraints,
+  type CadCommandContext,
+  type CadCommandUiState,
+  type CadDynamicInput,
+  type CadEngineCommand,
+  type CadInputType,
+  type CadPromptDefinition,
+} from './commandEngine/index.js';
+export {
   commitOffsetDistance,
   commitRotateAngle,
   commitScaleFactor,

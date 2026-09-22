@@ -48,23 +48,26 @@ import {
   formatLengthInUnits,
   measuredLength,
   parseLengthInput,
+  resolveSnap,
   wallLength,
 } from '@ratecad/geometry';
 import { serializeDocument, tryParseDocument } from '@ratecad/io';
 import {
   appendInputBuffer,
+  CadCommandEngine,
   cancelTool,
   commitLeaderContent,
   commitNumericInput,
   commitTextContent,
+  createDefaultEngineRegistry,
   createToolSession,
-  defaultCadCommandRegistry,
   finishPolyline,
   handleToolPointerDown,
   handleToolPointerMove,
   handleToolPointerUp,
   setActiveTool,
   setRectangleConstraints,
+  type CadCommandUiState,
   type ToolId,
   type ToolSession,
 } from '@ratecad/tools';
@@ -73,6 +76,7 @@ import {
   panCamera,
   renderDocument,
   screenToWorld,
+  screenToleranceToWorld,
   zoomAtScreenPoint,
   type Camera,
 } from '@ratecad/viewport';
@@ -377,6 +381,8 @@ export function App() {
   const pendingPanRef = useRef<{ dx: number; dy: number } | null>(null);
   const commandLineRef = useRef('');
   const commandInputRef = useRef<HTMLInputElement | null>(null);
+  const cursorWorldRef = useRef({ x: 0, y: 0 });
+  const engineRef = useRef<CadCommandEngine | null>(null);
 
   const [doc, setDoc] = useState<DrawingDocument>(() => busRef.current.getDocument());
   const [session, setSession] = useState<ToolSession>(() => sessionRef.current);
@@ -397,10 +403,22 @@ export function App() {
   const [commandFeedback, setCommandFeedback] = useState<string | null>(null);
   const [rectLengthText, setRectLengthText] = useState('');
   const [rectWidthText, setRectWidthText] = useState('');
+  const [engineUi, setEngineUi] = useState<CadCommandUiState | null>(null);
 
   const syncSession = useCallback((next: ToolSession) => {
     sessionRef.current = next;
     setSession(next);
+  }, []);
+
+  const refreshEngineUi = useCallback(() => {
+    const eng = engineRef.current;
+    if (!eng) return;
+    setEngineUi(eng.getUiState());
+    setCommandLine(eng.getBuffer());
+    commandLineRef.current = eng.getBuffer();
+    const ui = eng.getUiState();
+    if (ui.message) setCommandFeedback(ui.message);
+    else if (ui.commandName) setCommandFeedback(ui.commandName);
   }, []);
 
   const syncCamera = useCallback((next: Camera) => {
@@ -458,19 +476,22 @@ export function App() {
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     const sess = sessionRef.current;
+    const engUi = engineRef.current?.getUiState();
     renderDocument(ctx, {
       width: size.width,
       height: size.height,
       camera: cameraRef.current,
       document: doc,
-      preview: sess.preview,
-      previewEntities: sess.previewEntities,
+      preview: engUi?.preview ?? sess.preview,
+      previewEntities: engUi?.previewEntities ?? sess.previewEntities,
       selectionRect: sess.selectionRect,
-      hideEntityIds: sess.hideEntityIds,
+      hideEntityIds: engUi?.hideEntityIds?.length
+        ? engUi.hideEntityIds
+        : sess.hideEntityIds,
       cursorWorld,
       snap: sess.lastSnap,
     });
-  }, [doc, session, camera, size, cursorWorld]);
+  }, [doc, session, camera, size, cursorWorld, engineUi]);
 
   useEffect(() => {
     const name = doc.meta.name + (dirty ? ' *' : '');
@@ -491,7 +512,7 @@ export function App() {
     [size.height, size.width],
   );
 
-  const activateTool = useCallback(
+  const activateToolOnly = useCallback(
     (tool: ToolId, dimKind?: DimensionKind) => {
       isPanningRef.current = false;
       lastPointerRef.current = null;
@@ -500,39 +521,82 @@ export function App() {
       syncSession(
         setActiveTool(sessionRef.current, tool, dimKind ? { dimKind } : undefined),
       );
-      if (tool === 'rectangle') {
-        setCommandFeedback('Rectangle');
-      }
     },
     [syncSession],
+  );
+
+  // Create command engine once (host uses refs for live document/cursor).
+  useEffect(() => {
+    const host = {
+      getUnits: () => busRef.current.getDocument().settings.units,
+      getSelectedIds: () => busRef.current.getDocument().selection,
+      getCursor: () => cursorWorldRef.current,
+      activateTool: (tool: string) => {
+        activateToolOnly(tool as ToolId);
+      },
+      activateSelect: () => {
+        activateToolOnly('select');
+      },
+    };
+    engineRef.current = new CadCommandEngine(
+      createDefaultEngineRegistry(),
+      busRef.current,
+      host,
+    );
+    refreshEngineUi();
+  }, [activateToolOnly, refreshEngineUi]);
+
+  const activateTool = useCallback(
+    (tool: ToolId, dimKind?: DimensionKind) => {
+      const eng = engineRef.current;
+      const ENGINE_TOOLS = new Set([
+        'line',
+        'rectangle',
+        'circle',
+        'move',
+        'copy',
+        'trim',
+        'extend',
+        'offset',
+        'mirror',
+        'rotate',
+        'scale',
+      ]);
+      if (eng && ENGINE_TOOLS.has(tool)) {
+        eng.start(tool);
+        refreshEngineUi();
+        return;
+      }
+      eng?.cancel(false);
+      activateToolOnly(tool, dimKind);
+      refreshEngineUi();
+      if (tool === 'rectangle') setCommandFeedback('RECTANGLE');
+    },
+    [activateToolOnly, refreshEngineUi],
   );
 
   const clearCommandLine = useCallback(() => {
     commandLineRef.current = '';
     setCommandLine('');
-  }, []);
+    engineRef.current?.setBuffer('');
+    refreshEngineUi();
+  }, [refreshEngineUi]);
 
   const submitCommandLine = useCallback(() => {
-    const raw = commandLineRef.current;
-    const result = defaultCadCommandRegistry.resolve(raw);
-    if (!result.ok) {
-      if (result.reason === 'empty') return;
-      setCommandFeedback(`Unknown command: ${result.input}`);
-      return;
-    }
-    clearCommandLine();
-    setCommandFeedback(result.command.name);
+    const eng = engineRef.current;
+    if (!eng) return;
+    eng.setBuffer(commandLineRef.current);
+    eng.confirm('enter');
     setRectLengthText('');
     setRectWidthText('');
-    activateTool(result.command.tool, result.command.dimKind);
-    if (result.command.tool === 'rectangle') {
-      requestAnimationFrame(() => commandInputRef.current?.blur());
-    }
-  }, [activateTool, clearCommandLine]);
+    refreshEngineUi();
+    const ui = eng.getUiState();
+    if (ui.message) setCommandFeedback(ui.message);
+    else if (ui.commandName) setCommandFeedback(ui.commandName);
+  }, [refreshEngineUi]);
 
   const applyRectangleDimensions = useCallback(
     (lengthRaw: string, widthRaw: string) => {
-      if (sessionRef.current.activeTool !== 'rectangle') return;
       const units = busRef.current.getDocument().settings.units;
       const length = lengthRaw.trim()
         ? parseLengthInput(lengthRaw, units)
@@ -540,7 +604,6 @@ export function App() {
       const width = widthRaw.trim()
         ? parseLengthInput(widthRaw, units)
         : null;
-      // Empty field => unconstrained; invalid non-empty => keep previous / ignore
       const nextLength = lengthRaw.trim() === '' ? null : length;
       const nextWidth = widthRaw.trim() === '' ? null : width;
       if (lengthRaw.trim() && nextLength == null) return;
@@ -548,8 +611,10 @@ export function App() {
       syncSession(
         setRectangleConstraints(sessionRef.current, nextLength, nextWidth),
       );
+      engineRef.current?.setRectangleDims(nextLength, nextWidth);
+      refreshEngineUi();
     },
-    [syncSession],
+    [refreshEngineUi, syncSession],
   );
 
   const confirmDiscardIfNeeded = useCallback((): Promise<boolean> => {
@@ -882,6 +947,17 @@ export function App() {
         target?.dataset?.cadRectDim === '1';
 
       if (event.code === 'Space' && !inField) {
+        const eng = engineRef.current;
+        if (
+          eng &&
+          (eng.isRunning() || commandLineRef.current.trim().length > 0)
+        ) {
+          event.preventDefault();
+          eng.setBuffer(commandLineRef.current);
+          eng.confirm('space');
+          refreshEngineUi();
+          return;
+        }
         spaceDownRef.current = true;
         event.preventDefault();
         return;
@@ -920,6 +996,13 @@ export function App() {
 
       if (event.key === 'Escape') {
         event.preventDefault();
+        const eng = engineRef.current;
+        if (eng?.isRunning()) {
+          eng.cancel(true);
+          refreshEngineUi();
+          setCommandFeedback('Select');
+          return;
+        }
         clearCommandLine();
         setCommandFeedback(null);
         if (sessionRef.current.mode === 'text-input') {
@@ -939,19 +1022,18 @@ export function App() {
         if (inProgress) {
           syncSession(cancelTool(s));
         }
-        activateTool('select');
+        activateToolOnly('select');
         setCommandFeedback('Select');
         return;
       }
 
-      if (event.key === 'Enter') {
+      if (event.key === 'Enter' || (event.key === ' ' && !inField)) {
         if (isCadCommandField && target?.dataset?.cadCommand === '1') {
           event.preventDefault();
           submitCommandLine();
           return;
         }
         if (isCadCommandField && target?.dataset?.cadRectDim === '1') {
-          // Empty Enter on dim field = leave unconstrained (already applied on change)
           event.preventDefault();
           (target as HTMLElement).blur();
           return;
@@ -963,9 +1045,19 @@ export function App() {
           confirmTextPrompt();
           return;
         }
-        if (commandLineRef.current.trim().length > 0) {
-          submitCommandLine();
-          return;
+        const eng = engineRef.current;
+        if (eng) {
+          // Prefer engine when running OR when buffer has text OR empty Enter repeat
+          if (
+            eng.isRunning() ||
+            commandLineRef.current.trim().length > 0 ||
+            event.key === 'Enter'
+          ) {
+            eng.setBuffer(commandLineRef.current);
+            eng.confirm(event.key === ' ' ? 'space' : 'enter');
+            refreshEngineUi();
+            return;
+          }
         }
         if (s.activeTool === 'polyline') {
           syncSession(finishPolyline(s, busRef.current));
@@ -983,6 +1075,25 @@ export function App() {
         return;
       }
 
+      if (event.key === 'Tab' && !inField) {
+        event.preventDefault();
+        engineRef.current?.cycleSuggestion();
+        refreshEngineUi();
+        return;
+      }
+      if (event.key === 'ArrowUp' && !inField) {
+        event.preventDefault();
+        engineRef.current?.historyUp();
+        refreshEngineUi();
+        return;
+      }
+      if (event.key === 'ArrowDown' && !inField) {
+        event.preventDefault();
+        engineRef.current?.historyDown();
+        refreshEngineUi();
+        return;
+      }
+
       if ((event.key === 'Delete' || event.key === 'Backspace') && !inField) {
         const s = sessionRef.current;
         const numericTools =
@@ -990,16 +1101,18 @@ export function App() {
           s.activeTool === 'rotate' ||
           s.activeTool === 'scale' ||
           s.activeTool === 'wall';
-        if (
-          event.key === 'Backspace' &&
-          commandLineRef.current.length > 0
-        ) {
-          event.preventDefault();
-          const next = commandLineRef.current.slice(0, -1);
-          commandLineRef.current = next;
-          setCommandLine(next);
-          setCommandFeedback(null);
-          return;
+        if (event.key === 'Backspace') {
+          const eng = engineRef.current;
+          const buf = eng?.getBuffer() ?? commandLineRef.current;
+          if (buf.length > 0 || eng?.isRunning()) {
+            event.preventDefault();
+            const next = buf.slice(0, -1);
+            eng?.setBuffer(next);
+            commandLineRef.current = next;
+            setCommandLine(next);
+            refreshEngineUi();
+            return;
+          }
         }
         if (
           event.key === 'Backspace' &&
@@ -1032,6 +1145,7 @@ export function App() {
           s.activeTool === 'scale' ||
           s.activeTool === 'wall';
         if (
+          !engineRef.current?.isRunning() &&
           numericTools &&
           (s.refEntityId || s.anchor || s.activeTool === 'wall') &&
           /^[0-9.\-]$/.test(event.key)
@@ -1041,15 +1155,18 @@ export function App() {
           return;
         }
 
-        // Canvas-focused CAD command entry (REC, L, CO, …)
+        // Command / prompt entry (including @ < , for coordinates)
         if (event.key.length === 1 && !event.altKey) {
           const ch = event.key;
-          if (/^[a-z0-9_\-./\\]$/i.test(ch)) {
+          if (/^[a-z0-9_\-./\\@,<°]$/i.test(ch)) {
             event.preventDefault();
-            const next = commandLineRef.current + ch.toUpperCase();
+            const eng = engineRef.current;
+            const next = (eng?.getBuffer() ?? commandLineRef.current) + ch;
+            eng?.setBuffer(next);
             commandLineRef.current = next;
             setCommandLine(next);
             setCommandFeedback(null);
+            refreshEngineUi();
           }
         }
       }
@@ -1070,7 +1187,7 @@ export function App() {
       window.removeEventListener('keyup', onKeyUp);
     };
   }, [
-    activateTool,
+    activateToolOnly,
     cancelTextPrompt,
     clearCommandLine,
     confirmTextPrompt,
@@ -1078,6 +1195,7 @@ export function App() {
     newDrawing,
     openDrawing,
     redo,
+    refreshEngineUi,
     saveDrawing,
     submitCommandLine,
     syncSession,
@@ -1107,6 +1225,18 @@ export function App() {
     syncCamera(panCamera(cameraRef.current, pending.dx, pending.dy));
   }, [syncCamera]);
 
+  const snapWorld = useCallback(
+    (world: { x: number; y: number }) => {
+      const d = busRef.current.getDocument();
+      return resolveSnap(world, d, {
+        enabled: d.settings.snapToGrid,
+        gridSize: d.settings.gridSize,
+        tolerance: screenToleranceToWorld(cameraRef.current, 10),
+      });
+    },
+    [],
+  );
+
   const onPointerDown = (event: ReactPointerEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -1126,6 +1256,19 @@ export function App() {
     if (event.button !== 0) return;
 
     const world = getWorldFromEvent(event);
+    const eng = engineRef.current;
+    if (eng?.isRunning()) {
+      const snap = snapWorld(world);
+      eng.submitPoint(snap.point);
+      syncSession({
+        ...sessionRef.current,
+        lastSnap: snap,
+        statusMessage: eng.getStatusMessage() ?? sessionRef.current.statusMessage,
+      });
+      refreshEngineUi();
+      return;
+    }
+
     const next = handleToolPointerDown(sessionRef.current, busRef.current, {
       world,
       camera: cameraRef.current,
@@ -1134,7 +1277,6 @@ export function App() {
       metaKey: event.metaKey,
       shiftKey: event.shiftKey,
     });
-    // Capture for grip drag / window select so pointerUp always arrives
     if (next.mode === 'grip' || next.mode === 'window') {
       canvas.setPointerCapture(event.pointerId);
     }
@@ -1143,6 +1285,7 @@ export function App() {
 
   const onPointerMove = (event: ReactPointerEvent<HTMLCanvasElement>) => {
     const world = getWorldFromEvent(event);
+    cursorWorldRef.current = world;
     setCursorWorld(world);
 
     if (isPanningRef.current && lastPointerRef.current) {
@@ -1154,6 +1297,19 @@ export function App() {
       if (rafPanRef.current == null) {
         rafPanRef.current = requestAnimationFrame(flushPan);
       }
+      return;
+    }
+
+    const eng = engineRef.current;
+    if (eng?.isRunning()) {
+      const snap = snapWorld(world);
+      eng.onPointerMove(snap.point);
+      syncSession({
+        ...sessionRef.current,
+        lastSnap: snap,
+        statusMessage: eng.getStatusMessage() ?? sessionRef.current.statusMessage,
+      });
+      refreshEngineUi();
       return;
     }
 
@@ -1406,7 +1562,7 @@ export function App() {
           <div className="command-dock">
             <div className="command-row">
               <label className="command-label" htmlFor="cad-command-input">
-                Command
+                {engineUi?.commandName ? 'Cmd' : 'Command'}
               </label>
               <input
                 id="cad-command-input"
@@ -1415,19 +1571,33 @@ export function App() {
                 className="command-input"
                 value={commandLine}
                 onChange={(e) => {
-                  const next = e.target.value.toUpperCase();
+                  const next = e.target.value;
                   commandLineRef.current = next;
                   setCommandLine(next);
+                  engineRef.current?.setBuffer(next);
                   setCommandFeedback(null);
+                  refreshEngineUi();
                 }}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {
                     e.preventDefault();
                     e.stopPropagation();
                     submitCommandLine();
+                  } else if (e.key === 'Tab') {
+                    e.preventDefault();
+                    engineRef.current?.cycleSuggestion();
+                    refreshEngineUi();
+                  } else if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    engineRef.current?.historyUp();
+                    refreshEngineUi();
+                  } else if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    engineRef.current?.historyDown();
+                    refreshEngineUi();
                   }
                 }}
-                placeholder="Type command (e.g. REC) then Enter"
+                placeholder="Type command (REC, L, …) — Enter/Space"
                 aria-label="CAD command"
                 autoComplete="off"
                 spellCheck={false}
@@ -1440,7 +1610,29 @@ export function App() {
                 Enter
               </button>
             </div>
-            {session.activeTool === 'rectangle' ? (
+            {engineUi?.suggestions?.length ? (
+              <div className="command-suggestions">
+                {engineUi.suggestions.map((s, i) => (
+                  <button
+                    key={s}
+                    type="button"
+                    className={
+                      i === engineUi.suggestionIndex
+                        ? 'cmd-suggest active'
+                        : 'cmd-suggest'
+                    }
+                    onClick={() => {
+                      engineRef.current?.setBuffer(s);
+                      refreshEngineUi();
+                    }}
+                  >
+                    {s}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+            {(session.activeTool === 'rectangle' ||
+              engineUi?.commandName === 'RECTANGLE') && (
               <div className="command-row rect-dims">
                 <label className="command-label" htmlFor="rect-length-input">
                   Length
@@ -1479,17 +1671,40 @@ export function App() {
                   spellCheck={false}
                 />
               </div>
-            ) : null}
+            )}
             <div className="command-feedback" aria-live="polite">
-              {commandFeedback
-                ? commandFeedback.startsWith('Unknown')
-                  ? commandFeedback
-                  : `Active: ${commandFeedback}`
-                : session.activeTool === 'rectangle'
-                  ? 'Rectangle — set Length/Width (optional), then pick corners'
-                  : 'L REC C PL M CO TR EX O MI RO SC'}
+              {engineUi?.commandName ? (
+                <>
+                  <span className="cmd-active">{engineUi.commandName}</span>
+                  {' — '}
+                  {engineUi.prompt}
+                  {engineUi.optionsText ? ` ${engineUi.optionsText}` : ''}
+                  {engineUi.defaultText ? ` ${engineUi.defaultText}` : ''}
+                  {engineUi.message ? ` · ${engineUi.message}` : ''}
+                </>
+              ) : commandFeedback?.startsWith('Unknown') ? (
+                commandFeedback
+              ) : (
+                'L REC C PL M CO TR EX O MI RO SC · Tab suggest · ↑↓ history'
+              )}
             </div>
           </div>
+          {engineUi?.dynamic ? (
+            <div className="dynamic-input" aria-hidden>
+              {engineUi.dynamic.distance != null ? (
+                <div>Dist: {formatLength(engineUi.dynamic.distance)}</div>
+              ) : null}
+              {engineUi.dynamic.angleDeg != null ? (
+                <div>Ang: {engineUi.dynamic.angleDeg.toFixed(1)}°</div>
+              ) : null}
+              {engineUi.dynamic.length != null ? (
+                <div>L: {formatLength(engineUi.dynamic.length)}</div>
+              ) : null}
+              {engineUi.dynamic.width != null ? (
+                <div>W: {formatLength(engineUi.dynamic.width)}</div>
+              ) : null}
+            </div>
+          ) : null}
         </main>
 
         <aside className="right-panel" aria-label="Properties">

@@ -263,6 +263,49 @@
   text-overflow: ellipsis;
 }
 
+.command-feedback .cmd-active {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.command-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.cmd-suggest {
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 2px;
+  border: 1px solid var(--border);
+  background: var(--bg-panel-2);
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.cmd-suggest.active {
+  border-color: var(--accent);
+  color: var(--text);
+  background: var(--accent-soft);
+}
+
+.dynamic-input {
+  position: absolute;
+  right: 16px;
+  bottom: 110px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: rgba(20, 24, 29, 0.92);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text);
+  pointer-events: none;
+  line-height: 1.35;
+}
+
 .right-panel {
   display: flex;
   flex-direction: column;
