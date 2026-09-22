@@ -83,6 +83,12 @@ import {
   type ToolId,
   type ToolSession,
 } from './session.js';
+import {
+  constrainRectangleCorner,
+  formatRectanglePreviewStatus,
+  isDegenerateRectangle,
+  rectangleStatus,
+} from './rectangleConstraints.js';
 
 export type {
   InteractionMode,
@@ -96,6 +102,23 @@ export {
   setActiveTool,
   toolStatus,
 } from './session.js';
+export {
+  CadCommandRegistry,
+  createDefaultCadCommandRegistry,
+  defaultCadCommandRegistry,
+  normalizeCommandInput,
+  type CadCommandDefinition,
+  type CadCommandParameter,
+  type CadCommandResolveResult,
+} from './cadCommands.js';
+export {
+  constrainRectangleCorner,
+  formatRectanglePreviewStatus,
+  isDegenerateRectangle,
+  rectangleSize,
+  rectangleStatus,
+  setRectangleConstraints,
+} from './rectangleConstraints.js';
 export {
   commitOffsetDistance,
   commitRotateAngle,
@@ -436,7 +459,7 @@ export function handleToolPointerDown(
           session.activeTool === 'line'
             ? 'Line: specify second point'
             : session.activeTool === 'rectangle'
-              ? 'Rectangle: specify opposite corner'
+              ? rectangleStatus({ ...session, anchor: point })
               : 'Circle: specify radius point',
       };
     }
@@ -447,11 +470,18 @@ export function handleToolPointerDown(
           bus.execute(new CreateLineCommand(session.anchor, point));
         }
         break;
-      case 'rectangle':
-        if (distance(session.anchor, point) > 1e-9) {
-          bus.execute(new CreateRectangleCommand(session.anchor, point));
+      case 'rectangle': {
+        const corner2 = constrainRectangleCorner(
+          session.anchor,
+          point,
+          session.rectLength,
+          session.rectWidth,
+        );
+        if (!isDegenerateRectangle(session.anchor, corner2)) {
+          bus.execute(new CreateRectangleCommand(session.anchor, corner2));
         }
         break;
+      }
       case 'circle': {
         const radius = distance(session.anchor, point);
         if (radius > 1e-9) {
@@ -464,7 +494,10 @@ export function handleToolPointerDown(
     return {
       ...cancelTool(session),
       lastSnap: snap,
-      statusMessage: toolStatus(session.activeTool),
+      statusMessage:
+        session.activeTool === 'rectangle'
+          ? rectangleStatus(session)
+          : toolStatus(session.activeTool),
     };
   }
 
@@ -625,6 +658,29 @@ export function handleToolPointerMove(
     session.activeTool === 'rectangle' ||
     session.activeTool === 'circle'
   ) {
+    if (session.activeTool === 'rectangle') {
+      const corner2 = constrainRectangleCorner(
+        session.anchor,
+        point,
+        session.rectLength,
+        session.rectWidth,
+      );
+      return {
+        ...session,
+        lastSnap: snap,
+        preview: {
+          kind: 'rectangle',
+          start: session.anchor,
+          end: corner2,
+        },
+        statusMessage: formatRectanglePreviewStatus(
+          session.anchor,
+          corner2,
+          session.rectLength,
+          session.rectWidth,
+        ),
+      };
+    }
     return {
       ...session,
       lastSnap: snap,

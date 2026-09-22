@@ -70,6 +70,16 @@ export interface ToolSession {
   dimKind: DimensionKind;
   /** Pending text content for text/leader placement dialog */
   pendingText: string | null;
+  /**
+   * Rectangle tool: optional constrained length (|Δx| in world units).
+   * null = unconstrained (derived from cursor).
+   */
+  rectLength: number | null;
+  /**
+   * Rectangle tool: optional constrained width (|Δy| in world units).
+   * null = unconstrained (derived from cursor).
+   */
+  rectWidth: number | null;
 }
 
 export function createToolSession(tool: ToolId = 'select'): ToolSession {
@@ -93,6 +103,8 @@ export function createToolSession(tool: ToolId = 'select'): ToolSession {
     scaleRefLength: null,
     dimKind: 'aligned',
     pendingText: null,
+    rectLength: null,
+    rectWidth: null,
   };
 }
 
@@ -146,24 +158,45 @@ export function toolStatus(tool: ToolId, dimKind: DimensionKind = 'aligned'): st
 export function setActiveTool(
   session: ToolSession,
   tool: ToolId,
-  opts?: { dimKind?: DimensionKind },
+  opts?: {
+    dimKind?: DimensionKind;
+    rectLength?: number | null;
+    rectWidth?: number | null;
+  },
 ): ToolSession {
   const dimKind = opts?.dimKind ?? session.dimKind ?? 'aligned';
-  return {
+  const next = {
     ...createToolSession(tool),
     activeTool: tool,
     dimKind,
     statusMessage: toolStatus(tool, dimKind),
   };
+  if (tool === 'rectangle') {
+    next.rectLength =
+      opts?.rectLength != null && opts.rectLength > 0 ? opts.rectLength : null;
+    next.rectWidth =
+      opts?.rectWidth != null && opts.rectWidth > 0 ? opts.rectWidth : null;
+  }
+  return next;
 }
 
 export function cancelTool(session: ToolSession): ToolSession {
-  return {
+  const base: ToolSession = {
     ...createToolSession(session.activeTool),
     activeTool: session.activeTool,
     dimKind: session.dimKind,
+    rectLength: session.rectLength,
+    rectWidth: session.rectWidth,
     statusMessage: toolStatus(session.activeTool, session.dimKind),
   };
+  if (session.activeTool === 'rectangle') {
+    const L =
+      session.rectLength != null ? `L=${session.rectLength} (fixed)` : 'L=free';
+    const W =
+      session.rectWidth != null ? `W=${session.rectWidth} (fixed)` : 'W=free';
+    base.statusMessage = `Rectangle: ${L} × ${W} — specify first corner`;
+  }
+  return base;
 }
 
 export interface PointerInput {

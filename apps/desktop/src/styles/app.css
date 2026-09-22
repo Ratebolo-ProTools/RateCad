@@ -189,49 +189,78 @@
   cursor: grab;
 }
 
-.ai-dock {
+.command-dock {
   position: absolute;
   left: 12px;
   right: 12px;
   bottom: 12px;
   display: flex;
-  gap: 8px;
-  padding: 8px;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
   border: 1px solid var(--border);
   border-radius: 4px;
-  background: rgba(20, 24, 29, 0.92);
+  background: rgba(20, 24, 29, 0.94);
   backdrop-filter: blur(6px);
+  font-family: var(--font-mono);
 }
 
-.ai-dock input {
+.command-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.command-label {
+  flex: 0 0 auto;
+  min-width: 58px;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.command-input {
   flex: 1;
-  height: 32px;
+  height: 28px;
   padding: 0 10px;
   border-radius: 3px;
+  border: 1px solid var(--border);
+  background: var(--bg-panel);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
   outline: none;
 }
 
-.ai-dock input:focus {
+.command-input.dim {
+  max-width: 140px;
+  flex: 0 1 140px;
+}
+
+.command-input:focus {
   border-color: var(--accent);
 }
 
-.ai-dock button {
-  height: 32px;
+.command-go {
+  height: 28px;
   padding: 0 12px;
   border-radius: 3px;
-  border: 1px solid var(--border);
-  background: var(--bg-panel-2);
-  color: var(--text-dim);
-}
-
-.ai-dock .hint {
-  position: absolute;
-  left: 18px;
-  top: -18px;
-  font-size: 10px;
-  color: var(--text-dim);
+  border: 1px solid var(--border-strong);
+  background: var(--accent-soft);
+  color: var(--text);
+  font-size: 11px;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+}
+
+.command-feedback {
+  font-size: 11px;
+  color: var(--text-dim);
+  min-height: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .right-panel {
