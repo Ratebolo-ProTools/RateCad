@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "RateCAD desktop application",
+  "author": "Ratebolo ProTools",
   "main": "electron/main.cjs",
   "type": "module",
   "scripts": {
@@ -10,7 +11,9 @@
     "build": "tsc -p tsconfig.json --noEmit && vite build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "preview": "vite preview",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --passWithNoTests",
+    "dist:win": "pnpm run build && electron-builder --win nsis --x64 --publish never",
+    "pack:win": "pnpm run build && electron-builder --win dir --x64 --publish never"
   },
   "dependencies": {
     "@ratecad/ai": "workspace:*",
@@ -30,9 +33,48 @@
     "concurrently": "^9.1.2",
     "cross-env": "^7.0.3",
     "electron": "^35.0.1",
+    "electron-builder": "25.1.8",
     "typescript": "^5.8.2",
     "vite": "^6.2.2",
     "vitest": "^3.0.9",
     "wait-on": "^8.0.3"
+  },
+  "build": {
+    "appId": "com.ratebolo.ratecad",
+    "productName": "RateCAD",
+    "copyright": "Copyright © Ratebolo ProTools",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "asar": true,
+    "extraMetadata": {
+      "name": "ratecad",
+      "main": "electron/main.cjs"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "RateCAD-Setup-${version}-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "RateCAD"
+    }
   }
 }
