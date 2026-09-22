@@ -48,6 +48,7 @@ import {
   formatLengthInUnits,
   measuredLength,
   parseLengthInput,
+  PolarTrackingEngine,
   resolveSnap,
   wallLength,
 } from '@ratecad/geometry';
@@ -383,6 +384,17 @@ export function App() {
   const commandInputRef = useRef<HTMLInputElement | null>(null);
   const cursorWorldRef = useRef({ x: 0, y: 0 });
   const engineRef = useRef<CadCommandEngine | null>(null);
+  const polarEngineRef = useRef(
+    new PolarTrackingEngine(
+      { enabled: false },
+      {
+        enabled: false,
+        incrementDeg: 90,
+        extraAnglesDeg: [45, 135, 225, 315],
+        snapToleranceDeg: 180,
+      },
+    ),
+  );
 
   const [doc, setDoc] = useState<DrawingDocument>(() => busRef.current.getDocument());
   const [session, setSession] = useState<ToolSession>(() => sessionRef.current);
@@ -404,6 +416,9 @@ export function App() {
   const [rectLengthText, setRectLengthText] = useState('');
   const [rectWidthText, setRectWidthText] = useState('');
   const [engineUi, setEngineUi] = useState<CadCommandUiState | null>(null);
+  const [orthoOn, setOrthoOn] = useState(false);
+  const [polarOn, setPolarOn] = useState(false);
+  const [polarIncrement, setPolarIncrement] = useState(90);
 
   const syncSession = useCallback((next: ToolSession) => {
     sessionRef.current = next;
@@ -839,6 +854,38 @@ export function App() {
     }));
   }, []);
 
+  const toggleOrtho = useCallback(() => {
+    setOrthoOn((v) => {
+      const next = !v;
+      polarEngineRef.current.setOrtho(next);
+      return next;
+    });
+  }, []);
+
+  const togglePolar = useCallback(() => {
+    setPolarOn((v) => {
+      const next = !v;
+      polarEngineRef.current.setPolar({
+        enabled: next,
+        incrementDeg: polarIncrement,
+        extraAnglesDeg: polarIncrement >= 90 ? [45, 135, 225, 315] : [],
+      });
+      return next;
+    });
+  }, [polarIncrement]);
+
+  const cyclePolarIncrement = useCallback(() => {
+    setPolarIncrement((prev) => {
+      const next = prev === 90 ? 45 : 90;
+      polarEngineRef.current.setPolar({
+        enabled: polarOn,
+        incrementDeg: next,
+        extraAnglesDeg: next >= 90 ? [45, 135, 225, 315] : [],
+      });
+      return next;
+    });
+  }, [polarOn]);
+
   const setUnits = useCallback((units: LengthUnit) => {
     busRef.current.updateWithoutHistory((d) => ({
       ...d,
@@ -1137,6 +1184,16 @@ export function App() {
           toggleSnap();
           return;
         }
+        if (event.key === 'F8') {
+          event.preventDefault();
+          toggleOrtho();
+          return;
+        }
+        if (event.key === 'F10') {
+          event.preventDefault();
+          togglePolar();
+          return;
+        }
 
         const s = sessionRef.current;
         const numericTools =
@@ -1200,6 +1257,8 @@ export function App() {
     submitCommandLine,
     syncSession,
     toggleSnap,
+    toggleOrtho,
+    togglePolar,
     undo,
   ]);
 
@@ -1228,13 +1287,42 @@ export function App() {
   const snapWorld = useCallback(
     (world: { x: number; y: number }) => {
       const d = busRef.current.getDocument();
-      return resolveSnap(world, d, {
+      const snap = resolveSnap(world, d, {
         enabled: d.settings.snapToGrid,
         gridSize: d.settings.gridSize,
         tolerance: screenToleranceToWorld(cameraRef.current, 10),
       });
+      const eng = engineRef.current;
+      // Typed angle override / absolute coords take priority — skip visual tracking.
+      if (eng?.getAngleOverrideDeg() != null) {
+        return snap;
+      }
+      const origin = eng?.getLastPoint() ?? null;
+      if (!origin || (!orthoOn && !polarOn)) {
+        return snap;
+      }
+      polarEngineRef.current.setOrtho(orthoOn);
+      polarEngineRef.current.setPolar({
+        enabled: polarOn,
+        incrementDeg: polarIncrement,
+        extraAnglesDeg: polarIncrement >= 90 ? [45, 135, 225, 315] : [],
+      });
+      const constrained = polarEngineRef.current.constrain(origin, snap.point);
+      if (!constrained.constrained) return snap;
+      return {
+        ...snap,
+        point: constrained.point,
+        snapped: true,
+        kind: snap.kind,
+        label:
+          constrained.kind === 'ortho'
+            ? 'Ortho'
+            : constrained.kind === 'polar'
+              ? `Polar ${constrained.angleDeg?.toFixed(0)}°`
+              : snap.label,
+      };
     },
-    [],
+    [orthoOn, polarOn, polarIncrement],
   );
 
   const onPointerDown = (event: ReactPointerEvent<HTMLCanvasElement>) => {
@@ -1257,6 +1345,27 @@ export function App() {
 
     const world = getWorldFromEvent(event);
     const eng = engineRef.current;
+    if (eng?.isRunning() && eng.isAwaitingSelection()) {
+      const tool = eng.getRunningCommand()?.tool ?? 'select';
+      const selectSession = {
+        ...sessionRef.current,
+        activeTool: 'select' as ToolId,
+      };
+      const next = handleToolPointerDown(selectSession, busRef.current, {
+        world,
+        camera: cameraRef.current,
+        detail: event.detail,
+        ctrlKey: event.ctrlKey,
+        metaKey: event.metaKey,
+        shiftKey: event.shiftKey,
+      });
+      if (next.mode === 'grip' || next.mode === 'window') {
+        canvas.setPointerCapture(event.pointerId);
+      }
+      syncSession({ ...next, activeTool: tool as ToolId });
+      refreshEngineUi();
+      return;
+    }
     if (eng?.isRunning()) {
       const snap = snapWorld(world);
       eng.submitPoint(snap.point);
@@ -1301,6 +1410,24 @@ export function App() {
     }
 
     const eng = engineRef.current;
+    if (eng?.isRunning() && eng.isAwaitingSelection()) {
+      const tool = eng.getRunningCommand()?.tool ?? 'select';
+      const selectSession = {
+        ...sessionRef.current,
+        activeTool: 'select' as ToolId,
+      };
+      const next = handleToolPointerMove(selectSession, busRef.current, {
+        world,
+        camera: cameraRef.current,
+        ctrlKey: event.ctrlKey,
+        metaKey: event.metaKey,
+        shiftKey: event.shiftKey,
+      });
+      if (next !== sessionRef.current) {
+        syncSession({ ...next, activeTool: tool as ToolId });
+      }
+      return;
+    }
     if (eng?.isRunning()) {
       const snap = snapWorld(world);
       eng.onPointerMove(snap.point);
@@ -1336,6 +1463,24 @@ export function App() {
     if (wasPanning || event.button !== 0) return;
 
     const world = getWorldFromEvent(event);
+    const eng = engineRef.current;
+    if (eng?.isRunning() && eng.isAwaitingSelection()) {
+      const tool = eng.getRunningCommand()?.tool ?? 'select';
+      const selectSession = {
+        ...sessionRef.current,
+        activeTool: 'select' as ToolId,
+      };
+      const next = handleToolPointerUp(selectSession, busRef.current, {
+        world,
+        camera: cameraRef.current,
+        ctrlKey: event.ctrlKey,
+        metaKey: event.metaKey,
+        shiftKey: event.shiftKey,
+      });
+      syncSession({ ...next, activeTool: tool as ToolId });
+      refreshEngineUi();
+      return;
+    }
     const next = handleToolPointerUp(sessionRef.current, busRef.current, {
       world,
       camera: cameraRef.current,
@@ -1502,6 +1647,26 @@ export function App() {
             title="Toggle snap (F3)"
           >
             Snap
+          </button>
+          <button
+            type="button"
+            className={orthoOn ? 'active-toggle' : ''}
+            onClick={toggleOrtho}
+            title="Toggle Ortho (F8)"
+          >
+            Ortho
+          </button>
+          <button
+            type="button"
+            className={polarOn ? 'active-toggle' : ''}
+            onClick={togglePolar}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              cyclePolarIncrement();
+            }}
+            title={`Toggle Polar (F10) · increment ${polarIncrement}° (right-click to cycle)`}
+          >
+            Polar {polarIncrement}°
           </button>
         </div>
       </header>
@@ -1691,7 +1856,10 @@ export function App() {
           </div>
           {engineUi?.dynamic ? (
             <div className="dynamic-input" aria-hidden>
-              {engineUi.dynamic.distance != null ? (
+              {engineUi.dynamic.label === 'Radius' &&
+              engineUi.dynamic.distance != null ? (
+                <div>Radius: {formatLength(engineUi.dynamic.distance)}</div>
+              ) : engineUi.dynamic.distance != null ? (
                 <div>Dist: {formatLength(engineUi.dynamic.distance)}</div>
               ) : null}
               {engineUi.dynamic.angleDeg != null ? (
@@ -1746,6 +1914,16 @@ export function App() {
             <div className="prop-row">
               <label>Snap</label>
               <div className="value">{doc.settings.snapToGrid ? 'ON' : 'OFF'}</div>
+            </div>
+            <div className="prop-row">
+              <label>Ortho</label>
+              <div className="value">{orthoOn ? 'ON' : 'OFF'}</div>
+            </div>
+            <div className="prop-row">
+              <label>Polar</label>
+              <div className="value">
+                {polarOn ? `ON ${polarIncrement}°` : 'OFF'}
+              </div>
             </div>
             <div className="prop-row">
               <label>Current</label>

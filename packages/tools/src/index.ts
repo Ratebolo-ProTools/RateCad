@@ -124,6 +124,7 @@ export {
   CadCommandHistory,
   CadEngineRegistry,
   createDefaultEngineRegistry,
+  CIRCLE_DEFAULT_RADIUS,
   formatDefaultHint,
   formatOptionsHint,
   matchOption,

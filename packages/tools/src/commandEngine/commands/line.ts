@@ -26,6 +26,8 @@ function nextPrompt(): CadPromptDefinition {
     message: 'Specify next point or [Undo]:',
     inputType: 'point',
     options: [{ id: 'undo', label: 'Undo', aliases: ['U', 'UNDO'] }],
+    /** Empty Enter finishes LINE when segments exist (handled in onText). */
+    optional: true,
   };
 }
 
@@ -70,6 +72,8 @@ export const lineCommand: CadEngineCommand = {
       const opt = matchOption(text, prompt.options);
       if (opt.ok && opt.optionId === 'undo') {
         if (s.points.length > 1) {
+          // Each committed segment is a CommandBus entry — undo it.
+          s.bus.undo();
           s.points.pop();
           const last = s.points[s.points.length - 1]!;
           return {
@@ -77,7 +81,7 @@ export const lineCommand: CadEngineCommand = {
             prompt: nextPrompt(),
             lastPoint: last,
             status: 'LINE: Specify next point or [Undo]:',
-            message: 'Undid last segment vertex',
+            message: 'Undid last segment',
             preview: null,
           };
         }

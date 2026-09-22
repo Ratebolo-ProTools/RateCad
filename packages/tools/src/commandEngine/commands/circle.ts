@@ -5,6 +5,9 @@ import { distance } from '@ratecad/geometry';
 import { parseDistanceInput } from '../parsers.js';
 import type { CadEngineCommand, CadPromptDefinition } from '../types.js';
 
+/** Default radius owned by the CIRCLE command definition (drawing units). */
+export const CIRCLE_DEFAULT_RADIUS = 5;
+
 type CircleState = {
   bus: CommandBus;
   center: Vec2 | null;
@@ -16,11 +19,29 @@ const centerPrompt: CadPromptDefinition = {
   inputType: 'point',
 };
 
-const radiusPrompt: CadPromptDefinition = {
-  id: 'radius',
-  message: 'Specify radius:',
-  inputType: 'point',
-};
+function radiusPrompt(): CadPromptDefinition {
+  return {
+    id: 'radius',
+    message: `Specify radius <${CIRCLE_DEFAULT_RADIUS.toFixed(2)}>:`,
+    inputType: 'point',
+    defaultValue: CIRCLE_DEFAULT_RADIUS.toFixed(2),
+  };
+}
+
+function commitRadius(
+  s: CircleState,
+  r: number,
+  prompt: CadPromptDefinition,
+): ReturnType<CadEngineCommand['onPoint']> {
+  if (!(r > 1e-9)) {
+    return { kind: 'reject', message: 'Radius must be greater than zero', prompt };
+  }
+  if (!s.center) {
+    return { kind: 'reject', message: 'No center point', prompt };
+  }
+  s.bus.execute(new CreateCircleCommand(s.center, r));
+  return { kind: 'complete', status: 'CIRCLE complete' };
+}
 
 export const circleCommand: CadEngineCommand = {
   id: 'circle',
@@ -36,21 +57,17 @@ export const circleCommand: CadEngineCommand = {
     const s = state as CircleState;
     if (prompt.id === 'center') {
       s.center = point;
+      const next = radiusPrompt();
       return {
         kind: 'continue',
-        prompt: radiusPrompt,
+        prompt: next,
         lastPoint: point,
-        status: 'CIRCLE: Specify radius:',
+        status: `CIRCLE: ${next.message}`,
         preview: null,
       };
     }
     if (prompt.id === 'radius' && s.center) {
-      const r = distance(s.center, point);
-      if (!(r > 1e-9)) {
-        return { kind: 'reject', message: 'Invalid radius', prompt };
-      }
-      s.bus.execute(new CreateCircleCommand(s.center, r));
-      return { kind: 'complete', status: 'CIRCLE complete' };
+      return commitRadius(s, distance(s.center, point), prompt);
     }
     return { kind: 'reject', message: 'Unexpected point', prompt };
   },
@@ -59,11 +76,7 @@ export const circleCommand: CadEngineCommand = {
     if (prompt.id === 'radius') {
       const d = parseDistanceInput(text, ctx.units);
       if (!d.ok) return { kind: 'reject', message: d.error, prompt };
-      if (!s.center) {
-        return { kind: 'reject', message: 'No center point', prompt };
-      }
-      s.bus.execute(new CreateCircleCommand(s.center, d.value));
-      return { kind: 'complete', status: 'CIRCLE complete' };
+      return commitRadius(s, d.value, prompt);
     }
     return { kind: 'reject', message: 'Invalid input', prompt };
   },
@@ -75,8 +88,8 @@ export const circleCommand: CadEngineCommand = {
     const r = distance(s.center, point);
     return {
       preview: { kind: 'circle', start: s.center, end: point },
-      dynamic: { distance: r },
-      status: 'CIRCLE: Specify radius:',
+      dynamic: { distance: r, label: 'Radius' },
+      status: `CIRCLE: Specify radius <${CIRCLE_DEFAULT_RADIUS.toFixed(2)}>:`,
     };
   },
 };

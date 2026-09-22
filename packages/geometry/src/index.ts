@@ -17,6 +17,19 @@ export {
 export type { SnapCandidate, SnapKind, SnapOptions, SnapResult } from './snap.js';
 export { collectSnapCandidates, resolveSnap } from './snap.js';
 
+export type {
+  DirectionConstraintKind,
+  DirectionConstraintResult,
+  OrthoTrackingOptions,
+  PolarTrackingOptions,
+} from './polarTracking.js';
+export {
+  PolarTrackingEngine,
+  applyDirectionConstraint,
+  buildPolarAngles,
+  nearestPolarAngle,
+} from './polarTracking.js';
+
 export type { GripEditTarget } from './transform.js';
 export {
   applyGripEdit,

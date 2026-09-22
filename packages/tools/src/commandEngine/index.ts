@@ -75,3 +75,4 @@ export type {
   CadPromptDefinition,
 } from './types.js';
 export { setEngineRectangleConstraints } from './commands/rectangle.js';
+export { CIRCLE_DEFAULT_RADIUS } from './commands/circle.js';

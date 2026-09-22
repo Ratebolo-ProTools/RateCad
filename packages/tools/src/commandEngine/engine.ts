@@ -71,8 +71,22 @@ export class CadCommandEngine {
     return !!this.running;
   }
 
+  /** True while MOVE/COPY (etc.) wait for object selection via canvas. */
+  isAwaitingSelection(): boolean {
+    return this.running?.prompt.inputType === 'entities';
+  }
+
   getRunningCommand(): CadEngineCommand | null {
     return this.running?.command ?? null;
+  }
+
+  getLastPoint(): Vec2 | null {
+    return this.running?.lastPoint ?? null;
+  }
+
+  /** Active typed angle override, if any. */
+  getAngleOverrideDeg(): number | null {
+    return this.running?.angleOverrideDeg ?? null;
   }
 
   setRectangleDims(length: number | null, width: number | null): void {
@@ -249,6 +263,7 @@ export class CadCommandEngine {
   /** Pointer / snap-resolved world point while a command waits for a point. */
   submitPoint(point: Vec2): void {
     if (!this.running) return;
+    if (this.running.prompt.inputType === 'entities') return;
     if (this.running.prompt.inputType !== 'point') return;
     const r = this.running;
     const ctx = this.ctx(r.lastPoint);
@@ -261,18 +276,21 @@ export class CadCommandEngine {
     const r = this.running;
     const prompt = r.prompt;
 
-    // Empty Enter → default
+    // Empty Enter → default value, or let the command handle finish/selection
     if (!text) {
       if (prompt.defaultValue != null && prompt.defaultValue !== '') {
         this.submitText(String(prompt.defaultValue));
         return;
       }
-      if (prompt.optional) {
-        // treat as continue with empty optional
-      } else {
-        r.message = 'Input required';
-        return;
-      }
+      const result = r.command.onText('', prompt, this.ctx(r.lastPoint), r.state);
+      this.applyResult(result);
+      return;
+    }
+
+    if (prompt.inputType === 'entities') {
+      const result = r.command.onText(text, prompt, this.ctx(r.lastPoint), r.state);
+      this.applyResult(result);
+      return;
     }
 
     if (prompt.inputType === 'point') {
@@ -378,7 +396,11 @@ export class CadCommandEngine {
     r.message = result.message ?? null;
     if (result.status) r.status = result.status;
     if (result.preview !== undefined) r.preview = result.preview;
+    else r.preview = null;
     if (result.dynamic !== undefined) r.dynamic = result.dynamic;
+    else r.dynamic = null;
+    r.previewEntities = null;
+    r.hideEntityIds = [];
     if (result.lastPoint !== undefined) r.lastPoint = result.lastPoint;
     else if (lastPoint) r.lastPoint = lastPoint;
     r.angleOverrideDeg = null;

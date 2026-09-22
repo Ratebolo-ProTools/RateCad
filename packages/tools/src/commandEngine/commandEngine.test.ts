@@ -223,32 +223,122 @@ describe('command engine sessions', () => {
     expect(bus.getDocument().entities[0]?.type).toBe('circle');
   });
 
-  it('MOVE via engine uses CommandBus', () => {
+  it('CIRCLE accepts default radius on empty Enter', () => {
+    const { bus, engine } = makeEngine();
+    engine.start('C');
+    engine.submitPoint({ x: 0, y: 0 });
+    expect(engine.getUiState().defaultText).toContain('5');
+    engine.setBuffer('');
+    engine.confirm('enter');
+    const e = bus.getDocument().entities[0];
+    expect(e?.type).toBe('circle');
+    if (e?.type === 'circle') {
+      expect(e.geometry.radius).toBeCloseTo(5);
+    }
+  });
+
+  it('CIRCLE rejects zero and invalid radius', () => {
+    const { bus, engine } = makeEngine();
+    engine.start('C');
+    engine.submitPoint({ x: 0, y: 0 });
+    engine.setBuffer('0');
+    engine.confirm('enter');
+    expect(bus.getDocument().entities).toHaveLength(0);
+    expect(engine.isRunning()).toBe(true);
+    engine.setBuffer('abc');
+    engine.confirm('enter');
+    expect(bus.getDocument().entities).toHaveLength(0);
+    expect(engine.isRunning()).toBe(true);
+  });
+
+  it('MOVE selection Enter then base/destination with preview and undo', () => {
+    const { bus, engine } = makeEngine();
+    const line = new CreateLineCommand({ x: 0, y: 0 }, { x: 5, y: 0 });
+    bus.execute(line);
+    engine.start('M');
+    expect(engine.isAwaitingSelection()).toBe(true);
+    bus.updateWithoutHistory((d) => setSelection(d, [line.getEntityId()]));
+    engine.setBuffer('');
+    engine.confirm('enter');
+    expect(engine.isAwaitingSelection()).toBe(false);
+    engine.submitPoint({ x: 0, y: 0 });
+    engine.onPointerMove({ x: 3, y: 0 });
+    expect(bus.getDocument().entities[0]).toMatchObject({
+      type: 'line',
+      geometry: { start: { x: 0, y: 0 } },
+    });
+    expect(engine.getUiState().previewEntities?.length).toBe(1);
+    engine.submitPoint({ x: 3, y: 0 });
+    const e = bus.getDocument().entities[0]!;
+    expect(e.type).toBe('line');
+    if (e.type === 'line') {
+      expect(e.geometry.start.x).toBeCloseTo(3);
+    }
+    bus.undo();
+    expect(bus.getDocument().entities[0]).toMatchObject({
+      type: 'line',
+      geometry: { start: { x: 0, y: 0 } },
+    });
+    bus.redo();
+    expect(bus.getDocument().entities[0]).toMatchObject({
+      type: 'line',
+      geometry: { start: { x: 3, y: 0 } },
+    });
+  });
+
+  it('MOVE cancel leaves document unchanged', () => {
     const { bus, engine } = makeEngine();
     const line = new CreateLineCommand({ x: 0, y: 0 }, { x: 5, y: 0 });
     bus.execute(line);
     bus.updateWithoutHistory((d) => setSelection(d, [line.getEntityId()]));
     engine.start('M');
     engine.submitPoint({ x: 0, y: 0 });
-    engine.submitPoint({ x: 2, y: 0 });
-    const e = bus.getDocument().entities[0]!;
-    expect(e.type).toBe('line');
-    if (e.type === 'line') {
-      expect(e.geometry.start.x).toBeCloseTo(2);
-    }
-    bus.undo();
-    bus.redo();
+    engine.onPointerMove({ x: 4, y: 0 });
+    engine.cancel(true);
+    expect(bus.getDocument().entities[0]).toMatchObject({
+      type: 'line',
+      geometry: { start: { x: 0, y: 0 } },
+    });
   });
 
-  it('COPY via engine', () => {
+  it('COPY supports repeated copies then Enter finish', () => {
     const { bus, engine } = makeEngine();
     const line = new CreateLineCommand({ x: 0, y: 0 }, { x: 5, y: 0 });
     bus.execute(line);
     bus.updateWithoutHistory((d) => setSelection(d, [line.getEntityId()]));
     engine.start('CO');
     engine.submitPoint({ x: 0, y: 0 });
-    engine.submitPoint({ x: 0, y: 3 });
-    expect(bus.getDocument().entities.length).toBe(2);
+    engine.submitPoint({ x: 0, y: 2 });
+    engine.submitPoint({ x: 0, y: 4 });
+    engine.submitPoint({ x: 0, y: 6 });
+    expect(bus.getDocument().entities.length).toBe(4); // original + 3
+    expect(engine.isRunning()).toBe(true);
+    engine.setBuffer('');
+    engine.confirm('enter');
+    expect(engine.isRunning()).toBe(false);
+    bus.undo();
+    expect(bus.getDocument().entities.length).toBe(3);
+    bus.redo();
+    expect(bus.getDocument().entities.length).toBe(4);
+  });
+
+  it('LINE connected segments finish with Enter and Undo option', () => {
+    const { bus, engine } = makeEngine();
+    engine.start('L');
+    engine.submitPoint({ x: 0, y: 0 });
+    engine.submitPoint({ x: 5, y: 0 });
+    engine.submitPoint({ x: 5, y: 5 });
+    expect(bus.getDocument().entities.filter((e) => e.type === 'line')).toHaveLength(
+      2,
+    );
+    engine.setBuffer('U');
+    engine.confirm('enter');
+    expect(bus.getDocument().entities.filter((e) => e.type === 'line')).toHaveLength(
+      1,
+    );
+    engine.setBuffer('');
+    engine.confirm('enter');
+    expect(engine.isRunning()).toBe(false);
   });
 
   it('command history up/down', () => {
@@ -301,6 +391,23 @@ describe('command engine sessions', () => {
       expect(
         Math.abs(e.geometry.corner2.y - e.geometry.corner1.y),
       ).toBeCloseTo(6);
+    }
+  });
+
+  it('RECTANGLE free drag cancel leaves document empty', () => {
+    const { bus, engine } = makeEngine();
+    engine.start('REC');
+    engine.submitPoint({ x: 0, y: 0 });
+    engine.onPointerMove({ x: 4, y: 3 });
+    expect(engine.getUiState().preview?.kind).toBe('rectangle');
+    engine.cancel(true);
+    expect(bus.getDocument().entities).toHaveLength(0);
+  });
+
+  it('TR EX O MI RO SC still resolve via registry', () => {
+    const { engine } = makeEngine();
+    for (const a of ['TR', 'EX', 'O', 'MI', 'RO', 'SC', 'PL']) {
+      expect(engine.registry.resolve(a).ok).toBe(true);
     }
   });
 });
