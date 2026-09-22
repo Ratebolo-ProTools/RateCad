@@ -29,9 +29,12 @@
 
 .menu-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 4px;
   position: relative;
   z-index: 2;
+  justify-content: flex-end;
+  max-width: 58%;
 }
 
 .menu-actions button.active-toggle {
@@ -60,16 +63,13 @@
   letter-spacing: 0;
 }
 
-.menu-actions {
-  display: flex;
-  gap: 4px;
-}
-
 .menu-actions button {
-  padding: 4px 10px;
+  padding: 4px 8px;
   border-radius: 3px;
   color: var(--text-dim);
   border: 1px solid transparent;
+  font-size: 12px;
+  white-space: nowrap;
 }
 
 .menu-actions button:hover:not(:disabled) {

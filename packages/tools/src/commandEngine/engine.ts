@@ -260,11 +260,13 @@ export class CadCommandEngine {
     if (activateSelect) this.host.activateSelect();
   }
 
-  /** Pointer / snap-resolved world point while a command waits for a point. */
+  /** Pointer / snap-resolved world point while a command waits for a point/distance. */
   submitPoint(point: Vec2): void {
     if (!this.running) return;
     if (this.running.prompt.inputType === 'entities') return;
-    if (this.running.prompt.inputType !== 'point') return;
+    const inputType = this.running.prompt.inputType;
+    // Allow click-to-pick for point and distance prompts (e.g. CIRCLE radius).
+    if (inputType !== 'point' && inputType !== 'distance') return;
     const r = this.running;
     const ctx = this.ctx(r.lastPoint);
     const result = r.command.onPoint(point, r.prompt, ctx, r.state);
@@ -276,10 +278,16 @@ export class CadCommandEngine {
     const r = this.running;
     const prompt = r.prompt;
 
-    // Empty Enter → default value, or let the command handle finish/selection
+    // Empty Enter → default value via command onText, or let command finish
     if (!text) {
       if (prompt.defaultValue != null && prompt.defaultValue !== '') {
-        this.submitText(String(prompt.defaultValue));
+        const result = r.command.onText(
+          String(prompt.defaultValue),
+          prompt,
+          this.ctx(r.lastPoint),
+          r.state,
+        );
+        this.applyResult(result);
         return;
       }
       const result = r.command.onText('', prompt, this.ctx(r.lastPoint), r.state);
@@ -288,6 +296,12 @@ export class CadCommandEngine {
     }
 
     if (prompt.inputType === 'entities') {
+      const result = r.command.onText(text, prompt, this.ctx(r.lastPoint), r.state);
+      this.applyResult(result);
+      return;
+    }
+
+    if (prompt.inputType === 'distance' || prompt.inputType === 'length') {
       const result = r.command.onText(text, prompt, this.ctx(r.lastPoint), r.state);
       this.applyResult(result);
       return;

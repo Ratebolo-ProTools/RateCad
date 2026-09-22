@@ -23,7 +23,7 @@ function radiusPrompt(): CadPromptDefinition {
   return {
     id: 'radius',
     message: `Specify radius <${CIRCLE_DEFAULT_RADIUS.toFixed(2)}>:`,
-    inputType: 'point',
+    inputType: 'distance',
     defaultValue: CIRCLE_DEFAULT_RADIUS.toFixed(2),
   };
 }
