@@ -166,3 +166,44 @@ export {
   trimPolylineEntity,
   trimRemovalPreview,
 } from './cadOps.js';
+
+export type {
+  AreaCalculationMethod,
+  AreaComputation,
+  AreaError,
+  AreaResult,
+  AreaSession,
+  AreaSessionEntry,
+  AreaSessionMode,
+} from './areaEngine.js';
+export {
+  addAreaEntry,
+  areaFromCircle,
+  areaFromEntity,
+  areaFromPoints,
+  areaFromPolygon,
+  areaFromPolyline,
+  areaFromRectangle,
+  createAreaSession,
+  formatAreaResult,
+  formatAreaSessionReport,
+  isSelfIntersectingPolygon,
+  polygonPerimeter,
+  previewAreaFromPoints,
+  segmentsProperlyIntersect,
+  setAreaSessionMode,
+  undoAreaEntry,
+} from './areaEngine.js';
+
+export type {
+  BoundaryEngineOptions,
+  BoundarySegment,
+  DetectedBoundary,
+} from './boundaryEngine.js';
+export {
+  collectBoundarySegments,
+  defaultBoundaryTolerance,
+  detectSegmentLoops,
+  findBoundaryAtPoint,
+  splitSegmentsAtIntersections,
+} from './boundaryEngine.js';

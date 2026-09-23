@@ -1,4 +1,5 @@
 import { CadEngineRegistry } from './registry.js';
+import { areaCommand } from './commands/area.js';
 import { circleCommand } from './commands/circle.js';
 import { lineCommand } from './commands/line.js';
 import { copyCommand, moveCommand } from './commands/moveCopy.js';
@@ -42,6 +43,7 @@ export function createDefaultEngineRegistry(): CadEngineRegistry {
     circleCommand,
     moveCommand,
     copyCommand,
+    areaCommand,
     toolBridge('polyline', 'POLYLINE', ['PL', 'PLINE'], 'polyline', 'Draw a polyline'),
     toolBridge('trim', 'TRIM', ['TR'], 'trim', 'Trim objects'),
     toolBridge('extend', 'EXTEND', ['EX'], 'extend', 'Extend objects'),

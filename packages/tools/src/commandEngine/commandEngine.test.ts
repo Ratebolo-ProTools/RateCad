@@ -68,6 +68,17 @@ describe('command engine registry', () => {
       }),
     ).toThrow(/Alias conflict/);
   });
+
+  it('resolves AREA / AA / MEASUREGEOM to area tool handoff', () => {
+    const reg = createDefaultEngineRegistry();
+    for (const alias of ['AREA', 'AA', 'MEASUREGEOM']) {
+      const r = reg.resolve(alias);
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+      expect(r.command.tool).toBe('area');
+      expect(r.command.handoffToTool).toBe(true);
+    }
+  });
 });
 
 describe('point / distance / angle parsers', () => {

@@ -84,6 +84,10 @@ import {
   type ToolSession,
 } from './session.js';
 import {
+  handleAreaPointerDown,
+  handleAreaPointerMove,
+} from './areaTool.js';
+import {
   constrainRectangleCorner,
   formatRectanglePreviewStatus,
   isDegenerateRectangle,
@@ -91,6 +95,7 @@ import {
 } from './rectangleConstraints.js';
 
 export type {
+  AreaToolMode,
   InteractionMode,
   PointerInput,
   ToolId,
@@ -102,6 +107,22 @@ export {
   setActiveTool,
   toolStatus,
 } from './session.js';
+export {
+  areaFromSelection,
+  areaModeStatus,
+  closeAreaTemporarily,
+  createAreaLabel,
+  createBoundaryFromArea,
+  finishAreaPoints,
+  formatRoomAreaReport,
+  handleAreaPointerDown,
+  handleAreaPointerMove,
+  roomAreaReport,
+  setAreaSessionOp,
+  setAreaToolMode,
+  undoAreaPoint,
+  undoAreaSessionEntry,
+} from './areaTool.js';
 export {
   CadCommandRegistry,
   createDefaultCadCommandRegistry,
@@ -277,6 +298,9 @@ export function handleToolPointerDown(
   }
   if (session.activeTool === 'room') {
     return handleRoomPointerDown(session, bus, input, point, snap);
+  }
+  if (session.activeTool === 'area') {
+    return handleAreaPointerDown(session, bus, input, point, snap);
   }
 
   if (session.activeTool === 'trim') {
@@ -628,6 +652,9 @@ export function handleToolPointerMove(
   }
   if (session.activeTool === 'room') {
     return handleRoomPointerMove(session, bus, input, point, snap);
+  }
+  if (session.activeTool === 'area') {
+    return handleAreaPointerMove(session, bus, input, point, snap);
   }
 
   if (session.activeTool === 'trim') {

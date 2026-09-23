@@ -1,6 +1,14 @@
 import type { DimensionKind, Entity, EntityId, Vec2 } from '@ratecad/core';
-import type { SnapResult } from '@ratecad/geometry';
+import type { AreaResult, AreaSession, SnapResult } from '@ratecad/geometry';
 import type { Camera, Grip, PreviewGeometry } from '@ratecad/viewport';
+
+export type AreaToolMode =
+  | 'object'
+  | 'points'
+  | 'pick-inside'
+  | 'room'
+  | 'add'
+  | 'subtract';
 
 export type ToolId =
   | 'select'
@@ -23,7 +31,8 @@ export type ToolId =
   | 'wall'
   | 'door'
   | 'window'
-  | 'room';
+  | 'room'
+  | 'area';
 
 export type InteractionMode =
   | 'idle'
@@ -80,6 +89,18 @@ export interface ToolSession {
    * null = unconstrained (derived from cursor).
    */
   rectWidth: number | null;
+  /** AREA tool sub-mode. */
+  areaMode: AreaToolMode;
+  /** Running add/subtract session for AREA. */
+  areaSession: AreaSession | null;
+  /** Last successful area result (for highlight / Create Boundary / label). */
+  areaLastResult: AreaResult | null;
+  /** Pending open-boundary prompt. */
+  areaAwaitingOpen: {
+    vertices: Vec2[];
+    sourceId?: EntityId;
+    message: string;
+  } | null;
 }
 
 export function createToolSession(tool: ToolId = 'select'): ToolSession {
@@ -105,6 +126,10 @@ export function createToolSession(tool: ToolId = 'select'): ToolSession {
     pendingText: null,
     rectLength: null,
     rectWidth: null,
+    areaMode: 'object',
+    areaSession: null,
+    areaLastResult: null,
+    areaAwaitingOpen: null,
   };
 }
 
@@ -152,6 +177,8 @@ export function toolStatus(tool: ToolId, dimKind: DimensionKind = 'aligned'): st
       return 'Window: select host wall';
     case 'room':
       return 'Room: click inside a closed wall loop';
+    case 'area':
+      return 'AREA: Object / Points / Pick Inside / Add / Subtract';
   }
 }
 
@@ -162,6 +189,7 @@ export function setActiveTool(
     dimKind?: DimensionKind;
     rectLength?: number | null;
     rectWidth?: number | null;
+    areaMode?: AreaToolMode;
   },
 ): ToolSession {
   const dimKind = opts?.dimKind ?? session.dimKind ?? 'aligned';
@@ -177,6 +205,13 @@ export function setActiveTool(
     next.rectWidth =
       opts?.rectWidth != null && opts.rectWidth > 0 ? opts.rectWidth : null;
   }
+  if (tool === 'area') {
+    next.areaMode = opts?.areaMode ?? 'object';
+    next.statusMessage =
+      next.areaMode === 'object'
+        ? 'AREA · Object: select a closed shape'
+        : `AREA · ${next.areaMode}`;
+  }
   return next;
 }
 
@@ -187,6 +222,8 @@ export function cancelTool(session: ToolSession): ToolSession {
     dimKind: session.dimKind,
     rectLength: session.rectLength,
     rectWidth: session.rectWidth,
+    areaMode: session.areaMode,
+    areaSession: session.activeTool === 'area' ? session.areaSession : null,
     statusMessage: toolStatus(session.activeTool, session.dimKind),
   };
   if (session.activeTool === 'rectangle') {
@@ -195,6 +232,21 @@ export function cancelTool(session: ToolSession): ToolSession {
     const W =
       session.rectWidth != null ? `W=${session.rectWidth} (fixed)` : 'W=free';
     base.statusMessage = `Rectangle: ${L} × ${W} — specify first corner`;
+  }
+  if (session.activeTool === 'area') {
+    const mode = session.areaMode ?? 'object';
+    base.statusMessage =
+      mode === 'object'
+        ? 'AREA · Object: select a closed shape'
+        : mode === 'points'
+          ? 'AREA · Points: click boundary points (Enter to finish)'
+          : mode === 'pick-inside'
+            ? 'AREA · Pick Inside: click inside an enclosed region'
+            : mode === 'room'
+              ? 'AREA · Room: click inside a room / wall loop'
+              : mode === 'add'
+                ? 'AREA · Add: select regions to add (Enter for total)'
+                : 'AREA · Subtract: select regions to subtract';
   }
   return base;
 }

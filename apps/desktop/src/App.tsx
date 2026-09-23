@@ -63,17 +63,26 @@ import {
   appendInputBuffer,
   CadCommandEngine,
   cancelTool,
+  closeAreaTemporarily,
   commitLeaderContent,
   commitNumericInput,
   commitTextContent,
+  createAreaLabel,
+  createBoundaryFromArea,
   createDefaultEngineRegistry,
   createToolSession,
+  finishAreaPoints,
   finishPolyline,
+  formatRoomAreaReport,
   handleToolPointerDown,
   handleToolPointerMove,
   handleToolPointerUp,
   setActiveTool,
+  setAreaToolMode,
   setRectangleConstraints,
+  undoAreaPoint,
+  undoAreaSessionEntry,
+  type AreaToolMode,
   type CadCommandUiState,
   type ToolId,
   type ToolSession,
@@ -112,6 +121,7 @@ const DRAW_TOOLS: Array<{
   { id: 'door', label: 'Door', glyph: '⊓' },
   { id: 'window', label: 'Window', glyph: '▤' },
   { id: 'room', label: 'Room', glyph: '⌂' },
+  { id: 'area', label: 'Area', glyph: '◻' },
   { id: 'move', label: 'Move', glyph: '↔' },
   { id: 'copy', label: 'Copy', glyph: '⧉' },
   { id: 'trim', label: 'Trim', glyph: '✂' },
@@ -593,6 +603,7 @@ export function App() {
         'mirror',
         'rotate',
         'scale',
+        'area',
       ]);
       if (eng && ENGINE_TOOLS.has(tool)) {
         eng.start(tool);
@@ -603,8 +614,20 @@ export function App() {
       activateToolOnly(tool, dimKind);
       refreshEngineUi();
       if (tool === 'rectangle') setCommandFeedback('RECTANGLE');
+      if (tool === 'area') setCommandFeedback('AREA');
     },
     [activateToolOnly, refreshEngineUi],
+  );
+
+  const activateAreaMode = useCallback(
+    (mode: AreaToolMode) => {
+      engineRef.current?.cancel(false);
+      isPanningRef.current = false;
+      syncSession(setAreaToolMode(sessionRef.current, mode));
+      setCommandFeedback(`AREA · ${mode}`);
+      refreshEngineUi();
+    },
+    [refreshEngineUi, syncSession],
   );
 
   const clearCommandLine = useCallback(() => {
@@ -1135,7 +1158,18 @@ export function App() {
           confirmTextPrompt();
           return;
         }
+        // Finish AREA points / polyline before idle command-engine Enter handling
         const eng = engineRef.current;
+        if (!eng?.isRunning()) {
+          if (s.activeTool === 'area' && s.areaMode === 'points') {
+            syncSession(finishAreaPoints(s, busRef.current));
+            return;
+          }
+          if (s.activeTool === 'polyline' && s.vertices.length >= 2) {
+            syncSession(finishPolyline(s, busRef.current));
+            return;
+          }
+        }
         if (eng) {
           // Prefer engine when running OR when buffer has text OR empty Enter repeat
           if (
@@ -1148,10 +1182,6 @@ export function App() {
             refreshEngineUi();
             return;
           }
-        }
-        if (s.activeTool === 'polyline') {
-          syncSession(finishPolyline(s, busRef.current));
-          return;
         }
         if (
           s.inputBuffer.length > 0 &&
@@ -1201,6 +1231,24 @@ export function App() {
             commandLineRef.current = next;
             setCommandLine(next);
             refreshEngineUi();
+            return;
+          }
+          if (
+            s.activeTool === 'area' &&
+            s.areaMode === 'points' &&
+            s.vertices.length > 0
+          ) {
+            event.preventDefault();
+            syncSession(undoAreaPoint(s));
+            return;
+          }
+          if (
+            s.activeTool === 'area' &&
+            (s.areaMode === 'add' || s.areaMode === 'subtract') &&
+            (s.areaSession?.entries.length ?? 0) > 0
+          ) {
+            event.preventDefault();
+            syncSession(undoAreaSessionEntry(s));
             return;
           }
         }
@@ -1253,6 +1301,30 @@ export function App() {
           event.preventDefault();
           syncSession(appendInputBuffer(s, event.key));
           return;
+        }
+
+        // AREA open-boundary / result actions
+        if (
+          s.activeTool === 'area' &&
+          !engineRef.current?.isRunning() &&
+          commandLineRef.current.trim().length === 0
+        ) {
+          const k = event.key.toLowerCase();
+          if (s.areaAwaitingOpen && k === 'c') {
+            event.preventDefault();
+            syncSession(closeAreaTemporarily(s, busRef.current));
+            return;
+          }
+          if ((s.areaAwaitingOpen || s.areaLastResult) && k === 'b') {
+            event.preventDefault();
+            syncSession(createBoundaryFromArea(s, busRef.current));
+            return;
+          }
+          if (s.areaLastResult && k === 'l') {
+            event.preventDefault();
+            syncSession(createAreaLabel(s, busRef.current));
+            return;
+          }
         }
 
         // Command / prompt entry (including @ < , for coordinates)
@@ -1730,6 +1802,79 @@ export function App() {
               {tool.label}
             </button>
           ))}
+        </div>
+        <div className="tool-group measure-group" aria-label="Measure">
+          <span className="tool-group-label">Measure</span>
+          <button
+            type="button"
+            data-testid="measure-area"
+            className={`tool-btn${session.activeTool === 'area' ? ' active' : ''}`}
+            onClick={() => activateAreaMode('object')}
+            title="AREA"
+          >
+            Area
+          </button>
+          {session.activeTool === 'area' ? (
+            <>
+              {(
+                [
+                  ['object', 'Object'],
+                  ['points', 'Points'],
+                  ['pick-inside', 'Pick Inside'],
+                  ['add', 'Add'],
+                  ['subtract', 'Subtract'],
+                  ['room', 'Room'],
+                ] as Array<[AreaToolMode, string]>
+              ).map(([mode, label]) => (
+                <button
+                  key={mode}
+                  type="button"
+                  data-testid={`area-mode-${mode}`}
+                  className={`tool-btn${session.areaMode === mode ? ' active' : ''}`}
+                  onClick={() => activateAreaMode(mode)}
+                >
+                  {label}
+                </button>
+              ))}
+              {session.areaLastResult ? (
+                <>
+                  <button
+                    type="button"
+                    className="tool-btn"
+                    onClick={() =>
+                      syncSession(
+                        createBoundaryFromArea(sessionRef.current, busRef.current),
+                      )
+                    }
+                  >
+                    Create Boundary
+                  </button>
+                  <button
+                    type="button"
+                    className="tool-btn"
+                    onClick={() =>
+                      syncSession(
+                        createAreaLabel(sessionRef.current, busRef.current),
+                      )
+                    }
+                  >
+                    Area Label
+                  </button>
+                </>
+              ) : null}
+              <button
+                type="button"
+                className="tool-btn"
+                onClick={() => {
+                  const lines = formatRoomAreaReport(busRef.current.getDocument());
+                  setCommandFeedback(lines.join(' · '));
+                }}
+                title="Report all room areas"
+              >
+                All Rooms
+              </button>
+            </>
+          ) : null}
         </div>
       </div>
 

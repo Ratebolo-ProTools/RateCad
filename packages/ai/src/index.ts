@@ -1,5 +1,10 @@
 import type { LengthUnit } from '@ratecad/core';
 import {
+  areaFromEntity,
+  defaultBoundaryTolerance,
+  findBoundaryAtPoint,
+  formatWorldArea,
+  formatWorldLength,
   parseLength,
   resolveUnitAlias,
   type ParsedLength,
@@ -104,4 +109,211 @@ export function parseAiWorldUnitConversion(text: string): LengthUnit | null {
   if (!m) return null;
   const u = resolveUnitAlias(m[1]!);
   return u === 'ft-in' ? 'ft' : u;
+}
+
+/**
+ * Area-related AI intents — always resolved via the deterministic Area Engine.
+ * The LLM must never invent numeric areas.
+ */
+export type AiAreaIntent =
+  | { kind: 'selection' }
+  | { kind: 'all-rooms' }
+  | { kind: 'pick-inside' }
+  | { kind: 'net-floor' }
+  | { kind: 'show-unit'; unit: LengthUnit }
+  | { kind: 'none' };
+
+export function parseAiAreaIntent(text: string): AiAreaIntent {
+  const lower = text.toLowerCase();
+  if (
+    /show\s+(?:the\s+)?area\s+in\s+square\s+meters|area\s+in\s+m²|in\s+square\s+metres/.test(
+      lower,
+    )
+  ) {
+    return { kind: 'show-unit', unit: 'm' };
+  }
+  if (
+    /show\s+(?:the\s+)?area\s+in\s+square\s+feet|area\s+in\s+ft²|in\s+sq\.?\s*ft/.test(
+      lower,
+    )
+  ) {
+    return { kind: 'show-unit', unit: 'ft' };
+  }
+  if (
+    /all\s+rooms|every\s+room|total\s+floor\s+area|calculate\s+area\s+of\s+all\s+rooms/.test(
+      lower,
+    )
+  ) {
+    return { kind: 'all-rooms' };
+  }
+  if (
+    /net\s+area|excluding\s+columns?|subtract\s+(?:the\s+)?(?:staircase|opening|column)/.test(
+      lower,
+    )
+  ) {
+    return { kind: 'net-floor' };
+  }
+  if (
+    /pick\s+inside|click\s+inside|this\s+room|enclosed\s+region|boundary/.test(
+      lower,
+    )
+  ) {
+    return { kind: 'pick-inside' };
+  }
+  if (
+    /calculate\s+(?:the\s+)?area|measure\s+(?:the\s+)?area|area\s+of\s+this|add\s+these\s+.*areas/.test(
+      lower,
+    )
+  ) {
+    return { kind: 'selection' };
+  }
+  return { kind: 'none' };
+}
+
+export interface AiAreaQueryResult {
+  summary: string;
+  /** World-unit net area when a single region was measured. */
+  area?: number;
+  perimeter?: number;
+  /** Formatted for the requested / current display unit. */
+  areaText?: string;
+  perimeterText?: string;
+  rooms?: Array<{ name: string; area: number; areaText: string }>;
+  totalArea?: number;
+  totalAreaText?: string;
+  warnings: string[];
+}
+
+/**
+ * Execute an area intent against the document using the shared Area Engine.
+ * Never invents geometry numbers — all values come from areaFromEntity / reports.
+ */
+export function executeAiAreaQuery(
+  intent: AiAreaIntent,
+  context: AiDrawingContext,
+  options: { displayUnit?: LengthUnit; pickPoint?: { x: number; y: number } } = {},
+): AiAreaQueryResult {
+  const doc = context.document;
+  const world = context.worldUnit ?? 'ft';
+  const display = options.displayUnit ?? context.units;
+  const precision = doc.settings.precision ?? 2;
+  const warnings: string[] = [];
+
+  if (intent.kind === 'none') {
+    return { summary: 'No area intent detected', warnings };
+  }
+
+  if (intent.kind === 'show-unit') {
+    // Re-run selection formatting in the requested unit
+    const nested = executeAiAreaQuery(
+      { kind: 'selection' },
+      context,
+      { displayUnit: intent.unit, pickPoint: options.pickPoint },
+    );
+    return {
+      ...nested,
+      summary: nested.areaText
+        ? `Area shown in ${intent.unit}: ${nested.areaText}`
+        : nested.summary,
+    };
+  }
+
+  if (intent.kind === 'all-rooms') {
+    const rooms: AiAreaQueryResult['rooms'] = [];
+    let total = 0;
+    for (const e of doc.entities) {
+      if (e.type !== 'room' || !e.visible) continue;
+      const r = areaFromEntity(e);
+      if (!r.ok) {
+        warnings.push(r.reason);
+        continue;
+      }
+      rooms.push({
+        name: e.properties.name || 'Room',
+        area: r.area,
+        areaText: formatWorldArea(r.area, world, display, precision),
+      });
+      total += r.area;
+    }
+    return {
+      summary: `Room area report · ${rooms.length} room(s)`,
+      rooms,
+      totalArea: total,
+      totalAreaText: formatWorldArea(total, world, display, precision),
+      warnings,
+    };
+  }
+
+  if (intent.kind === 'pick-inside') {
+    if (!options.pickPoint) {
+      return {
+        summary: 'Pick-inside requires a point — activate AREA · Pick Inside',
+        warnings: ['Missing pick point'],
+      };
+    }
+    const r = findBoundaryAtPoint(doc, options.pickPoint, {
+      tolerance: defaultBoundaryTolerance(doc),
+    });
+    if (!r.ok) {
+      return { summary: r.reason, warnings: [r.reason] };
+    }
+    return {
+      summary: 'Boundary area from pick-inside',
+      area: r.area,
+      perimeter: r.perimeter,
+      areaText: formatWorldArea(r.area, world, display, precision),
+      perimeterText: formatWorldLength(r.perimeter, world, display, {
+        precision,
+      }),
+      warnings: r.warnings,
+    };
+  }
+
+  if (intent.kind === 'net-floor' || intent.kind === 'selection') {
+    const ids = context.selectedEntityIds;
+    if (!ids.length) {
+      // Fall back to all rooms for net-floor
+      if (intent.kind === 'net-floor') {
+        return executeAiAreaQuery({ kind: 'all-rooms' }, context, options);
+      }
+      return {
+        summary: 'Select a closed object, then ask to calculate its area',
+        warnings: ['Nothing selected'],
+      };
+    }
+    let total = 0;
+    let peri = 0;
+    const parts: string[] = [];
+    for (const id of ids) {
+      const e = doc.entities.find((x) => x.id === id);
+      if (!e) continue;
+      const r = areaFromEntity(e);
+      if (!r.ok) {
+        warnings.push(`${id}: ${r.reason}`);
+        continue;
+      }
+      total += r.area;
+      peri += r.perimeter;
+      parts.push(formatWorldArea(r.area, world, display, precision));
+    }
+    if (!parts.length) {
+      return {
+        summary: 'No closed area objects in selection',
+        warnings,
+      };
+    }
+    return {
+      summary:
+        intent.kind === 'net-floor'
+          ? `Net area from selection (${parts.length} region(s))`
+          : `Area of selection (${parts.length} object(s))`,
+      area: total,
+      perimeter: peri,
+      areaText: formatWorldArea(total, world, display, precision),
+      perimeterText: formatWorldLength(peri, world, display, { precision }),
+      warnings,
+    };
+  }
+
+  return { summary: 'Unhandled area intent', warnings };
 }

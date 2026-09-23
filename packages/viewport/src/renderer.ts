@@ -31,11 +31,15 @@ import {
 import { getEntityGrips, getSelectionGrips, type Grip } from './grips.js';
 
 export interface PreviewGeometry {
-  kind: 'line' | 'rectangle' | 'circle' | 'polyline';
+  kind: 'line' | 'rectangle' | 'circle' | 'polyline' | 'area';
   start: Vec2;
   end: Vec2;
   /** Existing polyline vertices while drawing */
   vertices?: Vec2[];
+  /** Area highlight outer ring (model coords). */
+  areaOuter?: Vec2[];
+  /** Area highlight holes (model coords). */
+  areaHoles?: Vec2[][];
 }
 
 export interface RenderOptions {
@@ -675,6 +679,38 @@ function drawPreview(
         }
         const end = worldToScreen(preview.end, camera, width, height);
         ctx.lineTo(end.x, end.y);
+      }
+      break;
+    }
+    case 'area': {
+      const outer = preview.areaOuter ?? preview.vertices ?? [];
+      if (outer.length >= 3) {
+        const first = worldToScreen(outer[0]!, camera, width, height);
+        ctx.moveTo(first.x, first.y);
+        for (let i = 1; i < outer.length; i += 1) {
+          const p = worldToScreen(outer[i]!, camera, width, height);
+          ctx.lineTo(p.x, p.y);
+        }
+        ctx.closePath();
+        ctx.fillStyle = 'rgba(77, 163, 255, 0.18)';
+        ctx.fill();
+        ctx.stroke();
+        for (const hole of preview.areaHoles ?? []) {
+          if (hole.length < 3) continue;
+          ctx.beginPath();
+          const hf = worldToScreen(hole[0]!, camera, width, height);
+          ctx.moveTo(hf.x, hf.y);
+          for (let i = 1; i < hole.length; i += 1) {
+            const p = worldToScreen(hole[i]!, camera, width, height);
+            ctx.lineTo(p.x, p.y);
+          }
+          ctx.closePath();
+          ctx.fillStyle = 'rgba(26, 29, 33, 0.55)';
+          ctx.fill();
+          ctx.stroke();
+        }
+        ctx.restore();
+        return;
       }
       break;
     }

@@ -30,7 +30,7 @@ Toolbar buttons, keyboard aliases, and the command line **all start the same
 | `packages/tools/src/commandEngine/engine.ts` | Session / confirm / cancel / pointer |
 | `packages/tools/src/commandEngine/parsers.ts` | Point, distance, angle, options |
 | `packages/tools/src/commandEngine/history.ts` | Session command history |
-| `packages/tools/src/commandEngine/commands/*` | LINE, RECTANGLE, CIRCLE, MOVE, COPY |
+| `packages/tools/src/commandEngine/commands/*` | LINE, RECTANGLE, CIRCLE, MOVE, COPY, AREA |
 | `packages/geometry/src/polarTracking.ts` | Ortho / Polar direction constraints |
 | `packages/tools/src/cadCommands.ts` | Legacy simple registry (still exported) |
 
