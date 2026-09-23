@@ -138,6 +138,8 @@ export interface CadCommandContext {
 export interface CadCommandStartResult {
   prompt: CadPromptDefinition;
   status?: string;
+  /** Optional initial command state fields merged into `{ bus }`. */
+  state?: Record<string, unknown>;
 }
 
 export type CadCommandInputResult =
@@ -182,6 +184,15 @@ export interface CadEngineCommand {
   handoffToTool?: boolean;
   /** Whether this command may run nested (read-only / transparent). */
   transparent?: boolean;
+  /**
+   * Optional bootstrap after engine injects `bus` into state.
+   * Used by TRIM to load document settings and set the correct first prompt.
+   */
+  bootstrap?: (bus: import('@ratecad/commands').CommandBus) => {
+    prompt?: CadPromptDefinition;
+    status?: string;
+    state?: Record<string, unknown>;
+  };
   start: (ctx: CadCommandContext) => CadCommandStartResult;
   /**
    * Handle typed text at the current prompt (coordinates, options, distances).

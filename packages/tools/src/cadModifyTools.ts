@@ -81,16 +81,31 @@ export function handleTrimPointerDown(
   snapPoint: Vec2,
   snap: ToolSession['lastSnap'],
 ): ToolSession {
-  // Hit-test with raw cursor so grid snap does not miss thin entities
   const pickAt = input.world;
+  const settings = bus.getDocument().settings;
+  const trimMode = settings.trimMode === 'standard' ? 'standard' : 'quick';
+  const edgeMode = settings.edgeMode === 'extend' ? 'extend' : 'no-extend';
+  const extendInstead = !!input.shiftKey;
 
-  if (!session.refEntityId) {
+  const allCutters = () =>
+    bus.getDocument().entities.filter((e) => {
+      if (!e.visible) return false;
+      return (
+        e.type === 'line' ||
+        e.type === 'polyline' ||
+        e.type === 'rectangle' ||
+        e.type === 'circle' ||
+        e.type === 'wall'
+      );
+    });
+
+  if (trimMode === 'standard' && !session.refEntityId) {
     const ent = pickEntity(bus, pickAt, input.camera);
     if (!ent) {
       return {
         ...session,
         lastSnap: snap,
-        statusMessage: 'Trim: select cutting edge',
+        statusMessage: 'Trim (Standard): select cutting edge (Enter=all)',
       };
     }
     bus.updateWithoutHistory((doc) => setSelection(doc, [ent.id]));
@@ -99,19 +114,33 @@ export function handleTrimPointerDown(
       mode: 'trim',
       refEntityId: ent.id,
       lastSnap: snap,
-      statusMessage: 'Trim: select object portion to remove',
+      statusMessage: 'Trim (Standard): select object portion to remove',
     };
   }
 
-  const cutter = getEntity(bus.getDocument(), session.refEntityId);
-  if (!cutter) {
+  const primaryCutters =
+    trimMode === 'standard' && session.refEntityId
+      ? (() => {
+          const c = getEntity(bus.getDocument(), session.refEntityId!);
+          const sel = getSelectedEntities(bus.getDocument());
+          const list = sel.length ? sel : c ? [c] : [];
+          return list.length ? list : allCutters();
+        })()
+      : allCutters();
+
+  if (!primaryCutters.length) {
     return {
-      ...cancelTool(session),
+      ...session,
       lastSnap: snap,
-      statusMessage: 'Trim: cutting edge lost',
+      statusMessage: 'Trim: no cutting edges',
     };
   }
-  const target = pickEntity(bus, pickAt, input.camera, cutter.id);
+
+  const exclude =
+    trimMode === 'standard' && primaryCutters.length === 1
+      ? primaryCutters[0]!.id
+      : undefined;
+  const target = pickEntity(bus, pickAt, input.camera, exclude);
   if (!target) {
     return {
       ...session,
@@ -122,13 +151,42 @@ export function handleTrimPointerDown(
   const locked = assertModifiable(bus, target, snap, session, 'trim');
   if (locked) return locked;
 
-  // Use snapped point for geometry when near intersections; else raw pick
   const pickPoint = snapPoint;
 
-  const preview = trimEntity(target, cutter, pickPoint);
+  if (extendInstead) {
+    try {
+      bus.execute(
+        new ExtendEntityCommand(target, primaryCutters, pickPoint, {
+          edgeMode: edgeMode === 'no-extend' ? 'extend' : edgeMode,
+        }),
+      );
+    } catch (err) {
+      return {
+        ...session,
+        lastSnap: snap,
+        statusMessage: `Extend failed: ${err instanceof Error ? err.message : 'error'}`,
+      };
+    }
+    return {
+      ...session,
+      mode: 'trim',
+      refEntityId: session.refEntityId,
+      previewEntities: null,
+      hideEntityIds: [],
+      lastSnap: snap,
+      statusMessage: 'Trim: extended (Shift) — select next',
+    };
+  }
+
+  const preview = trimEntity(target, primaryCutters[0]!, pickPoint, {
+    cutters: primaryCutters,
+    edgeMode,
+  });
   if (!preview.ok) {
-    // Retry with raw pick projection onto target if snap drifted
-    const retry = trimEntity(target, cutter, pickAt);
+    const retry = trimEntity(target, primaryCutters[0]!, pickAt, {
+      cutters: primaryCutters,
+      edgeMode,
+    });
     if (!retry.ok) {
       return {
         ...session,
@@ -137,7 +195,9 @@ export function handleTrimPointerDown(
       };
     }
     try {
-      bus.execute(new TrimEntityCommand(target, cutter, pickAt));
+      bus.execute(
+        new TrimEntityCommand(target, primaryCutters, pickAt, { edgeMode }),
+      );
     } catch (err) {
       return {
         ...session,
@@ -147,7 +207,9 @@ export function handleTrimPointerDown(
     }
   } else {
     try {
-      bus.execute(new TrimEntityCommand(target, cutter, pickPoint));
+      bus.execute(
+        new TrimEntityCommand(target, primaryCutters, pickPoint, { edgeMode }),
+      );
     } catch (err) {
       return {
         ...session,
@@ -160,11 +222,14 @@ export function handleTrimPointerDown(
   return {
     ...session,
     mode: 'trim',
-    refEntityId: cutter.id,
+    refEntityId: trimMode === 'quick' ? null : session.refEntityId,
     previewEntities: null,
     hideEntityIds: [],
     lastSnap: snap,
-    statusMessage: 'Trim: select next portion (Esc to finish)',
+    statusMessage:
+      trimMode === 'quick'
+        ? 'Trim (Quick): select next portion (Esc to finish)'
+        : 'Trim (Standard): select next portion (Esc to finish)',
   };
 }
 
@@ -175,7 +240,11 @@ export function handleTrimPointerMove(
   snapPoint: Vec2,
   snap: ToolSession['lastSnap'],
 ): ToolSession {
-  if (!session.refEntityId) {
+  const settings = bus.getDocument().settings;
+  const trimMode = settings.trimMode === 'standard' ? 'standard' : 'quick';
+  const edgeMode = settings.edgeMode === 'extend' ? 'extend' : 'no-extend';
+
+  if (trimMode === 'standard' && !session.refEntityId) {
     return {
       ...session,
       lastSnap: snap,
@@ -183,9 +252,37 @@ export function handleTrimPointerMove(
       hideEntityIds: [],
     };
   }
-  const cutter = getEntity(bus.getDocument(), session.refEntityId);
-  if (!cutter) return { ...session, lastSnap: snap };
-  const target = pickEntity(bus, input.world, input.camera, cutter.id);
+
+  const allCutters = bus.getDocument().entities.filter((e) => {
+    if (!e.visible) return false;
+    return (
+      e.type === 'line' ||
+      e.type === 'polyline' ||
+      e.type === 'rectangle' ||
+      e.type === 'circle' ||
+      e.type === 'wall'
+    );
+  });
+
+  const primaryCutters =
+    trimMode === 'standard' && session.refEntityId
+      ? (() => {
+          const c = getEntity(bus.getDocument(), session.refEntityId!);
+          const sel = getSelectedEntities(bus.getDocument());
+          const list = sel.length ? sel : c ? [c] : [];
+          return list.length ? list : allCutters;
+        })()
+      : allCutters;
+
+  if (!primaryCutters.length) {
+    return { ...session, lastSnap: snap, previewEntities: null, hideEntityIds: [] };
+  }
+
+  const exclude =
+    trimMode === 'standard' && primaryCutters.length === 1
+      ? primaryCutters[0]!.id
+      : undefined;
+  const target = pickEntity(bus, input.world, input.camera, exclude);
   if (!target) {
     return {
       ...session,
@@ -195,11 +292,25 @@ export function handleTrimPointerMove(
     };
   }
   const pickPoint = snapPoint;
-  let result = trimEntity(target, cutter, pickPoint);
-  if (!result.ok) result = trimEntity(target, cutter, input.world);
+  let result = trimEntity(target, primaryCutters[0]!, pickPoint, {
+    cutters: primaryCutters,
+    edgeMode,
+  });
+  if (!result.ok) {
+    result = trimEntity(target, primaryCutters[0]!, input.world, {
+      cutters: primaryCutters,
+      edgeMode,
+    });
+  }
   const removal =
-    trimRemovalPreview(target, cutter, pickPoint) ??
-    trimRemovalPreview(target, cutter, input.world);
+    trimRemovalPreview(target, primaryCutters[0]!, pickPoint, {
+      cutters: primaryCutters,
+      edgeMode,
+    }) ??
+    trimRemovalPreview(target, primaryCutters[0]!, input.world, {
+      cutters: primaryCutters,
+      edgeMode,
+    });
   if (!result.ok) {
     return {
       ...session,
@@ -220,7 +331,7 @@ export function handleTrimPointerMove(
       }) as Entity),
     ],
     hideEntityIds: [target.id],
-    statusMessage: 'Trim: click to commit',
+    statusMessage: 'Trim: click to remove highlighted portion',
   };
 }
 

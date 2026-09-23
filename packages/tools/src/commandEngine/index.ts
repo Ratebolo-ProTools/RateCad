@@ -5,6 +5,7 @@ import { eraseCommand } from './commands/erase.js';
 import { lineCommand } from './commands/line.js';
 import { copyCommand, moveCommand } from './commands/moveCopy.js';
 import { rectangleCommand } from './commands/rectangle.js';
+import { trimCommand } from './commands/trim.js';
 import type { CadCommandCategory, CadEngineCommand } from './types.js';
 
 /** Tool-bridge stubs for remaining aliases (activate existing tool path). */
@@ -56,13 +57,10 @@ export function createDefaultEngineRegistry(): CadEngineRegistry {
     copyCommand,
     areaCommand,
     eraseCommand,
+    trimCommand,
     toolBridge('polyline', 'POLYLINE', ['PL', 'PLINE'], 'polyline', 'Draw a polyline', {
       category: 'Draw',
       keywords: ['polyline', 'pline', 'path', 'arc'],
-    }),
-    toolBridge('trim', 'TRIM', ['TR'], 'trim', 'Trim objects', {
-      category: 'Modify',
-      keywords: ['trim', 'cut'],
     }),
     toolBridge('extend', 'EXTEND', ['EX'], 'extend', 'Extend objects', {
       category: 'Modify',

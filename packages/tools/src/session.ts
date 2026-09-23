@@ -152,7 +152,7 @@ export function toolStatus(tool: ToolId, dimKind: DimensionKind = 'aligned'): st
     case 'copy':
       return 'Copy: select objects, then specify base point';
     case 'trim':
-      return 'Trim: select cutting edge';
+      return 'Trim: select object to trim (Quick) or cutting edge (Standard)';
     case 'extend':
       return 'Extend: select boundary edge';
     case 'offset':

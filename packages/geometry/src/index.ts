@@ -168,6 +168,36 @@ export {
 } from './cadOps.js';
 
 export type {
+  CurveInterval,
+  EdgeMode,
+  ProjectMode,
+  TrimExtendOperation,
+  TrimExtendOptions,
+  TrimMode,
+  TrimPick,
+} from './trimExtendEngine.js';
+export {
+  applyTrimExtend,
+  buildIntervals,
+  canExtendEntity,
+  canTrimEntity,
+  collectIntersectionsOnSegment,
+  collectIntersectionsWithCutters,
+  cuttingSegments,
+  defaultTrimSettings,
+  entitiesCrossedByFence,
+  extendEntityMulti,
+  fencePickPoint,
+  intersectInfiniteLineSegment,
+  intersectInfiniteLines,
+  nearbyCutters,
+  resolvePickInterval,
+  sortHitsAlongSegment,
+  trimEntityMulti,
+  trimRemovalPreviewMulti,
+} from './trimExtendEngine.js';
+
+export type {
   AreaCalculationMethod,
   AreaComputation,
   AreaError,

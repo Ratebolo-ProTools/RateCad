@@ -249,7 +249,7 @@ export class CadCommandEngine {
     this.running = {
       command,
       prompt: started.prompt,
-      state: { bus: this.bus },
+      state: { bus: this.bus, ...(started.state ?? {}) },
       lastPoint: null,
       angleOverrideDeg: null,
       preview: null,
@@ -259,6 +259,12 @@ export class CadCommandEngine {
       status: started.status ?? `${command.name}: ${started.prompt.message}`,
       message: null,
     };
+    if (command.bootstrap) {
+      const boot = command.bootstrap(this.bus);
+      if (boot.state) Object.assign(this.running.state, boot.state);
+      if (boot.prompt) this.running.prompt = boot.prompt;
+      if (boot.status) this.running.status = boot.status;
+    }
     if (command.handoffToTool) {
       // Leave tool active; canvas handlers own interaction.
       this.running = null;
@@ -413,13 +419,18 @@ export class CadCommandEngine {
   }
 
   /** Pointer / snap-resolved world point while a command waits for a point/distance. */
-  submitPoint(point: Vec2): void {
+  submitPoint(point: Vec2, modifiers?: { shiftKey?: boolean }): void {
     if (!this.running) return;
     if (this.running.prompt.inputType === 'entities') return;
     const inputType = this.running.prompt.inputType;
     // Allow click-to-pick for point and distance prompts (e.g. CIRCLE radius).
     if (inputType !== 'point' && inputType !== 'distance') return;
     const r = this.running;
+    if (modifiers?.shiftKey) {
+      r.state.shiftKey = true;
+    } else {
+      delete r.state.shiftKey;
+    }
     const ctx = this.ctx(r.lastPoint);
     const result = r.command.onPoint(point, r.prompt, ctx, r.state);
     this.applyResult(result, point);

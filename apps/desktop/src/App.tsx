@@ -1545,7 +1545,7 @@ export function App() {
     }
     if (eng?.isRunning()) {
       const snap = snapWorld(world);
-      eng.submitPoint(snap.point);
+      eng.submitPoint(snap.point, { shiftKey: event.shiftKey });
       syncSession({
         ...sessionRef.current,
         lastSnap: snap,
@@ -2258,6 +2258,45 @@ export function App() {
             <div className="prop-row">
               <label>Entities</label>
               <div className="value">{doc.entities.length}</div>
+            </div>
+            <div className="prop-row">
+              <label>TRIM Mode</label>
+              <select
+                className="prop-select"
+                value={doc.settings.trimMode ?? 'quick'}
+                onChange={(e) => {
+                  const trimMode = e.target.value === 'standard' ? 'standard' : 'quick';
+                  busRef.current.updateWithoutHistory((d) => ({
+                    ...d,
+                    settings: { ...d.settings, trimMode },
+                    meta: { ...d.meta, updatedAt: new Date().toISOString() },
+                  }));
+                }}
+                aria-label="TRIM mode Quick or Standard"
+              >
+                <option value="quick">Quick</option>
+                <option value="standard">Standard</option>
+              </select>
+            </div>
+            <div className="prop-row">
+              <label>Edge Mode</label>
+              <select
+                className="prop-select"
+                value={doc.settings.edgeMode ?? 'no-extend'}
+                onChange={(e) => {
+                  const edgeMode =
+                    e.target.value === 'extend' ? 'extend' : 'no-extend';
+                  busRef.current.updateWithoutHistory((d) => ({
+                    ...d,
+                    settings: { ...d.settings, edgeMode },
+                    meta: { ...d.meta, updatedAt: new Date().toISOString() },
+                  }));
+                }}
+                aria-label="TRIM edge mode"
+              >
+                <option value="no-extend">No Extend</option>
+                <option value="extend">Extend</option>
+              </select>
             </div>
             <div className="prop-row">
               <label>Linear Unit</label>

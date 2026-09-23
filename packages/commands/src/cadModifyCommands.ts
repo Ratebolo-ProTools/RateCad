@@ -12,12 +12,12 @@ import {
   type WallEntity,
 } from '@ratecad/core';
 import {
-  extendEntity,
+  extendEntityMulti,
   mirrorEntity,
   offsetEntity,
   rotateEntity,
   scaleEntity,
-  trimEntity,
+  trimEntityMulti,
   validateEntityGeometry,
 } from '@ratecad/geometry';
 import type { Command } from './bus.js';
@@ -57,6 +57,7 @@ function prefixFor(type: Entity['type']): string {
 
 /**
  * Trim: replace target with one or more resulting entities.
+ * Supports multiple cutting edges via TrimExtendEngine.
  * Stores before/after for exact undo/redo (IDs fixed at construction).
  */
 export class TrimEntityCommand implements Command {
@@ -65,9 +66,25 @@ export class TrimEntityCommand implements Command {
   private readonly after: Entity[];
   private readonly removedId: EntityId;
   private readonly addedIds: EntityId[] = [];
+  private roomBefore: RoomEntity[] = [];
+  private roomAfter: RoomEntity[] = [];
+  private brokenRoomIds: EntityId[] = [];
+  private roomsPlanned = false;
 
-  constructor(target: Entity, cutter: Entity, pickPoint: Vec2) {
-    const result = trimEntity(target, cutter, pickPoint);
+  constructor(
+    target: Entity,
+    cutterOrCutters: Entity | Entity[],
+    pickPoint: Vec2,
+    options?: { edgeMode?: 'extend' | 'no-extend'; projectMode?: 'none' | 'ucs' | 'view' },
+  ) {
+    const cutters = Array.isArray(cutterOrCutters)
+      ? cutterOrCutters
+      : [cutterOrCutters];
+    const result = trimEntityMulti(target, cutters, pickPoint, {
+      edgeMode: options?.edgeMode ?? 'no-extend',
+      projectMode: options?.projectMode ?? 'none',
+      allowSelfAsCutter: true,
+    });
     if (!result.ok) {
       throw new Error(result.reason);
     }
@@ -91,16 +108,39 @@ export class TrimEntityCommand implements Command {
     });
   }
 
+  private ensureRooms(doc: DrawingDocument): void {
+    if (this.roomsPlanned) return;
+    this.roomsPlanned = true;
+    if (this.before.type !== 'wall') return;
+    const afterWall = this.after.find((e): e is WallEntity => e.type === 'wall');
+    if (!afterWall) return;
+    const entitiesAfter = doc.entities.map((e) =>
+      e.id === this.before.id ? afterWall : e,
+    );
+    const plan = planRoomRefresh(doc.entities, entitiesAfter, [this.before.id]);
+    this.roomBefore = plan.roomsBefore;
+    this.roomAfter = plan.roomsAfter;
+    this.brokenRoomIds = plan.brokenIds;
+  }
+
   execute(doc: DrawingDocument): DrawingDocument {
+    this.ensureRooms(doc);
     let next = replaceEntity(doc, structuredClone(this.after[0]!));
     for (let i = 1; i < this.after.length; i += 1) {
       next = addEntity(next, structuredClone(this.after[i]!));
+    }
+    if (this.roomBefore.length || this.roomAfter.length || this.brokenRoomIds.length) {
+      next = applyRoomRefresh(next, this.roomAfter, this.brokenRoomIds);
     }
     return next;
   }
 
   undo(doc: DrawingDocument): DrawingDocument {
-    let next = removeEntities(doc, this.addedIds);
+    let next = doc;
+    if (this.roomBefore.length || this.brokenRoomIds.length) {
+      next = restoreRooms(next, this.roomBefore, this.brokenRoomIds);
+    }
+    next = removeEntities(next, this.addedIds);
     next = replaceEntity(next, structuredClone(this.before));
     return next;
   }
@@ -110,8 +150,18 @@ export class ExtendEntityCommand implements Command {
   readonly name = 'ExtendEntity';
   private readonly replace: ReplaceEntityCommand;
 
-  constructor(target: Entity, boundary: Entity, pickPoint: Vec2) {
-    const result = extendEntity(target, boundary, pickPoint);
+  constructor(
+    target: Entity,
+    boundaryOrBoundaries: Entity | Entity[],
+    pickPoint: Vec2,
+    options?: { edgeMode?: 'extend' | 'no-extend' },
+  ) {
+    const boundaries = Array.isArray(boundaryOrBoundaries)
+      ? boundaryOrBoundaries
+      : [boundaryOrBoundaries];
+    const result = extendEntityMulti(target, boundaries, pickPoint, {
+      edgeMode: options?.edgeMode ?? 'extend',
+    });
     if (!result.ok || result.entities.length !== 1) {
       throw new Error(result.ok ? 'Extend produced unexpected geometry' : result.reason);
     }

@@ -291,6 +291,17 @@ export interface DrawingSettings {
   snapToGrid: boolean;
   dimensionStyle: DimensionStyle;
   constructionDefaults: ConstructionDefaults;
+  /** TRIM / EXTEND default mode (Quick = all objects as cutters). */
+  trimMode: 'quick' | 'standard';
+  /** EDGEMODE: whether natural extensions of cutting edges count. */
+  edgeMode: 'extend' | 'no-extend';
+  /** Projection mode for TRIM/EXTEND (2D uses none). */
+  projectMode: 'none' | 'ucs' | 'view';
+  /**
+   * When true in Quick mode, untrimmable picks may be erased (AutoCAD-like).
+   * Default false — RateCAD requires explicit Erase option instead.
+   */
+  trimEraseUntrimmable: boolean;
 }
 
 export interface DrawingMeta {

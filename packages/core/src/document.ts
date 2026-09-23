@@ -82,6 +82,10 @@ export function createEmptyDocument(
       fractionDenominator: 16,
       gridSize: 1,
       snapToGrid: true,
+      trimMode: 'quick',
+      edgeMode: 'no-extend',
+      projectMode: 'none',
+      trimEraseUntrimmable: false,
       ...settings,
       dimensionStyle: {
         ...DEFAULT_DIMENSION_STYLE,

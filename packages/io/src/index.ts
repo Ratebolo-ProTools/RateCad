@@ -375,6 +375,24 @@ function migrateDocument(
         typeof settingsRaw.snapToGrid === 'boolean'
           ? settingsRaw.snapToGrid
           : true,
+      trimMode:
+        settingsRaw.trimMode === 'standard' || settingsRaw.trimMode === 'quick'
+          ? settingsRaw.trimMode
+          : 'quick',
+      edgeMode:
+        settingsRaw.edgeMode === 'extend' || settingsRaw.edgeMode === 'no-extend'
+          ? settingsRaw.edgeMode
+          : 'no-extend',
+      projectMode:
+        settingsRaw.projectMode === 'ucs' ||
+        settingsRaw.projectMode === 'view' ||
+        settingsRaw.projectMode === 'none'
+          ? settingsRaw.projectMode
+          : 'none',
+      trimEraseUntrimmable:
+        typeof settingsRaw.trimEraseUntrimmable === 'boolean'
+          ? settingsRaw.trimEraseUntrimmable
+          : false,
       dimensionStyle: {
         textHeight:
           typeof dimStyleRaw.textHeight === 'number'

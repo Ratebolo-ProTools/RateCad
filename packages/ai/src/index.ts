@@ -327,3 +327,98 @@ export function executeAiAreaQuery(
 
   return { summary: 'Unhandled area intent', warnings };
 }
+
+// ---------------------------------------------------------------------------
+// TRIM AI intents — always resolved via TrimExtendEngine (never LLM coords)
+// ---------------------------------------------------------------------------
+
+export type AiTrimIntent =
+  | {
+      kind: 'trim';
+      mode?: 'quick' | 'standard';
+      edgeMode?: 'extend' | 'no-extend';
+      projectMode?: 'none' | 'ucs' | 'view';
+      needsCuttingEdge: boolean;
+      needsTargets: boolean;
+      summary: string;
+    }
+  | { kind: 'none' };
+
+/**
+ * Parse natural-language TRIM requests into a deterministic intent.
+ * The LLM must never invent intersection coordinates — invoke TrimExtendEngine.
+ */
+export function parseAiTrimIntent(text: string): AiTrimIntent {
+  const lower = text.toLowerCase().trim();
+  if (!/\btrim\b|\btrimming\b|\bcut\s+(?:this|the|these)\b/.test(lower)) {
+    return { kind: 'none' };
+  }
+
+  const mode: 'quick' | 'standard' | undefined = /\bstandard\b/.test(lower)
+    ? 'standard'
+    : /\bquick\b/.test(lower)
+      ? 'quick'
+      : undefined;
+
+  const edgeMode: 'extend' | 'no-extend' | undefined = /\bno\s*extend\b/.test(
+    lower,
+  )
+    ? 'no-extend'
+    : /\bedge\s+extend\b|\bextend(?:ed)?\s+edge\b/.test(lower)
+      ? 'extend'
+      : undefined;
+
+  const hasBoundary =
+    /cutting\s+edge|boundary|against\s+(?:the\s+)?(?:wall|line|circle)|to\s+(?:the\s+)?(?:wall|line|circle|this)/.test(
+      lower,
+    );
+  const hasTargets =
+    /this\s+line|these\s+lines|the\s+wall|intersecting|everything\s+inside|selected/.test(
+      lower,
+    );
+
+  // If user asks to trim but does not name a boundary safely → require pick
+  const needsCuttingEdge = !hasBoundary;
+  const needsTargets = !hasTargets;
+
+  return {
+    kind: 'trim',
+    mode,
+    edgeMode,
+    projectMode: 'none',
+    needsCuttingEdge,
+    needsTargets,
+    summary: needsCuttingEdge
+      ? 'I need a cutting edge. Select the boundary to trim against.'
+      : needsTargets
+        ? 'Select the object(s) to trim.'
+        : 'Ready to run TRIM via TrimExtendEngine.',
+  };
+}
+
+export interface AiTrimProposal {
+  summary: string;
+  /** When true, UI must ask the user to pick a cutting edge — do not guess. */
+  requireCuttingEdgePick: boolean;
+  requireTargetPick: boolean;
+  commandAlias: 'TRIM';
+  mode?: 'quick' | 'standard';
+  edgeMode?: 'extend' | 'no-extend';
+  projectMode?: 'none' | 'ucs' | 'view';
+}
+
+/** Build a safe TRIM proposal from NL — never includes raw coordinates. */
+export function proposeAiTrimCommand(text: string): AiTrimProposal | null {
+  const intent = parseAiTrimIntent(text);
+  if (intent.kind === 'none') return null;
+  return {
+    summary: intent.summary,
+    requireCuttingEdgePick: intent.needsCuttingEdge,
+    requireTargetPick: intent.needsTargets,
+    commandAlias: 'TRIM',
+    mode: intent.mode,
+    edgeMode: intent.edgeMode,
+    projectMode: intent.projectMode,
+  };
+}
+

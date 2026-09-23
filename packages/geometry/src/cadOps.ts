@@ -21,6 +21,11 @@ import {
   isFiniteVec2,
   validateEntityGeometry,
 } from './transform.js';
+import {
+  trimEntityMulti,
+  trimRemovalPreviewMulti,
+  type EdgeMode,
+} from './trimExtendEngine.js';
 
 const EPS = 1e-9;
 
@@ -72,11 +77,12 @@ export function entitySegments(entity: Entity): Array<{ a: Vec2; b: Vec2 }> {
     case 'dimension':
     case 'text':
     case 'leader':
-    case 'wall':
     case 'door':
     case 'window':
     case 'room':
       return [];
+    case 'wall':
+      return [{ a: entity.geometry.start, b: entity.geometry.end }];
   }
 }
 
@@ -121,230 +127,45 @@ export function trimLineEntity(
   cutter: Entity,
   pickPoint: Vec2,
 ): ModifyResult {
-  const { start, end } = line.geometry;
-  const pick = closestPointOnSegment(pickPoint, start, end);
-  const hits = collectIntersectionsOnLine(start, end, cutter);
-  if (hits.length === 0) return fail('No intersection with cutting edge');
-
-  const params = hits
-    .map((p) => ({ p, t: projectParam(p, start, end) }))
-    .sort((a, b) => a.t - b.t);
-
-  const pickT = Math.max(0, Math.min(1, projectParam(pick, start, end)));
-  const bounds = [0, ...params.map((h) => h.t), 1];
-
-  let removeI = -1;
-  for (let i = 0; i < bounds.length - 1; i += 1) {
-    if (pickT >= bounds[i]! - EPS && pickT <= bounds[i + 1]! + EPS) {
-      removeI = i;
-      break;
-    }
-  }
-  if (removeI < 0) return fail('Pick point not on line');
-
-  const keep: Array<{ start: Vec2; end: Vec2 }> = [];
-  for (let i = 0; i < bounds.length - 1; i += 1) {
-    if (i === removeI) continue;
-    const a = pointOnSegment(start, end, bounds[i]!);
-    const b = pointOnSegment(start, end, bounds[i + 1]!);
-    if (distance(a, b) > 1e-6) keep.push({ start: a, end: b });
-  }
-  if (keep.length === 0) return fail('Trim would remove entire line');
-
-  const results: Entity[] = keep.map((g, index) => ({
-    ...line,
-    id: index === 0 ? line.id : (`${line.id}#trim${index}` as Entity['id']),
-    geometry: { start: { ...g.start }, end: { ...g.end } },
-  }));
-  return ok(results);
+  return trimEntityMulti(line, [cutter], pickPoint, {
+    edgeMode: 'no-extend',
+    allowSelfAsCutter: false,
+  });
 }
 
-/**
- * Trim an open polyline at the picked segment using cutter intersections.
- * Closed polylines are rejected in M4.
- */
 export function trimPolylineEntity(
   pline: Extract<Entity, { type: 'polyline' }>,
   cutter: Entity,
   pickPoint: Vec2,
 ): ModifyResult {
-  if (pline.geometry.closed) {
-    return fail('Closed polyline trim not supported in M4');
-  }
-  const verts = pline.geometry.vertices;
-  if (verts.length < 2) return fail('Invalid polyline');
-
-  let bestSeg = 0;
-  let bestDist = Number.POSITIVE_INFINITY;
-  for (let i = 0; i < verts.length - 1; i += 1) {
-    const a = verts[i]!;
-    const b = verts[i + 1]!;
-    const d = distance(pickPoint, closestPointOnSegment(pickPoint, a, b));
-    if (d < bestDist) {
-      bestDist = d;
-      bestSeg = i;
-    }
-  }
-
-  const a = verts[bestSeg]!;
-  const b = verts[bestSeg + 1]!;
-  const hits = collectIntersectionsOnLine(a, b, cutter);
-  if (hits.length === 0) return fail('No intersection on picked segment');
-
-  const params = hits
-    .map((p) => ({ p, t: projectParam(p, a, b) }))
-    .sort((x, y) => x.t - y.t);
-  const pickT = projectParam(pickPoint, a, b);
-  const bounds = [0, ...params.map((h) => h.t), 1];
-
-  let removeI = 0;
-  for (let i = 0; i < bounds.length - 1; i += 1) {
-    if (pickT >= bounds[i]! - EPS && pickT <= bounds[i + 1]! + EPS) {
-      removeI = i;
-      break;
-    }
-  }
-
-  const keepParts: Array<{ start: Vec2; end: Vec2 }> = [];
-  for (let i = 0; i < bounds.length - 1; i += 1) {
-    if (i === removeI) continue;
-    const s = pointOnSegment(a, b, bounds[i]!);
-    const e = pointOnSegment(a, b, bounds[i + 1]!);
-    if (distance(s, e) > 1e-6) keepParts.push({ start: s, end: e });
-  }
-  if (keepParts.length === 0) {
-    // Entire segment removed — split into left and right chains if any
-    const left = verts.slice(0, bestSeg + 1);
-    const right = verts.slice(bestSeg + 1);
-    const results: Entity[] = [];
-    if (left.length >= 2) {
-      results.push({
-        ...pline,
-        geometry: {
-          ...pline.geometry,
-          vertices: left.map((v) => ({ ...v })),
-          closed: false,
-        },
-      });
-    }
-    if (right.length >= 2) {
-      results.push({
-        ...pline,
-        id: `${pline.id}#trim1` as Entity['id'],
-        geometry: {
-          ...pline.geometry,
-          vertices: right.map((v) => ({ ...v })),
-          closed: false,
-        },
-      });
-    }
-    if (results.length === 0) return fail('Trim would remove entire polyline');
-    return ok(results);
-  }
-
-  const results: Entity[] = [];
-  for (let i = 0; i < keepParts.length; i += 1) {
-    const part = keepParts[i]!;
-    const chain: Vec2[] = [];
-    if (distance(part.start, a) < 1e-6) {
-      chain.push(...verts.slice(0, bestSeg).map((v) => ({ ...v })), part.start, part.end);
-      if (distance(part.end, b) < 1e-6) {
-        chain.push(...verts.slice(bestSeg + 2).map((v) => ({ ...v })));
-      }
-    } else if (distance(part.end, b) < 1e-6) {
-      chain.push(part.start, part.end, ...verts.slice(bestSeg + 2).map((v) => ({ ...v })));
-    } else {
-      chain.push(part.start, part.end);
-    }
-    const cleaned: Vec2[] = [];
-    for (const v of chain) {
-      if (
-        cleaned.length === 0 ||
-        distance(cleaned[cleaned.length - 1]!, v) > 1e-6
-      ) {
-        cleaned.push({ ...v });
-      }
-    }
-    if (cleaned.length >= 2) {
-      results.push({
-        ...pline,
-        id: (i === 0 ? pline.id : `${pline.id}#trim${i}`) as Entity['id'],
-        geometry: { ...pline.geometry, vertices: cleaned, closed: false },
-      });
-    }
-  }
-  if (results.length === 0) return fail('Trim produced no geometry');
-  return ok(results);
+  return trimEntityMulti(pline, [cutter], pickPoint, {
+    edgeMode: 'no-extend',
+    allowSelfAsCutter: false,
+  });
 }
 
 export function trimCircleEntity(
   circle: Extract<Entity, { type: 'circle' }>,
   cutter: Entity,
-  _pickPoint: Vec2,
+  pickPoint: Vec2,
 ): ModifyResult {
-  void circle;
-  void cutter;
-  return fail('Circle trim not supported in M4 (use arcs in a later milestone)');
+  return trimEntityMulti(circle, [cutter], pickPoint, {
+    edgeMode: 'no-extend',
+    allowSelfAsCutter: false,
+  });
 }
 
 export function trimEntity(
   target: Entity,
   cutter: Entity,
   pickPoint: Vec2,
+  options?: { edgeMode?: EdgeMode; cutters?: Entity[] },
 ): ModifyResult {
-  if (target.id === cutter.id) return fail('Cannot trim entity with itself');
-  if (!isFiniteVec2(pickPoint)) return fail('Invalid pick point');
-
-  switch (target.type) {
-    case 'line':
-      return trimLineEntity(target, cutter, pickPoint);
-    case 'polyline':
-      return trimPolylineEntity(target, cutter, pickPoint);
-    case 'rectangle': {
-      // Convert to closed polyline of 4 verts, trim as polyline unsupported closed —
-      // trim as four independent lines: find nearest edge, trim that edge into a line entity
-      const segs = entitySegments(target);
-      let best = 0;
-      let bestD = Number.POSITIVE_INFINITY;
-      for (let i = 0; i < segs.length; i += 1) {
-        const d = distance(
-          pickPoint,
-          closestPointOnSegment(pickPoint, segs[i]!.a, segs[i]!.b),
-        );
-        if (d < bestD) {
-          bestD = d;
-          best = i;
-        }
-      }
-      const edge = segs[best]!;
-      const asLine: Extract<Entity, { type: 'line' }> = {
-        id: target.id,
-        type: 'line',
-        layerId: target.layerId,
-        visible: target.visible,
-        locked: target.locked,
-        geometry: { start: { ...edge.a }, end: { ...edge.b } },
-        properties: { ...target.properties },
-      };
-      const trimmed = trimLineEntity(asLine, cutter, pickPoint);
-      if (!trimmed.ok) return trimmed;
-      // Replace rectangle with remaining edges as polyline/lines
-      // MVP: replace rect with a polyline of remaining 3 edges + trimmed edge pieces
-      return fail(
-        'Rectangle edge trim: convert rectangle to lines first, or trim line edges in M4+',
-      );
-    }
-    case 'circle':
-      return trimCircleEntity(target, cutter, pickPoint);
-    case 'dimension':
-    case 'text':
-    case 'leader':
-    case 'wall':
-    case 'door':
-    case 'window':
-    case 'room':
-      return fail(`Cannot trim ${target.type}`);
-  }
+  const cutters = options?.cutters?.length ? options.cutters : [cutter];
+  return trimEntityMulti(target, cutters, pickPoint, {
+    edgeMode: options?.edgeMode ?? 'no-extend',
+    allowSelfAsCutter: true,
+  });
 }
 
 /** Preview of portion to remove for a line trim (segment containing pick). */
@@ -352,28 +173,13 @@ export function trimRemovalPreview(
   target: Entity,
   cutter: Entity,
   pickPoint: Vec2,
+  options?: { edgeMode?: EdgeMode; cutters?: Entity[] },
 ): Entity | null {
-  if (target.type !== 'line') return null;
-  const { start, end } = target.geometry;
-  const hits = collectIntersectionsOnLine(start, end, cutter);
-  if (hits.length === 0) return null;
-  const params = hits
-    .map((p) => ({ p, t: projectParam(p, start, end) }))
-    .sort((a, b) => a.t - b.t);
-  const pickT = projectParam(pickPoint, start, end);
-  const bounds = [0, ...params.map((h) => h.t), 1];
-  for (let i = 0; i < bounds.length - 1; i += 1) {
-    if (pickT >= bounds[i]! - EPS && pickT <= bounds[i + 1]! + EPS) {
-      const a = pointOnSegment(start, end, bounds[i]!);
-      const b = pointOnSegment(start, end, bounds[i + 1]!);
-      return {
-        ...target,
-        geometry: { start: a, end: b },
-        properties: { ...target.properties, color: '#ff6b6b' },
-      };
-    }
-  }
-  return null;
+  const cutters = options?.cutters?.length ? options.cutters : [cutter];
+  return trimRemovalPreviewMulti(target, cutters, pickPoint, {
+    edgeMode: options?.edgeMode ?? 'no-extend',
+    allowSelfAsCutter: true,
+  });
 }
 
 // ---------------------------------------------------------------------------
