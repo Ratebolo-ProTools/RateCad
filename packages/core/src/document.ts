@@ -86,6 +86,8 @@ export function createEmptyDocument(
       edgeMode: 'no-extend',
       projectMode: 'none',
       trimEraseUntrimmable: false,
+      filletRadius: 0,
+      filletTrim: true,
       ...settings,
       dimensionStyle: {
         ...DEFAULT_DIMENSION_STYLE,

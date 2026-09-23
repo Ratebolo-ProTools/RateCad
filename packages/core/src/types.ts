@@ -302,6 +302,10 @@ export interface DrawingSettings {
    * Default false — RateCAD requires explicit Erase option instead.
    */
   trimEraseUntrimmable: boolean;
+  /** Current FILLET radius in world units (does not affect existing fillets). */
+  filletRadius: number;
+  /** FILLET Trim mode — trim/extend sources to the arc (default true). */
+  filletTrim: boolean;
 }
 
 export interface DrawingMeta {

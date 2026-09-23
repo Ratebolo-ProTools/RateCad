@@ -148,6 +148,13 @@ export function createDefaultCadCommandRegistry(): CadCommandRegistry {
       tool: 'trim',
     },
     {
+      id: 'fillet',
+      name: 'Fillet',
+      aliases: ['F', 'FILLET'],
+      description: 'Fillet objects with a tangent arc',
+      tool: 'fillet',
+    },
+    {
       id: 'extend',
       name: 'Extend',
       aliases: ['EX', 'EXTEND'],

@@ -198,6 +198,24 @@ export {
 } from './trimExtendEngine.js';
 
 export type {
+  FilletArcSpec,
+  FilletComputeResult,
+  FilletOptions,
+  FilletPick,
+} from './filletEngine.js';
+export {
+  computeFillet,
+  defaultFilletSettings,
+  filletLineCircle,
+  filletLineLine,
+  filletPolylineAll,
+  makeArcPolylineEntity,
+  resolveLinearEdge,
+  sampleFilletArc,
+  validateFilletResult,
+} from './filletEngine.js';
+
+export type {
   AreaCalculationMethod,
   AreaComputation,
   AreaError,

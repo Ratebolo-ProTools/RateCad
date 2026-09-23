@@ -15,6 +15,7 @@ export {
 } from './modifyCommands.js';
 export {
   ExtendEntityCommand,
+  FilletEntitiesCommand,
   MirrorEntitiesCommand,
   OffsetEntityCommand,
   RotateEntitiesCommand,

@@ -21,6 +21,7 @@ export type ToolId =
   | 'copy'
   | 'trim'
   | 'extend'
+  | 'fillet'
   | 'offset'
   | 'mirror'
   | 'rotate'
@@ -153,6 +154,8 @@ export function toolStatus(tool: ToolId, dimKind: DimensionKind = 'aligned'): st
       return 'Copy: select objects, then specify base point';
     case 'trim':
       return 'Trim: select object to trim (Quick) or cutting edge (Standard)';
+    case 'fillet':
+      return 'Fillet: select first object (R=radius)';
     case 'extend':
       return 'Extend: select boundary edge';
     case 'offset':

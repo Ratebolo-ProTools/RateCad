@@ -19,6 +19,8 @@ import {
   scaleEntity,
   trimEntityMulti,
   validateEntityGeometry,
+  validateFilletResult,
+  type FilletComputeResult,
 } from '@ratecad/geometry';
 import type { Command } from './bus.js';
 import {
@@ -440,3 +442,77 @@ export class ScaleEntitiesCommand implements Command {
     return next;
   }
 }
+
+/**
+ * Fillet: one transactional undo unit for replacements + created arc.
+ * Built from a pre-validated FilletComputeResult (FilletEngine).
+ */
+export class FilletEntitiesCommand implements Command {
+  readonly name = 'FilletEntities';
+  private readonly beforeById = new Map<EntityId, Entity>();
+  private readonly replacements: Entity[];
+  private readonly created: Entity[];
+  private readonly createdIds: EntityId[] = [];
+
+  constructor(result: FilletComputeResult, documentEntities: Entity[]) {
+    if (!result.ok) throw new Error(result.reason);
+    if (!validateFilletResult(result)) {
+      throw new Error('Fillet produced invalid geometry');
+    }
+    const byId = new Map(documentEntities.map((e) => [e.id, e]));
+    this.replacements = result.replacements.map((e) => {
+      const prev = byId.get(e.id);
+      if (prev) this.beforeById.set(e.id, structuredClone(prev));
+      const kept = structuredClone(e);
+      if (!validateEntityGeometry(kept)) {
+        throw new Error('Fillet replacement invalid');
+      }
+      return kept;
+    });
+    this.created = result.created.map((e) => {
+      const id = e.id.includes('#fillet') || e.id.startsWith('fillet')
+        ? e.id
+        : createEntityId('fillet');
+      this.createdIds.push(id);
+      const created = { ...structuredClone(e), id };
+      if (!validateEntityGeometry(created)) {
+        throw new Error('Fillet arc invalid');
+      }
+      return created;
+    });
+  }
+
+  getCreatedIds(): EntityId[] {
+    return [...this.createdIds];
+  }
+
+  execute(doc: DrawingDocument): DrawingDocument {
+    let next = doc;
+    for (const entity of this.replacements) {
+      if (getEntity(next, entity.id)) {
+        next = replaceEntity(next, structuredClone(entity));
+      } else {
+        next = addEntity(next, structuredClone(entity));
+      }
+    }
+    for (const entity of this.created) {
+      if (!getEntity(next, entity.id)) {
+        next = addEntity(next, structuredClone(entity));
+      }
+    }
+    return next;
+  }
+
+  undo(doc: DrawingDocument): DrawingDocument {
+    let next = removeEntities(doc, this.createdIds);
+    for (const [id, before] of this.beforeById) {
+      if (getEntity(next, id)) {
+        next = replaceEntity(next, structuredClone(before));
+      } else {
+        next = addEntity(next, structuredClone(before));
+      }
+    }
+    return next;
+  }
+}
+

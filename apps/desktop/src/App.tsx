@@ -129,6 +129,7 @@ const DRAW_TOOLS: Array<{
   { id: 'move', label: 'Move', glyph: '↔' },
   { id: 'copy', label: 'Copy', glyph: '⧉' },
   { id: 'trim', label: 'Trim', glyph: '✂' },
+  { id: 'fillet', label: 'Fillet', glyph: '◠' },
   { id: 'extend', label: 'Extend', glyph: '⟶' },
   { id: 'offset', label: 'Offset', glyph: '∥' },
   { id: 'mirror', label: 'Mirror', glyph: '⊳⊲' },
@@ -616,6 +617,7 @@ export function App() {
         'move',
         'copy',
         'trim',
+        'fillet',
         'extend',
         'offset',
         'mirror',
@@ -2296,6 +2298,25 @@ export function App() {
               >
                 <option value="no-extend">No Extend</option>
                 <option value="extend">Extend</option>
+              </select>
+            </div>
+            <div className="prop-row">
+              <label>Fillet Trim</label>
+              <select
+                className="prop-select"
+                value={doc.settings.filletTrim === false ? 'off' : 'on'}
+                onChange={(e) => {
+                  const filletTrim = e.target.value !== 'off';
+                  busRef.current.updateWithoutHistory((d) => ({
+                    ...d,
+                    settings: { ...d.settings, filletTrim },
+                    meta: { ...d.meta, updatedAt: new Date().toISOString() },
+                  }));
+                }}
+                aria-label="FILLET trim mode"
+              >
+                <option value="on">ON</option>
+                <option value="off">OFF</option>
               </select>
             </div>
             <div className="prop-row">

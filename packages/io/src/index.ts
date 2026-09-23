@@ -393,6 +393,16 @@ function migrateDocument(
         typeof settingsRaw.trimEraseUntrimmable === 'boolean'
           ? settingsRaw.trimEraseUntrimmable
           : false,
+      filletRadius:
+        typeof settingsRaw.filletRadius === 'number' &&
+        Number.isFinite(settingsRaw.filletRadius) &&
+        settingsRaw.filletRadius >= 0
+          ? settingsRaw.filletRadius
+          : 0,
+      filletTrim:
+        typeof settingsRaw.filletTrim === 'boolean'
+          ? settingsRaw.filletTrim
+          : true,
       dimensionStyle: {
         textHeight:
           typeof dimStyleRaw.textHeight === 'number'

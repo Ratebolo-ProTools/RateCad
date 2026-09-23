@@ -422,3 +422,102 @@ export function proposeAiTrimCommand(text: string): AiTrimProposal | null {
   };
 }
 
+// ---------------------------------------------------------------------------
+// FILLET AI intents — always resolved via FilletEngine (never LLM coords)
+// ---------------------------------------------------------------------------
+
+export type AiFilletIntent =
+  | {
+      kind: 'fillet';
+      radiusWorld?: number;
+      radiusText?: string;
+      trim?: boolean;
+      polylineAll?: boolean;
+      sharpCorner?: boolean;
+      needsObjectPick: boolean;
+      summary: string;
+    }
+  | { kind: 'none' };
+
+export function parseAiFilletIntent(
+  text: string,
+  worldUnit: LengthUnit = 'ft',
+  displayUnit: LengthUnit = 'ft-in',
+): AiFilletIntent {
+  const lower = text.toLowerCase().trim();
+  if (
+    !/\bfillet\b|\bround(?:ing)?\b|\bradius\b.*\bcorner\b|\bcorner\b.*\bradius\b|\bsharp\s+corner\b/.test(
+      lower,
+    )
+  ) {
+    return { kind: 'none' };
+  }
+
+  const sharp =
+    /sharp\s+corner|remove\s+(?:the\s+)?fillet|radius\s*(?:=|of)?\s*0\b/.test(
+      lower,
+    );
+  const polylineAll =
+    /all\s+corners|every\s+corner|fillet\s+(?:the\s+)?(?:entire\s+)?polyline|fillet\s+(?:this\s+)?rectangle/.test(
+      lower,
+    );
+  const trimOff = /without\s+trimm|no\s+trim|trim\s+off/.test(lower);
+
+  const radiusParsed = parseAiLength(text, worldUnit, displayUnit);
+  const needsObjectPick =
+    !/\bselected\b|\ball\s+corners/.test(lower) &&
+    !/\bthese\s+(?:two\s+)?(?:walls?|lines?|objects?)\b/.test(lower);
+
+  if (sharp) {
+    return {
+      kind: 'fillet',
+      radiusWorld: 0,
+      sharpCorner: true,
+      trim: true,
+      needsObjectPick: true,
+      summary: 'Radius 0 — select the corner objects for a sharp intersection',
+    };
+  }
+
+  return {
+    kind: 'fillet',
+    radiusWorld: radiusParsed?.worldValue,
+    radiusText: radiusParsed ? text : undefined,
+    trim: trimOff ? false : true,
+    polylineAll,
+    needsObjectPick: polylineAll ? false : needsObjectPick,
+    summary: needsObjectPick
+      ? 'Select the two objects (or corner) to fillet'
+      : polylineAll
+        ? 'Ready to fillet all corners via FilletEngine Polyline option'
+        : 'Ready to run FILLET via FilletEngine',
+  };
+}
+
+export interface AiFilletProposal {
+  summary: string;
+  commandAlias: 'FILLET';
+  requireObjectPick: boolean;
+  radiusWorld?: number;
+  trim?: boolean;
+  polylineAll?: boolean;
+}
+
+export function proposeAiFilletCommand(
+  text: string,
+  worldUnit: LengthUnit = 'ft',
+  displayUnit: LengthUnit = 'ft-in',
+): AiFilletProposal | null {
+  const intent = parseAiFilletIntent(text, worldUnit, displayUnit);
+  if (intent.kind === 'none') return null;
+  return {
+    summary: intent.summary,
+    commandAlias: 'FILLET',
+    requireObjectPick: intent.needsObjectPick,
+    radiusWorld: intent.radiusWorld,
+    trim: intent.trim,
+    polylineAll: intent.polylineAll,
+  };
+}
+
+
