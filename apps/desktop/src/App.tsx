@@ -23,6 +23,7 @@ import {
   UpdateWindowCommand,
 } from '@ratecad/commands';
 import {
+  clearSelection,
   createEmptyDocument,
   getEntity,
   getHostedByWall,
@@ -77,9 +78,12 @@ import {
   handleToolPointerDown,
   handleToolPointerMove,
   handleToolPointerUp,
+  resolveKeyboardContextFromTarget,
+  SelectionManager,
   setActiveTool,
   setAreaToolMode,
   setRectangleConstraints,
+  spaceConfirmsCommand,
   undoAreaPoint,
   undoAreaSessionEntry,
   type AreaToolMode,
@@ -396,7 +400,7 @@ export function App() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const cameraRef = useRef<Camera>(createCamera());
-  const sessionRef = useRef<ToolSession>(createToolSession('line'));
+  const sessionRef = useRef<ToolSession>(createToolSession('select'));
   const isPanningRef = useRef(false);
   const lastPointerRef = useRef<{ x: number; y: number } | null>(null);
   const spaceDownRef = useRef(false);
@@ -409,6 +413,9 @@ export function App() {
   const commandInputRef = useRef<HTMLInputElement | null>(null);
   const cursorWorldRef = useRef({ x: 0, y: 0 });
   const engineRef = useRef<CadCommandEngine | null>(null);
+  const selectionManagerRef = useRef<SelectionManager | null>(null);
+  const hoveredIdRef = useRef<string | null>(null);
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
   const polarEngineRef = useRef(
     new PolarTrackingEngine(
       { enabled: false },
@@ -530,8 +537,9 @@ export function App() {
         : sess.hideEntityIds,
       cursorWorld,
       snap: sess.lastSnap,
+      hoveredEntityId: hoveredId,
     });
-  }, [doc, session, camera, size, cursorWorld, engineUi]);
+  }, [doc, session, camera, size, cursorWorld, engineUi, hoveredId]);
 
   useEffect(() => {
     const name = doc.meta.name + (dirty ? ' *' : '');
@@ -567,6 +575,7 @@ export function App() {
 
   // Create command engine once (host uses refs for live document/cursor).
   useEffect(() => {
+    selectionManagerRef.current = new SelectionManager(busRef.current);
     const host = {
       getUnits: () => busRef.current.getDocument().settings.units,
       getWorldUnit: () =>
@@ -578,6 +587,15 @@ export function App() {
       },
       activateSelect: () => {
         activateToolOnly('select');
+      },
+      clearSelection: () => {
+        busRef.current.updateWithoutHistory((d) => clearSelection(d));
+        setDoc(busRef.current.getDocument());
+        hoveredIdRef.current = null;
+        setHoveredId(null);
+      },
+      onNaturalLanguage: (text: string) => {
+        setCommandFeedback(`AI (NL): ${text}`);
       },
     };
     engineRef.current = new CadCommandEngine(
@@ -688,7 +706,7 @@ export function App() {
     markDirty(false);
     suppressDirtyRef.current = false;
     setProjectPath(null);
-    syncSession(createToolSession('line'));
+    syncSession(createToolSession('select'));
     syncCamera(createCamera());
     setStatusExtra(null);
   }, [confirmDiscardIfNeeded, markDirty, setProjectPath, syncCamera, syncSession]);
@@ -1050,6 +1068,7 @@ export function App() {
     const onKeyDown = (event: KeyboardEvent) => {
       const meta = event.metaKey || event.ctrlKey;
       const target = event.target as HTMLElement | null;
+      const kbCtx = resolveKeyboardContextFromTarget(target);
       const tag = target?.tagName;
       const isEditable =
         (tag === 'INPUT' || tag === 'TEXTAREA') &&
@@ -1059,7 +1078,22 @@ export function App() {
         target?.dataset?.cadCommand === '1' ||
         target?.dataset?.cadRectDim === '1';
 
-      if (event.code === 'Space' && !inField) {
+      // Text editors / dialogs / property panels: never launch CAD commands
+      if (
+        kbCtx === 'text-editor' ||
+        kbCtx === 'dialog' ||
+        kbCtx === 'property-input' ||
+        kbCtx === 'search' ||
+        (kbCtx === 'other' && inField && !isCadCommandField)
+      ) {
+        if (event.key === 'Escape' && sessionRef.current.mode === 'text-input') {
+          event.preventDefault();
+          cancelTextPrompt();
+        }
+        return;
+      }
+
+      if (event.code === 'Space' && !inField && spaceConfirmsCommand(kbCtx)) {
         const eng = engineRef.current;
         if (
           eng &&
@@ -1110,19 +1144,12 @@ export function App() {
       if (event.key === 'Escape') {
         event.preventDefault();
         const eng = engineRef.current;
-        if (eng?.isRunning()) {
-          eng.cancel(true);
-          refreshEngineUi();
-          setCommandFeedback('Select');
-          return;
-        }
-        clearCommandLine();
-        setCommandFeedback(null);
-        if (sessionRef.current.mode === 'text-input') {
+        // 1) Cancel in-progress tool preview / grip / window without committing
+        const s = sessionRef.current;
+        if (s.mode === 'text-input') {
           cancelTextPrompt();
           return;
         }
-        const s = sessionRef.current;
         const inProgress =
           s.mode !== 'idle' ||
           !!s.anchor ||
@@ -1132,11 +1159,34 @@ export function App() {
           !!s.selectionRect ||
           !!s.refEntityId ||
           s.inputBuffer.length > 0;
+        if (eng?.isRunning()) {
+          eng.cancel(true);
+          if (inProgress) syncSession(cancelTool(s));
+          refreshEngineUi();
+          setCommandFeedback('Select');
+          return;
+        }
         if (inProgress) {
           syncSession(cancelTool(s));
+          activateToolOnly('select');
+          setCommandFeedback('Select');
+          return;
         }
-        activateToolOnly('select');
-        setCommandFeedback('Select');
+        // 2) Engine ESC: clear buffer → clear selection → idle pointer
+        const action = eng?.handleEscape() ?? { kind: 'idle' as const };
+        clearCommandLine();
+        refreshEngineUi();
+        if (action.kind === 'clear-selection' || action.kind === 'idle') {
+          activateToolOnly('select');
+        }
+        setCommandFeedback(
+          action.kind === 'clear-selection'
+            ? 'Selection cleared'
+            : action.kind === 'clear-buffer'
+              ? 'Command'
+              : 'Select',
+        );
+        setDoc(busRef.current.getDocument());
         return;
       }
 
@@ -1203,13 +1253,25 @@ export function App() {
       }
       if (event.key === 'ArrowUp' && !inField) {
         event.preventDefault();
-        engineRef.current?.historyUp();
+        const eng = engineRef.current;
+        const ui = eng?.getUiState();
+        if (ui && ui.suggestionRows.length > 0 && !eng?.isRunning()) {
+          eng?.moveSuggestion(-1);
+        } else {
+          eng?.historyUp();
+        }
         refreshEngineUi();
         return;
       }
       if (event.key === 'ArrowDown' && !inField) {
         event.preventDefault();
-        engineRef.current?.historyDown();
+        const eng = engineRef.current;
+        const ui = eng?.getUiState();
+        if (ui && ui.suggestionRows.length > 0 && !eng?.isRunning()) {
+          eng?.moveSuggestion(1);
+        } else {
+          eng?.historyDown();
+        }
         refreshEngineUi();
         return;
       }
@@ -1555,6 +1617,23 @@ export function App() {
       return;
     }
 
+    // Hover / preselection when idle pointer (select) mode
+    if (sessionRef.current.activeTool === 'select' && sessionRef.current.mode === 'idle') {
+      const tol = screenToleranceToWorld(cameraRef.current, 8);
+      const sm = selectionManagerRef.current;
+      const id = sm
+        ? sm.updateHover(world, tol)
+        : null;
+      if (id !== hoveredIdRef.current) {
+        hoveredIdRef.current = id;
+        setHoveredId(id);
+      }
+    } else if (hoveredIdRef.current) {
+      hoveredIdRef.current = null;
+      setHoveredId(null);
+      selectionManagerRef.current?.setHovered(null);
+    }
+
     const next = handleToolPointerMove(sessionRef.current, busRef.current, {
       world,
       camera: cameraRef.current,
@@ -1688,12 +1767,13 @@ export function App() {
         </div>
       ) : null}
       {showTextDialog ? (
-        <div className="modal-backdrop" role="dialog" aria-modal="true">
+        <div className="modal-backdrop" role="dialog" aria-modal="true" data-cad-dialog="1">
           <div className="modal-panel">
             <h3>{session.activeTool === 'leader' ? 'Leader text' : 'Text'}</h3>
             <p>Enter annotation content, then confirm.</p>
             <input
               ref={textInputRef}
+              data-cad-text-editor="1"
               className="text-prompt-input"
               value={textPrompt}
               onChange={(e) => setTextPrompt(e.target.value)}
@@ -1900,6 +1980,7 @@ export function App() {
         <main className="viewport-wrap" ref={wrapRef}>
           <canvas
             ref={canvasRef}
+            data-cad-canvas="1"
             className={canvasClass}
             onPointerDown={onPointerDown}
             onPointerMove={onPointerMove}
@@ -1912,6 +1993,70 @@ export function App() {
               editSelectedText();
             }}
           />
+          {/* Dynamic Input near cursor */}
+          {(engineUi?.commandName ||
+            (engineUi?.suggestionRows?.length ?? 0) > 0 ||
+            engineUi?.naturalLanguagePending) && (
+            <div
+              className="dyn-input"
+              style={{
+                left: Math.min(
+                  size.width - 220,
+                  Math.max(
+                    8,
+                    (() => {
+                      const canvas = canvasRef.current;
+                      if (!canvas) return 8;
+                      // Approximate screen from last cursor — use wrap relative
+                      const wrap = wrapRef.current?.getBoundingClientRect();
+                      void wrap;
+                      return size.width * 0.5;
+                    })(),
+                  ),
+                ),
+                top: 12,
+              }}
+              role="status"
+              aria-live="polite"
+            >
+              {engineUi?.commandName ? (
+                <>
+                  <div className="dyn-cmd">{engineUi.commandName}</div>
+                  <div className="dyn-prompt">{engineUi.prompt}</div>
+                  {engineUi.optionsText ? (
+                    <div className="dyn-options">{engineUi.optionsText}</div>
+                  ) : null}
+                </>
+              ) : engineUi?.naturalLanguagePending ? (
+                <div className="dyn-nl">AI natural-language — Enter to send</div>
+              ) : (
+                <ul className="dyn-suggest" aria-label="Command suggestions">
+                  {(engineUi?.suggestionRows ?? []).map((row, i) => (
+                    <li key={row.commandId}>
+                      <button
+                        type="button"
+                        className={
+                          i === engineUi?.suggestionIndex
+                            ? 'cmd-suggest active'
+                            : 'cmd-suggest'
+                        }
+                        onClick={() => {
+                          engineRef.current?.selectSuggestion(i);
+                          engineRef.current?.confirm('enter');
+                          refreshEngineUi();
+                        }}
+                      >
+                        <span className="cmd-alias">
+                          {row.alias ?? '·'}
+                        </span>
+                        <span className="cmd-name">{row.name}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
           <div className="command-dock">
             <div className="command-row">
               <label className="command-label" htmlFor="cad-command-input">
@@ -1942,16 +2087,34 @@ export function App() {
                     refreshEngineUi();
                   } else if (e.key === 'ArrowUp') {
                     e.preventDefault();
-                    engineRef.current?.historyUp();
+                    const eng = engineRef.current;
+                    const ui = eng?.getUiState();
+                    if (ui && ui.suggestionRows.length > 0) {
+                      eng?.moveSuggestion(-1);
+                    } else {
+                      eng?.historyUp();
+                    }
                     refreshEngineUi();
                   } else if (e.key === 'ArrowDown') {
                     e.preventDefault();
-                    engineRef.current?.historyDown();
+                    const eng = engineRef.current;
+                    const ui = eng?.getUiState();
+                    if (ui && ui.suggestionRows.length > 0) {
+                      eng?.moveSuggestion(1);
+                    } else {
+                      eng?.historyDown();
+                    }
+                    refreshEngineUi();
+                  } else if (e.key === 'Escape') {
+                    e.preventDefault();
+                    engineRef.current?.handleEscape();
                     refreshEngineUi();
                   }
                 }}
-                placeholder="Type command (REC, L, …) — Enter/Space"
+                placeholder="Type command (L, M, C, …) — Enter/Space"
                 aria-label="CAD command"
+                aria-autocomplete="list"
+                aria-controls="cad-command-suggestions"
                 autoComplete="off"
                 spellCheck={false}
               />
@@ -1963,25 +2126,41 @@ export function App() {
                 Enter
               </button>
             </div>
-            {engineUi?.suggestions?.length ? (
-              <div className="command-suggestions">
-                {engineUi.suggestions.map((s, i) => (
+            {engineUi?.suggestionRows?.length ? (
+              <div
+                id="cad-command-suggestions"
+                className="command-suggestions"
+                role="listbox"
+                aria-label="Command suggestions"
+              >
+                {engineUi.suggestionRows.map((row, i) => (
                   <button
-                    key={s}
+                    key={row.commandId}
                     type="button"
+                    role="option"
+                    aria-selected={i === engineUi.suggestionIndex}
                     className={
                       i === engineUi.suggestionIndex
                         ? 'cmd-suggest active'
                         : 'cmd-suggest'
                     }
                     onClick={() => {
-                      engineRef.current?.setBuffer(s);
+                      engineRef.current?.selectSuggestion(i);
+                      engineRef.current?.confirm('enter');
                       refreshEngineUi();
+                      setCommandFeedback(row.name);
                     }}
                   >
-                    {s}
+                    <span className="cmd-alias">{row.alias ?? ''}</span>
+                    {row.name}
+                    {row.matchKind === 'typo' ? ' ?' : ''}
                   </button>
                 ))}
+              </div>
+            ) : null}
+            {engineUi?.naturalLanguagePending ? (
+              <div className="command-nl-hint">
+                Natural language detected — Enter routes to AI Command Engine
               </div>
             ) : null}
             {(session.activeTool === 'rectangle' ||

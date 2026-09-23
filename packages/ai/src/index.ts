@@ -111,6 +111,16 @@ export function parseAiWorldUnitConversion(text: string): LengthUnit | null {
   return u === 'ft-in' ? 'ft' : u;
 }
 
+/** Detect a natural-language CAD request (vs alias/command token). */
+export function isNaturalLanguageCadRequest(text: string): boolean {
+  const t = text.trim();
+  if (!t) return false;
+  if (t.split(/\s+/).length >= 3) return true;
+  return /make\s|change\s|calculate\s|show\s|convert\s|please\s|this\s+wall|draw\s+a\s/i.test(
+    t,
+  );
+}
+
 /**
  * Area-related AI intents — always resolved via the deterministic Area Engine.
  * The LLM must never invent numeric areas.

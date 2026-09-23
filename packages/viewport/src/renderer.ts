@@ -57,6 +57,8 @@ export interface RenderOptions {
   grips?: Grip[];
   /** Hide selected originals while showing previewEntities (move). */
   hideEntityIds?: string[];
+  /** Preselection hover highlight (not selected). */
+  hoveredEntityId?: string | null;
   theme?: {
     background: string;
     gridMajor: string;
@@ -64,6 +66,7 @@ export interface RenderOptions {
     entity: string;
     selected: string;
     preview: string;
+    hover: string;
     axis: string;
     snap: string;
     grip: string;
@@ -80,6 +83,7 @@ const DEFAULT_THEME = {
   entity: '#c8ced6',
   selected: '#4da3ff',
   preview: '#7eb6ff',
+  hover: '#9ec9ff',
   axis: '#3a4450',
   snap: '#ffcc33',
   grip: '#4da3ff',
@@ -828,6 +832,10 @@ export function renderDocument(
     if (layer && !layer.visible) continue;
 
     const isSelected = selected.has(entity.id);
+    const isHovered =
+      !!options.hoveredEntityId &&
+      options.hoveredEntityId === entity.id &&
+      !isSelected;
     strokeEntity(
       ctx,
       entity,
@@ -835,8 +843,12 @@ export function renderDocument(
       camera,
       width,
       height,
-      isSelected ? theme.selected : entity.properties.color ?? layer?.color ?? theme.entity,
-      isSelected ? 2 : 1.25,
+      isSelected
+        ? theme.selected
+        : isHovered
+          ? theme.hover
+          : entity.properties.color ?? layer?.color ?? theme.entity,
+      isSelected ? 2 : isHovered ? 1.75 : 1.25,
     );
     if (isSelected && !options.previewEntities?.length) {
       autoGrips.push(

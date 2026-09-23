@@ -78,13 +78,18 @@ function finishSelection(
 
 function makeCommand(mode: 'move' | 'copy'): CadEngineCommand {
   const name = mode === 'move' ? 'MOVE' : 'COPY';
-  const aliases = mode === 'move' ? ['M'] : ['CO'];
+  const aliases = mode === 'move' ? ['M'] : ['CO', 'CP'];
   return {
     id: mode,
     name,
     aliases,
     description: mode === 'move' ? 'Move objects' : 'Copy objects',
     tool: mode,
+    category: mode === 'move' ? 'Modify' : 'Modify',
+    keywords:
+      mode === 'move'
+        ? ['move', 'translate', 'displace']
+        : ['copy', 'duplicate', 'clone'],
     start: (ctx) => {
       const hasSel = ctx.selectedIds.length > 0;
       return {

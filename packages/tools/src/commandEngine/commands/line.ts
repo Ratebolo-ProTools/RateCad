@@ -37,6 +37,8 @@ export const lineCommand: CadEngineCommand = {
   aliases: ['L'],
   description: 'Draw connected line segments',
   tool: 'line',
+  category: 'Draw',
+  keywords: ['line', 'segment', 'draw'],
   start: () => ({ prompt: firstPrompt, status: 'LINE: Specify first point:' }),
   onPoint: (point, prompt, _ctx, state) => {
     const s = state as LineState;

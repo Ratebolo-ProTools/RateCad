@@ -3,22 +3,29 @@ import type { Entity, EntityId, LengthUnit, Vec2 } from '@ratecad/core';
 import type { PreviewGeometry } from '@ratecad/viewport';
 import { CadCommandHistory } from './history.js';
 import {
+  classifyIdleCommandInput,
+  classifyActiveCommandInput,
+} from './inputClassifier.js';
+import {
   formatDefaultHint,
   formatOptionsHint,
   isAngleOverrideResult,
   isDistanceResult,
   isPointResult,
+  matchOption,
   parsePointInput,
   pointFromDirectDistance,
 } from './parsers.js';
 import { CadEngineRegistry } from './registry.js';
 import { setEngineRectangleConstraints } from './commands/rectangle.js';
+import { CommandUsageTracker } from './usage.js';
 import type {
   CadCommandContext,
   CadCommandUiState,
   CadDynamicInput,
   CadEngineCommand,
   CadPromptDefinition,
+  CommandSuggestion,
 } from './types.js';
 
 export interface EngineHost {
@@ -30,6 +37,10 @@ export interface EngineHost {
   activateTool(tool: string): void;
   /** Set select tool after cancel/complete. */
   activateSelect(): void;
+  /** Optional: route natural-language idle input to AI adapter. */
+  onNaturalLanguage?: (text: string) => void;
+  /** Optional: clear document selection (ESC when idle). */
+  clearSelection?: () => void;
 }
 
 type Running = {
@@ -46,26 +57,37 @@ type Running = {
   message: string | null;
 };
 
+export type EscAction =
+  | { kind: 'cancel-command' }
+  | { kind: 'clear-buffer' }
+  | { kind: 'clear-selection' }
+  | { kind: 'idle' };
+
 /**
  * Central CAD command engine — one execution path for aliases, command line, and toolbar.
+ * Extended for ranked suggestions, usage ranking, ESC state machine, and NL classification.
  */
 export class CadCommandEngine {
   readonly registry: CadEngineRegistry;
   readonly history: CadCommandHistory;
+  readonly usage: CommandUsageTracker;
   private running: Running | null = null;
   private lastCompletedName: string | null = null;
   private buffer = '';
-  private suggestions: string[] = [];
+  private suggestionRows: CommandSuggestion[] = [];
   private suggestionIndex = -1;
   private message: string | null = null;
+  private naturalLanguagePending = false;
 
   constructor(
     registry: CadEngineRegistry,
     private readonly bus: CommandBus,
     private readonly host: EngineHost,
+    usage?: CommandUsageTracker,
   ) {
     this.registry = registry;
     this.history = new CadCommandHistory();
+    this.usage = usage ?? new CommandUsageTracker();
   }
 
   isRunning(): boolean {
@@ -79,6 +101,10 @@ export class CadCommandEngine {
 
   getRunningCommand(): CadEngineCommand | null {
     return this.running?.command ?? null;
+  }
+
+  getActivePrompt(): CadPromptDefinition | null {
+    return this.running?.prompt ?? null;
   }
 
   getLastPoint(): Vec2 | null {
@@ -105,27 +131,53 @@ export class CadCommandEngine {
 
   setBuffer(value: string): void {
     this.buffer = value;
-    this.suggestions = this.registry.suggest(value);
-    this.suggestionIndex = this.suggestions.length ? 0 : -1;
+    this.refreshSuggestions();
     if (!this.running) this.message = null;
   }
 
+  private refreshSuggestions(): void {
+    if (this.running) {
+      this.suggestionRows = [];
+      this.suggestionIndex = -1;
+      this.naturalLanguagePending = false;
+      return;
+    }
+    const classified = classifyIdleCommandInput(this.buffer);
+    if (classified.kind === 'natural-language') {
+      this.suggestionRows = [];
+      this.suggestionIndex = -1;
+      this.naturalLanguagePending = true;
+      return;
+    }
+    this.naturalLanguagePending = false;
+    this.suggestionRows = this.registry.suggestRanked(this.buffer, {
+      usage: this.usage,
+      allowTypo: true,
+    });
+    this.suggestionIndex = this.suggestionRows.length ? 0 : -1;
+  }
+
   getUiState(): CadCommandUiState {
+    const suggestionStrings = this.suggestionRows.map((r) =>
+      r.alias ? `${r.alias} (${r.name})` : r.name,
+    );
     if (!this.running) {
       return {
-        phase: 'idle',
+        phase: this.buffer.trim() ? 'command-input' : 'idle',
         commandName: null,
         prompt: 'Command:',
         optionsText: '',
         defaultText: '',
         message: this.message,
         history: this.history.list(),
-        suggestions: this.suggestions,
+        suggestions: suggestionStrings,
         suggestionIndex: this.suggestionIndex,
+        suggestionRows: this.suggestionRows,
         dynamic: null,
         preview: null,
         previewEntities: null,
         hideEntityIds: [],
+        naturalLanguagePending: this.naturalLanguagePending,
       };
     }
     const r = this.running;
@@ -139,10 +191,12 @@ export class CadCommandEngine {
       history: this.history.list(),
       suggestions: [],
       suggestionIndex: -1,
+      suggestionRows: [],
       dynamic: r.dynamic,
       preview: r.preview,
       previewEntities: r.previewEntities,
       hideEntityIds: r.hideEntityIds,
+      naturalLanguagePending: false,
     };
   }
 
@@ -160,6 +214,18 @@ export class CadCommandEngine {
       if (!resolved.ok && resolved.reason === 'empty') {
         return { ok: false, message: '' };
       }
+      // Typo: offer did-you-mean without executing
+      const ranked = this.registry.suggestRanked(rawOrId, {
+        usage: this.usage,
+        allowTypo: true,
+        limit: 3,
+      });
+      if (ranked.length && ranked[0]!.matchKind === 'typo') {
+        this.message = `Did you mean: ${ranked[0]!.name}?`;
+        this.suggestionRows = ranked;
+        this.suggestionIndex = 0;
+        return { ok: false, message: this.message };
+      }
       const input = !resolved.ok ? resolved.input : rawOrId;
       this.message = `Unknown command: ${input}`;
       return { ok: false, message: this.message };
@@ -172,10 +238,12 @@ export class CadCommandEngine {
     this.host.activateTool(command.tool);
     this.history.push(command.name);
     this.lastCompletedName = command.name;
+    this.usage.record(command.id);
     this.buffer = '';
-    this.suggestions = [];
+    this.suggestionRows = [];
     this.suggestionIndex = -1;
     this.message = null;
+    this.naturalLanguagePending = false;
     const ctx = this.ctx(null);
     const started = command.start(ctx);
     this.running = {
@@ -198,16 +266,30 @@ export class CadCommandEngine {
     return { ok: true };
   }
 
-  /** Tab cycles autocomplete suggestions into the buffer. */
+  /** Tab / arrow: move highlight without replacing buffer unless cycling fills. */
+  moveSuggestion(delta: number): void {
+    if (this.running || !this.suggestionRows.length) return;
+    const n = this.suggestionRows.length;
+    this.suggestionIndex = (this.suggestionIndex + delta + n * 10) % n;
+  }
+
+  /** Tab cycles autocomplete: apply highlighted suggestion name into buffer. */
   cycleSuggestion(): void {
     if (this.running) return;
-    if (!this.suggestions.length) {
-      this.suggestions = this.registry.suggest(this.buffer);
+    if (!this.suggestionRows.length) {
+      this.refreshSuggestions();
     }
-    if (!this.suggestions.length) return;
+    if (!this.suggestionRows.length) return;
     this.suggestionIndex =
-      (this.suggestionIndex + 1) % this.suggestions.length;
-    this.buffer = this.suggestions[this.suggestionIndex]!;
+      (this.suggestionIndex + 1) % this.suggestionRows.length;
+    const row = this.suggestionRows[this.suggestionIndex]!;
+    this.buffer = row.name;
+  }
+
+  selectSuggestion(index: number): void {
+    if (index < 0 || index >= this.suggestionRows.length) return;
+    this.suggestionIndex = index;
+    this.buffer = this.suggestionRows[index]!.name;
   }
 
   historyUp(): void {
@@ -215,7 +297,7 @@ export class CadCommandEngine {
     const v = this.history.up();
     if (v != null) {
       this.buffer = v;
-      this.suggestions = this.registry.suggest(this.buffer);
+      this.refreshSuggestions();
     }
   }
 
@@ -224,14 +306,14 @@ export class CadCommandEngine {
     const v = this.history.down();
     if (v != null) {
       this.buffer = v;
-      this.suggestions = this.registry.suggest(this.buffer);
+      this.refreshSuggestions();
     }
   }
 
   /**
    * Confirm typed buffer with Enter or Space.
-   * Idle: start command (or repeat last on empty Enter).
-   * Running: submit text / default to current prompt.
+   * Idle: start exact alias/name, or highlighted suggestion if ambiguous prefix.
+   * Never auto-picks a random ambiguous match without highlight.
    */
   confirm(source: 'enter' | 'space' = 'enter'): void {
     if (!this.running) {
@@ -242,12 +324,80 @@ export class CadCommandEngine {
         }
         return;
       }
+
+      const classified = classifyIdleCommandInput(raw);
+      if (classified.kind === 'natural-language') {
+        this.host.onNaturalLanguage?.(classified.text);
+        this.message = 'AI: natural-language request queued';
+        this.buffer = '';
+        this.refreshSuggestions();
+        return;
+      }
+
+      // Exact resolve first (M → MOVE, MI → MIRROR)
+      const exact = this.registry.resolve(raw);
+      if (exact.ok) {
+        this.startCommand(exact.command);
+        return;
+      }
+
+      // Ambiguous / partial: use highlighted suggestion only
+      if (this.suggestionRows.length && this.suggestionIndex >= 0) {
+        const row = this.suggestionRows[this.suggestionIndex]!;
+        const cmd = this.registry.get(row.commandId);
+        if (cmd) {
+          this.startCommand(cmd);
+          return;
+        }
+      }
+
       this.start(raw);
       return;
     }
+
+    // Active command: options take priority over global search
     const text = this.buffer.trim();
     this.buffer = '';
+    const prompt = this.running.prompt;
+    if (text && prompt.options?.length) {
+      const classified = classifyActiveCommandInput(text, true);
+      if (classified.kind === 'option-candidate') {
+        const matched = matchOption(text, prompt.options);
+        if (matched.ok) {
+          this.submitText(matched.optionId);
+          return;
+        }
+      }
+    }
     this.submitText(text);
+  }
+
+  /**
+   * ESC state machine:
+   * 1) cancel running command
+   * 2) clear command buffer / suggestions
+   * 3) clear selection (via host)
+   */
+  handleEscape(): EscAction {
+    if (this.running) {
+      this.cancel(true);
+      return { kind: 'cancel-command' };
+    }
+    if (this.buffer.trim().length > 0 || this.suggestionRows.length > 0) {
+      this.buffer = '';
+      this.suggestionRows = [];
+      this.suggestionIndex = -1;
+      this.message = null;
+      this.naturalLanguagePending = false;
+      return { kind: 'clear-buffer' };
+    }
+    if (this.host.getSelectedIds().length > 0) {
+      this.host.clearSelection?.();
+      this.host.activateSelect();
+      return { kind: 'clear-selection' };
+    }
+    this.host.activateSelect();
+    return { kind: 'idle' };
   }
 
   cancel(activateSelect = true): void {
@@ -256,8 +406,9 @@ export class CadCommandEngine {
     }
     this.running = null;
     this.buffer = '';
-    this.suggestions = [];
+    this.suggestionRows = [];
     this.suggestionIndex = -1;
+    this.naturalLanguagePending = false;
     if (activateSelect) this.host.activateSelect();
   }
 

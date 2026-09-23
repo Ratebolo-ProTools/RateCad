@@ -49,6 +49,8 @@ export const circleCommand: CadEngineCommand = {
   aliases: ['C'],
   description: 'Draw a circle by center and radius',
   tool: 'circle',
+  category: 'Draw',
+  keywords: ['circle', 'round', 'radius', 'diameter'],
   start: () => ({
     prompt: centerPrompt,
     status: 'CIRCLE: Specify center point:',

@@ -22,6 +22,14 @@ export interface CadCommandOption {
   aliases: string[];
 }
 
+export type CadCommandCategory =
+  | 'Draw'
+  | 'Modify'
+  | 'Annotate'
+  | 'Measure'
+  | 'Construction'
+  | 'Other';
+
 export interface CadPromptDefinition {
   id: string;
   message: string;
@@ -36,6 +44,7 @@ export type CadCommandPhase =
   | 'idle'
   | 'running'
   | 'awaiting-input'
+  | 'command-input'
   | 'complete'
   | 'cancelled';
 
@@ -47,6 +56,27 @@ export interface CadDynamicInput {
   label?: string;
 }
 
+/** Ranked suggestion row for command palette / dynamic input. */
+export interface CommandSuggestion {
+  commandId: string;
+  name: string;
+  /** Primary alias shown (e.g. C for CIRCLE). */
+  alias?: string;
+  description: string;
+  category: CadCommandCategory;
+  score: number;
+  matchKind:
+    | 'exact-alias'
+    | 'exact-name'
+    | 'name-prefix'
+    | 'alias-prefix'
+    | 'keyword-prefix'
+    | 'name-contains'
+    | 'keyword-contains'
+    | 'typo'
+    | 'recent';
+}
+
 export interface CadCommandUiState {
   phase: CadCommandPhase;
   commandName: string | null;
@@ -55,12 +85,17 @@ export interface CadCommandUiState {
   defaultText: string;
   message: string | null;
   history: string[];
+  /** Legacy string suggestions (alias/name tokens). */
   suggestions: string[];
   suggestionIndex: number;
+  /** Ranked structured suggestions for UI. */
+  suggestionRows: CommandSuggestion[];
   dynamic: CadDynamicInput | null;
   preview: PreviewGeometry | null;
   previewEntities?: import('@ratecad/core').Entity[] | null;
   hideEntityIds?: EntityId[];
+  /** True when idle buffer looks like natural language. */
+  naturalLanguagePending?: boolean;
 }
 
 export interface CadPointContext {
@@ -139,6 +174,10 @@ export interface CadEngineCommand {
   aliases: string[];
   description: string;
   tool: ToolId;
+  /** Search synonyms for suggestion engine. */
+  keywords?: string[];
+  category?: CadCommandCategory;
+  icon?: string;
   /** When true, start activates the tool then releases the engine (legacy tool path). */
   handoffToTool?: boolean;
   /** Whether this command may run nested (read-only / transparent). */
