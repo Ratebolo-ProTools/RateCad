@@ -255,3 +255,37 @@ export {
   findBoundaryAtPoint,
   splitSegmentsAtIntersections,
 } from './boundaryEngine.js';
+
+export type {
+  AppearancePatch,
+  PropertyCategory,
+  PropertyDataType,
+  PropertyDescriptor,
+  ResolvedPropertyPair,
+  StoredAppearanceView,
+} from './propertyEngine.js';
+export {
+  appearanceForNewEntity,
+  applyAppearancePatch,
+  applyGeometryPropertyEdit,
+  canEditEntityProperties,
+  colorEqual,
+  commonValue,
+  formatColorLabel,
+  formatLinetypeLabel,
+  formatLineweightLabel,
+  formatTransparencyLabel,
+  getCurrentAppearance,
+  getGeneralPropertyDescriptors,
+  getGeometryPropertyValue,
+  getPropertyDescriptors,
+  getStoredAppearance,
+  isArcPolyline,
+  isLayerLocked,
+  lineweightToScreenPx,
+  matchPropPatch,
+  registerGeometryProperties,
+  resolveEffectiveAppearance,
+  resolvePropertyPair,
+  setByLayerPatch,
+} from './propertyEngine.js';

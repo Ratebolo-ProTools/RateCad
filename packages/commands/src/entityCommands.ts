@@ -13,6 +13,7 @@ import {
   type RectangleEntity,
   type Vec2,
 } from '@ratecad/core';
+import { appearanceForNewEntity } from '@ratecad/geometry';
 import type { Command } from './bus.js';
 
 export class CreateLineCommand implements Command {
@@ -43,7 +44,7 @@ export class CreateLineCommand implements Command {
         start: { ...this.start },
         end: { ...this.end },
       },
-      properties: {},
+      properties: appearanceForNewEntity(doc),
     };
     return addEntity(doc, entity);
   }
@@ -81,7 +82,7 @@ export class CreateRectangleCommand implements Command {
         corner1: { ...this.corner1 },
         corner2: { ...this.corner2 },
       },
-      properties: {},
+      properties: appearanceForNewEntity(doc),
     };
     return addEntity(doc, entity);
   }
@@ -119,7 +120,7 @@ export class CreateCircleCommand implements Command {
         center: { ...this.center },
         radius: this.radius,
       },
-      properties: {},
+      properties: appearanceForNewEntity(doc),
     };
     return addEntity(doc, entity);
   }
@@ -162,7 +163,7 @@ export class CreatePolylineCommand implements Command {
         vertices: this.vertices.map((v) => ({ ...v })),
         closed: this.closed,
       },
-      properties: {},
+      properties: appearanceForNewEntity(doc),
     };
     return addEntity(doc, entity);
   }

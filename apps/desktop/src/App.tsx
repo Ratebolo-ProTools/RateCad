@@ -49,8 +49,10 @@ import {
   formatAreaInUnits,
   formatLength,
   formatLengthInUnits,
+  formatWorldLength,
   LENGTH_UNIT_LABELS,
   measuredLength,
+  parseLength,
   parseLengthInput,
   PolarTrackingEngine,
   resolveSnap,
@@ -59,6 +61,7 @@ import {
   toMillimeters,
   wallLength,
 } from '@ratecad/geometry';
+import { PropertiesPanel } from './PropertiesPanel';
 import { serializeDocument, tryParseDocument } from '@ratecad/io';
 import {
   appendInputBuffer,
@@ -1333,6 +1336,14 @@ export function App() {
         return;
       }
 
+      if (meta && event.key === '1' && !inField) {
+        event.preventDefault();
+        engineRef.current?.start('properties');
+        refreshEngineUi();
+        setStatusExtra('Properties panel');
+        return;
+      }
+
       if (!meta && !inField) {
         if (event.key === 'F3') {
           event.preventDefault();
@@ -2481,19 +2492,14 @@ export function App() {
             </ul>
           </section>
 
+          <PropertiesPanel
+            doc={doc}
+            bus={busRef.current}
+            fmtLen={(w) => fmtLen(doc, w)}
+          />
           <section className="panel-section">
-            <h2 className="panel-title">Properties</h2>
-            {multiSelectLabel ? (
-              <p className="empty-props">{multiSelectLabel}</p>
-            ) : selectedProps ? (
-              <>
-                {selectedProps.map((row) => (
-                  <div className="prop-row" key={row.label}>
-                    <label>{row.label}</label>
-                    <div className="value">{row.value}</div>
-                  </div>
-                ))}
-                {selected[0]?.type === 'text' ? (
+            <h2 className="panel-title">Object tools</h2>
+            {selected[0]?.type === 'text' ? (
                   <button
                     type="button"
                     className="mini-btn block"
@@ -2713,13 +2719,6 @@ export function App() {
                     </button>
                   </>
                 ) : null}
-              </>
-            ) : (
-              <p className="empty-props">
-                Select an object to inspect its properties. Drag grips to edit;
-                use Move / Copy for transforms.
-              </p>
-            )}
           </section>
         </aside>
       </div>

@@ -550,6 +550,30 @@
   font-size: 12px;
 }
 
+.prop-input {
+  height: 24px;
+  width: 100%;
+  max-width: 140px;
+  padding: 0 6px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+  background: var(--bg-panel-2);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.properties-engine.compact .prop-row label {
+  font-size: 11px;
+}
+
+@media (max-width: 720px) {
+  .right-panel {
+    max-height: 42vh;
+    overflow: auto;
+  }
+}
+
 .panel-title-row {
   display: flex;
   align-items: center;

@@ -1,3 +1,7 @@
+import type { AppearanceProperties, CurrentAppearance } from './appearance.js';
+
+export type { AppearanceProperties, CurrentAppearance } from './appearance.js';
+
 export type EntityId = string;
 export type LayerId = string;
 
@@ -11,7 +15,14 @@ export interface Vec2 {
 export interface Layer {
   id: LayerId;
   name: string;
+  /** Explicit layer color (hex). Used when entity color is ByLayer. */
   color: string;
+  /** Named linetype id (Continuous, Dashed, …). */
+  linetype: string;
+  /** Lineweight in millimetres. */
+  lineweight: number;
+  /** 0 = opaque, 100 = fully transparent. */
+  transparency: number;
   visible: boolean;
   locked: boolean;
 }
@@ -30,10 +41,7 @@ export interface LineEntity extends EntityBase {
     start: Vec2;
     end: Vec2;
   };
-  properties: {
-    color?: string;
-    lineWeight?: number;
-  };
+  properties: AppearanceProperties;
 }
 
 export interface RectangleEntity extends EntityBase {
@@ -42,10 +50,7 @@ export interface RectangleEntity extends EntityBase {
     corner1: Vec2;
     corner2: Vec2;
   };
-  properties: {
-    color?: string;
-    lineWeight?: number;
-  };
+  properties: AppearanceProperties;
 }
 
 export interface CircleEntity extends EntityBase {
@@ -54,10 +59,7 @@ export interface CircleEntity extends EntityBase {
     center: Vec2;
     radius: number;
   };
-  properties: {
-    color?: string;
-    lineWeight?: number;
-  };
+  properties: AppearanceProperties;
 }
 
 /** Ordered polyline — one structured entity, not unrelated lines. */
@@ -67,10 +69,7 @@ export interface PolylineEntity extends EntityBase {
     vertices: Vec2[];
     closed: boolean;
   };
-  properties: {
-    color?: string;
-    lineWeight?: number;
-  };
+  properties: AppearanceProperties;
 }
 
 export type DimensionKind =
@@ -84,7 +83,7 @@ export type DimensionKind =
 /**
  * Structured dimension — measurement is always derived from geometry.
  * Offset controls dimension-line placement (world units along the
- * perpendicular from the measured segment midpoint).
+ * perpendicular from the measured geometry midpoint).
  *
  * kind:
  *  - horizontal / vertical / aligned → linear (start–end)
@@ -107,9 +106,7 @@ export interface DimensionEntity extends EntityBase {
      */
     vertex?: Vec2;
   };
-  properties: {
-    color?: string;
-    lineWeight?: number;
+  properties: AppearanceProperties & {
     textHeight?: number;
     arrowSize?: number;
     precision?: number;
@@ -124,9 +121,7 @@ export interface TextEntity extends EntityBase {
     height: number;
     rotation: number;
   };
-  properties: {
-    color?: string;
-  };
+  properties: AppearanceProperties;
 }
 
 export interface LeaderEntity extends EntityBase {
@@ -139,8 +134,7 @@ export interface LeaderEntity extends EntityBase {
     content: string;
     textHeight: number;
   };
-  properties: {
-    color?: string;
+  properties: AppearanceProperties & {
     arrowSize?: number;
   };
 }
@@ -162,8 +156,7 @@ export interface WallEntity extends EntityBase {
     height: number;
     justification: WallJustification;
   };
-  properties: {
-    color?: string;
+  properties: AppearanceProperties & {
     material?: string;
     wallType?: string;
   };
@@ -187,8 +180,7 @@ export interface DoorEntity extends EntityBase {
     /** Opening angle in radians (typically π/2). */
     swingAngle: number;
   };
-  properties: {
-    color?: string;
+  properties: AppearanceProperties & {
     doorType?: string;
   };
 }
@@ -205,8 +197,7 @@ export interface WindowEntity extends EntityBase {
     height: number;
     sillHeight: number;
   };
-  properties: {
-    color?: string;
+  properties: AppearanceProperties & {
     windowType?: string;
   };
 }
@@ -231,10 +222,9 @@ export interface RoomEntity extends EntityBase {
     /** Area in document world square units (derived). */
     area: number;
   };
-  properties: {
+  properties: AppearanceProperties & {
     name: string;
     roomType?: string;
-    color?: string;
   };
 }
 
@@ -306,6 +296,12 @@ export interface DrawingSettings {
   filletRadius: number;
   /** FILLET Trim mode — trim/extend sources to the arc (default true). */
   filletTrim: boolean;
+  /** Current (default) appearance for newly created objects. */
+  currentAppearance: CurrentAppearance;
+  /** Global linetype scale multiplier (model space). */
+  linetypeScale: number;
+  /** Display setting — when false, draw thin strokes regardless of lineweight. */
+  showLineweights: boolean;
 }
 
 export interface DrawingMeta {
@@ -333,8 +329,8 @@ export const DOORS_LAYER_ID = 'layer-doors' as LayerId;
 export const WINDOWS_LAYER_ID = 'layer-windows' as LayerId;
 export const ROOMS_LAYER_ID = 'layer-rooms' as LayerId;
 
-export const SCHEMA_VERSION = 5;
-export const APP_VERSION = '0.6.0';
+export const SCHEMA_VERSION = 6;
+export const APP_VERSION = '0.7.0';
 
 export const DEFAULT_DIMENSION_STYLE: DimensionStyle = {
   textHeight: 0.35,

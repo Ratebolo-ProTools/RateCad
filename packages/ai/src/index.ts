@@ -521,3 +521,166 @@ export function proposeAiFilletCommand(
 }
 
 
+
+export type AiPropertyTarget = 'selection' | 'current';
+
+export type AiPropertyIntent =
+  | { kind: 'none' }
+  | {
+      kind: 'chprop' | 'setbylayer' | 'matchprop' | 'properties';
+      target: AiPropertyTarget;
+      changes?: {
+        color?: string;
+        layer?: string;
+        linetype?: string;
+        lineweightMm?: number;
+        transparency?: number;
+        byLayer?: boolean;
+      };
+      summary: string;
+      needsObjectPick: boolean;
+    };
+
+/**
+ * Translate natural language into structured property-command intent.
+ * Does NOT mutate documents — PropertyEngine / CHPROP execute the change.
+ */
+export function parseAiPropertyIntent(text: string): AiPropertyIntent {
+  const t = text.trim();
+  const lower = t.toLowerCase();
+  if (!t) return { kind: 'none' };
+
+  const isCurrent =
+    /\b(current|new|default)\b/.test(lower) &&
+    /\b(color|layer|linetype|lineweight|line weight|properties)\b/.test(lower);
+
+  const target: AiPropertyTarget = isCurrent ? 'current' : 'selection';
+
+  if (
+    /\b(match\s+prop|match\s+properties|copy\s+(the\s+)?properties)\b/.test(
+      lower,
+    )
+  ) {
+    return {
+      kind: 'matchprop',
+      target: 'selection',
+      summary: 'MATCHPROP — copy appearance between objects',
+      needsObjectPick: true,
+    };
+  }
+
+  if (
+    /\b(set\s*by\s*layer|bylayer|by\s+layer)\b/.test(lower) &&
+    /\b(set|make|change|reset|convert)\b/.test(lower)
+  ) {
+    return {
+      kind: 'setbylayer',
+      target,
+      changes: { byLayer: true },
+      summary:
+        target === 'current'
+          ? 'Set current appearance to ByLayer'
+          : 'SETBYLAYER — reset overrides to ByLayer',
+      needsObjectPick: target === 'selection',
+    };
+  }
+
+  if (
+    /\b(properties|props|inspector)\b/.test(lower) &&
+    /\b(open|show|view)\b/.test(lower)
+  ) {
+    return {
+      kind: 'properties',
+      target,
+      summary: 'Open PROPERTIES palette',
+      needsObjectPick: false,
+    };
+  }
+
+  const colorMatch = lower.match(
+    /\b(red|yellow|green|cyan|blue|magenta|white|black)\b|#([0-9a-f]{3,6})\b/i,
+  );
+  const layerMatch = t.match(/\b(?:layer|on(?:\s+the)?)\s+([A-Za-z0-9_-]+)\b/i);
+  const ltMatch = lower.match(
+    /\b(continuous|dashed|dotted|dashdot|center|hidden)\b/,
+  );
+  const lwMatch = lower.match(
+    /(\d+(?:\.\d+)?)\s*mm\b|\b(?:line\s*weight|lineweight)\s*(?:to\s*)?(\d+(?:\.\d+)?)/,
+  );
+
+  const isPropChange =
+    /\b(make|change|set|put)\b/.test(lower) &&
+    (colorMatch ||
+      layerMatch ||
+      ltMatch ||
+      lwMatch ||
+      /\b(color|linetype|line\s*type|transparency)\b/.test(lower));
+
+  if (!isPropChange) return { kind: 'none' };
+
+  const changes: {
+    color?: string;
+    layer?: string;
+    linetype?: string;
+    lineweightMm?: number;
+    transparency?: number;
+    byLayer?: boolean;
+  } = {};
+  if (colorMatch) {
+    changes.color = colorMatch[0]!.startsWith('#')
+      ? colorMatch[0]!
+      : colorMatch[1] ?? colorMatch[0]!;
+  }
+  if (layerMatch) changes.layer = layerMatch[1];
+  if (ltMatch) {
+    const raw = ltMatch[1]!;
+    changes.linetype = raw.charAt(0).toUpperCase() + raw.slice(1);
+  }
+  if (lwMatch) {
+    changes.lineweightMm = Number(lwMatch[1] ?? lwMatch[2]);
+  }
+
+  return {
+    kind: 'chprop',
+    target,
+    changes,
+    summary:
+      target === 'current'
+        ? 'Update CurrentProperties for new objects'
+        : 'CHPROP — change selected object appearance via PropertyEngine',
+    needsObjectPick: target === 'selection' && !/\bselected\b/.test(lower),
+  };
+}
+
+export function proposeAiPropertyCommand(text: string): {
+  summary: string;
+  commandAlias: 'CHPROP' | 'SETBYLAYER' | 'MATCHPROP' | 'PROPERTIES';
+  target: AiPropertyTarget;
+  changes?: {
+    color?: string;
+    layer?: string;
+    linetype?: string;
+    lineweightMm?: number;
+    transparency?: number;
+    byLayer?: boolean;
+  };
+  requireObjectPick: boolean;
+} | null {
+  const intent = parseAiPropertyIntent(text);
+  if (intent.kind === 'none') return null;
+  const alias =
+    intent.kind === 'chprop'
+      ? 'CHPROP'
+      : intent.kind === 'setbylayer'
+        ? 'SETBYLAYER'
+        : intent.kind === 'matchprop'
+          ? 'MATCHPROP'
+          : 'PROPERTIES';
+  return {
+    summary: intent.summary,
+    commandAlias: alias,
+    target: intent.target,
+    changes: intent.changes,
+    requireObjectPick: intent.needsObjectPick,
+  };
+}

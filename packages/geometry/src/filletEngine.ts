@@ -125,7 +125,7 @@ export function makeArcPolylineEntity(
     visible: template.visible,
     locked: false,
     geometry: { vertices: sampleFilletArc(spec), closed: false },
-    properties: { color: (template.properties as { color?: string }).color },
+    properties: structuredClone(template.properties ?? {}),
     metadata: {
       arc: {
         center: { ...spec.center },

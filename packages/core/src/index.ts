@@ -27,7 +27,42 @@ export type {
   WallEntity,
   WallJustification,
   WindowEntity,
+  AppearanceProperties,
+  CurrentAppearance,
 } from './types.js';
+
+export type {
+  ColorProperty,
+  EffectiveAppearance,
+  LinetypeDefinition,
+  LinetypeProperty,
+  LineweightProperty,
+  PropertyMode,
+  RgbColor,
+  TransparencyProperty,
+} from './appearance.js';
+
+export {
+  appearanceFromCurrent,
+  BY_LAYER_COLOR,
+  BY_LAYER_LINETYPE,
+  BY_LAYER_LINEWEIGHT,
+  BY_LAYER_TRANSPARENCY,
+  DEFAULT_CURRENT_APPEARANCE,
+  getLinetypeDefinition,
+  hexToRgb,
+  LINEWEIGHT_REGISTRY_MM,
+  LINETYPE_REGISTRY,
+  NAMED_COLORS,
+  nearestLineweightMm,
+  normalizeColorProperty,
+  normalizeLinetypeProperty,
+  normalizeLineweightProperty,
+  normalizeTransparencyProperty,
+  parseColorInput,
+  rgbToHex,
+  scaleLinetypePattern,
+} from './appearance.js';
 
 export {
   APP_VERSION,

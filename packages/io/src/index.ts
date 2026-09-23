@@ -1,9 +1,12 @@
 import {
   DEFAULT_CONSTRUCTION,
+  DEFAULT_CURRENT_APPEARANCE,
   DEFAULT_DIMENSION_STYLE,
   DEFAULT_LAYER_ID,
   SCHEMA_VERSION,
   createDefaultLayers,
+  normalizeColorProperty,
+  type CurrentAppearance,
   type DrawingDocument,
   type Entity,
   type Layer,
@@ -218,8 +221,58 @@ function assertLayer(raw: unknown, index: number): Layer {
     id: l.id as LayerId,
     name: l.name,
     color: typeof l.color === 'string' ? l.color : '#d4d4d4',
+    linetype: typeof l.linetype === 'string' ? l.linetype : 'Continuous',
+    lineweight:
+      typeof l.lineweight === 'number' && Number.isFinite(l.lineweight)
+        ? l.lineweight
+        : 0.25,
+    transparency:
+      typeof l.transparency === 'number' && Number.isFinite(l.transparency)
+        ? Math.max(0, Math.min(100, l.transparency))
+        : 0,
     visible: typeof l.visible === 'boolean' ? l.visible : true,
     locked: typeof l.locked === 'boolean' ? l.locked : false,
+  };
+}
+
+function parseCurrentAppearance(raw: unknown): CurrentAppearance {
+  if (!raw || typeof raw !== 'object') {
+    return { ...DEFAULT_CURRENT_APPEARANCE };
+  }
+  const r = raw as Record<string, unknown>;
+  return {
+    color: normalizeColorProperty(r.color as CurrentAppearance['color']),
+    linetype:
+      r.linetype == null
+        ? { mode: 'BY_LAYER' }
+        : typeof r.linetype === 'object'
+          ? (r.linetype as CurrentAppearance['linetype'])
+          : typeof r.linetype === 'string'
+            ? r.linetype.toUpperCase() === 'BYLAYER' ||
+              r.linetype.toUpperCase() === 'BY_LAYER'
+              ? { mode: 'BY_LAYER' }
+              : { mode: 'EXPLICIT', value: r.linetype }
+            : { mode: 'BY_LAYER' },
+    linetypeScale:
+      typeof r.linetypeScale === 'number' && Number.isFinite(r.linetypeScale)
+        ? r.linetypeScale
+        : 1,
+    lineweight:
+      r.lineweight == null
+        ? { mode: 'BY_LAYER' }
+        : typeof r.lineweight === 'object'
+          ? (r.lineweight as CurrentAppearance['lineweight'])
+          : typeof r.lineweight === 'number'
+            ? { mode: 'EXPLICIT', value: r.lineweight }
+            : { mode: 'BY_LAYER' },
+    transparency:
+      r.transparency == null
+        ? { mode: 'BY_LAYER' }
+        : typeof r.transparency === 'object'
+          ? (r.transparency as CurrentAppearance['transparency'])
+          : typeof r.transparency === 'number'
+            ? { mode: 'EXPLICIT', value: r.transparency }
+            : { mode: 'BY_LAYER' },
   };
 }
 
@@ -402,6 +455,16 @@ function migrateDocument(
       filletTrim:
         typeof settingsRaw.filletTrim === 'boolean'
           ? settingsRaw.filletTrim
+          : true,
+      currentAppearance: parseCurrentAppearance(settingsRaw.currentAppearance),
+      linetypeScale:
+        typeof settingsRaw.linetypeScale === 'number' &&
+        Number.isFinite(settingsRaw.linetypeScale)
+          ? settingsRaw.linetypeScale
+          : 1,
+      showLineweights:
+        typeof settingsRaw.showLineweights === 'boolean'
+          ? settingsRaw.showLineweights
           : true,
       dimensionStyle: {
         textHeight:

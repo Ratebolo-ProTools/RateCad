@@ -245,6 +245,9 @@ export class CreateLayerCommand implements Command {
       id: id ?? createLayerId('layer'),
       name: trimmed,
       color,
+      linetype: 'Continuous',
+      lineweight: 0.25,
+      transparency: 0,
       visible: true,
       locked: false,
     };
@@ -281,6 +284,9 @@ export class UpdateLayerCommand implements Command {
     this.before = {
       name: before.name,
       color: before.color,
+      linetype: before.linetype,
+      lineweight: before.lineweight,
+      transparency: before.transparency,
       visible: before.visible,
       locked: before.locked,
     };

@@ -22,6 +22,21 @@ import {
   WALLS_LAYER_ID,
   WINDOWS_LAYER_ID,
 } from './types.js';
+import { DEFAULT_CURRENT_APPEARANCE } from './appearance.js';
+
+function withLayerDefaults(
+  partial: Pick<Layer, 'id' | 'name' | 'color'> &
+    Partial<Omit<Layer, 'id' | 'name' | 'color'>>,
+): Layer {
+  return {
+    linetype: 'Continuous',
+    lineweight: 0.25,
+    transparency: 0,
+    visible: true,
+    locked: false,
+    ...partial,
+  };
+}
 
 let idCounter = 0;
 
@@ -41,15 +56,61 @@ export function resetIdCounter(): void {
 
 export function createDefaultLayers(): Layer[] {
   return [
-    { id: DEFAULT_LAYER_ID, name: '0', color: '#d4d4d4', visible: true, locked: false },
-    { id: WALLS_LAYER_ID, name: 'Walls', color: '#e8e8e8', visible: true, locked: false },
-    { id: DOORS_LAYER_ID, name: 'Doors', color: '#8ec8ff', visible: true, locked: false },
-    { id: WINDOWS_LAYER_ID, name: 'Windows', color: '#7ad4c8', visible: true, locked: false },
-    { id: ROOMS_LAYER_ID, name: 'Rooms', color: '#c9a86c', visible: true, locked: false },
-    { id: 'layer-dimensions' as LayerId, name: 'Dimensions', color: '#f0c674', visible: true, locked: false },
-    { id: 'layer-text' as LayerId, name: 'Text', color: '#c8ced6', visible: true, locked: false },
-    { id: 'layer-construction' as LayerId, name: 'Construction', color: '#6a737d', visible: true, locked: false },
-    { id: 'layer-annotations' as LayerId, name: 'Annotations', color: '#d2a8ff', visible: true, locked: false },
+    withLayerDefaults({
+      id: DEFAULT_LAYER_ID,
+      name: '0',
+      color: '#d4d4d4',
+      lineweight: 0.25,
+    }),
+    withLayerDefaults({
+      id: WALLS_LAYER_ID,
+      name: 'Walls',
+      color: '#e8e8e8',
+      lineweight: 0.5,
+    }),
+    withLayerDefaults({
+      id: DOORS_LAYER_ID,
+      name: 'Doors',
+      color: '#8ec8ff',
+      lineweight: 0.35,
+    }),
+    withLayerDefaults({
+      id: WINDOWS_LAYER_ID,
+      name: 'Windows',
+      color: '#7ad4c8',
+      lineweight: 0.35,
+    }),
+    withLayerDefaults({
+      id: ROOMS_LAYER_ID,
+      name: 'Rooms',
+      color: '#c9a86c',
+      lineweight: 0.25,
+    }),
+    withLayerDefaults({
+      id: 'layer-dimensions' as LayerId,
+      name: 'Dimensions',
+      color: '#f0c674',
+      lineweight: 0.18,
+    }),
+    withLayerDefaults({
+      id: 'layer-text' as LayerId,
+      name: 'Text',
+      color: '#c8ced6',
+      lineweight: 0.18,
+    }),
+    withLayerDefaults({
+      id: 'layer-construction' as LayerId,
+      name: 'Construction',
+      color: '#6a737d',
+      linetype: 'Dashed',
+      lineweight: 0.13,
+    }),
+    withLayerDefaults({
+      id: 'layer-annotations' as LayerId,
+      name: 'Annotations',
+      color: '#d2a8ff',
+      lineweight: 0.18,
+    }),
   ];
 }
 
@@ -88,7 +149,13 @@ export function createEmptyDocument(
       trimEraseUntrimmable: false,
       filletRadius: 0,
       filletTrim: true,
+      linetypeScale: 1,
+      showLineweights: true,
       ...settings,
+      currentAppearance: {
+        ...DEFAULT_CURRENT_APPEARANCE,
+        ...(settings?.currentAppearance ?? {}),
+      },
       dimensionStyle: {
         ...DEFAULT_DIMENSION_STYLE,
         ...(settings?.dimensionStyle ?? {}),

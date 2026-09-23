@@ -17,7 +17,7 @@ describe('DrawingDocument', () => {
 
   it('creates an empty document with default layers and units', () => {
     const doc = createEmptyDocument('Test');
-    expect(doc.schemaVersion).toBe(5);
+    expect(doc.schemaVersion).toBe(6);
     expect(doc.meta.name).toBe('Test');
     expect(doc.entities).toEqual([]);
     expect(doc.layers.length).toBeGreaterThanOrEqual(9);

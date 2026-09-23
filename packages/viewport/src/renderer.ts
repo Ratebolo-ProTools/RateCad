@@ -17,8 +17,10 @@ import {
   formatAngleDegrees,
   formatLengthInUnits,
   formatRoomLabelLines,
+  lineweightToScreenPx,
   measuredAngleDeg,
   measuredLength,
+  resolveEffectiveAppearance,
   wallOutlineSegments,
   windowLayout,
   type SnapResult,
@@ -358,7 +360,18 @@ function strokeEntity(
   height: number,
   color: string,
   lineWidth: number,
+  dashPatternWorld: number[] = [],
+  alpha = 1,
 ): void {
+  ctx.save();
+  ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
+  if (dashPatternWorld.length > 0) {
+    ctx.setLineDash(
+      dashPatternWorld.map((v) => Math.max(0.5, Math.abs(v) * camera.zoom)),
+    );
+  } else {
+    ctx.setLineDash([]);
+  }
   switch (entity.type) {
     case 'line': {
       ctx.strokeStyle = color;
@@ -439,17 +452,17 @@ function strokeEntity(
         ctx.lineTo(sb.x, sb.y);
       }
       ctx.stroke();
-      // Centerline reference (light)
-      ctx.save();
+      // centerline reference
       ctx.setLineDash([3, 3]);
-      ctx.globalAlpha = 0.35;
       ctx.beginPath();
-      const cs = worldToScreen(entity.geometry.start, camera, width, height);
-      const ce = worldToScreen(entity.geometry.end, camera, width, height);
-      ctx.moveTo(cs.x, cs.y);
-      ctx.lineTo(ce.x, ce.y);
+      {
+        const a = worldToScreen(entity.geometry.start, camera, width, height);
+        const b = worldToScreen(entity.geometry.end, camera, width, height);
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(b.x, b.y);
+      }
       ctx.stroke();
-      ctx.restore();
+      ctx.setLineDash([]);
       break;
     }
     case 'door': {
@@ -574,6 +587,7 @@ function strokeEntity(
       break;
     }
   }
+  ctx.restore();
 }
 
 function drawGrid(
@@ -831,11 +845,32 @@ export function renderDocument(
     const layer = doc.layers.find((l) => l.id === entity.layerId);
     if (layer && !layer.visible) continue;
 
+    const effective = resolveEffectiveAppearance(entity, doc, theme.entity);
     const isSelected = selected.has(entity.id);
     const isHovered =
       !!options.hoveredEntityId &&
       options.hoveredEntityId === entity.id &&
       !isSelected;
+    const color = isSelected
+      ? theme.selected
+      : isHovered
+        ? theme.hover
+        : effective.colorHex;
+    const lineWidth = isSelected
+      ? Math.max(2, lineweightToScreenPx(
+          effective.lineweightMm,
+          camera.zoom,
+          doc.settings.showLineweights ?? true,
+          2,
+        ))
+      : isHovered
+        ? 1.75
+        : lineweightToScreenPx(
+            effective.lineweightMm,
+            camera.zoom,
+            doc.settings.showLineweights ?? true,
+            1.25,
+          );
     strokeEntity(
       ctx,
       entity,
@@ -843,12 +878,10 @@ export function renderDocument(
       camera,
       width,
       height,
-      isSelected
-        ? theme.selected
-        : isHovered
-          ? theme.hover
-          : entity.properties.color ?? layer?.color ?? theme.entity,
-      isSelected ? 2 : isHovered ? 1.75 : 1.25,
+      color,
+      lineWidth,
+      isSelected || isHovered ? [] : effective.linetypePattern,
+      isSelected || isHovered ? 1 : effective.alpha,
     );
     if (isSelected && !options.previewEntities?.length) {
       autoGrips.push(

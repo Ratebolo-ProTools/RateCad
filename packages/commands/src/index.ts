@@ -54,3 +54,11 @@ export {
   SetDrawingUnitsCommand,
   scaleEntityToWorldUnit,
 } from './settingsCommands.js';
+export {
+  ChangeEntitiesAppearanceCommand,
+  MatchPropertiesCommand,
+  SetByLayerCommand,
+  SetCurrentAppearanceCommand,
+  SetShowLineweightsCommand,
+  UpdateEntityGeometryPropertyCommand,
+} from './propertyCommands.js';
