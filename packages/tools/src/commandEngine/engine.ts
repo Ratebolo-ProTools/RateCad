@@ -23,6 +23,7 @@ import type {
 
 export interface EngineHost {
   getUnits(): LengthUnit;
+  getWorldUnit(): LengthUnit;
   getSelectedIds(): EntityId[];
   getCursor(): Vec2 | null;
   /** Activate matching toolbar tool for UI consistency. */
@@ -313,6 +314,7 @@ export class CadCommandEngine {
         cursor: this.host.getCursor(),
         angleOverrideDeg: r.angleOverrideDeg,
         units: this.host.getUnits(),
+        worldUnit: this.host.getWorldUnit(),
       });
       if (isAngleOverrideResult(parsed)) {
         r.angleOverrideDeg = parsed.angleOverrideDeg;
@@ -423,6 +425,7 @@ export class CadCommandEngine {
   private ctx(lastPoint: Vec2 | null): CadCommandContext {
     return {
       units: this.host.getUnits(),
+      worldUnit: this.host.getWorldUnit(),
       lastPoint,
       cursor: this.host.getCursor(),
       angleOverrideDeg: this.running?.angleOverrideDeg ?? null,

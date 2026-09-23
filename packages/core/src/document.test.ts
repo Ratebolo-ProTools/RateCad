@@ -17,7 +17,7 @@ describe('DrawingDocument', () => {
 
   it('creates an empty document with default layers and units', () => {
     const doc = createEmptyDocument('Test');
-    expect(doc.schemaVersion).toBe(4);
+    expect(doc.schemaVersion).toBe(5);
     expect(doc.meta.name).toBe('Test');
     expect(doc.entities).toEqual([]);
     expect(doc.layers.length).toBeGreaterThanOrEqual(9);
@@ -34,7 +34,8 @@ describe('DrawingDocument', () => {
         'Annotations',
       ]),
     );
-    expect(doc.settings.units).toBe('ft');
+    expect(doc.settings.units).toBe('ft-in');
+    expect(doc.settings.worldUnit).toBe('ft');
     expect(doc.settings.dimensionStyle).toBeDefined();
     expect(doc.currentLayerId).toBe('layer-0');
     expect(doc.selection).toEqual([]);

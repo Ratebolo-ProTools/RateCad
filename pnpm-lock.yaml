@@ -80,6 +80,9 @@ importers:
       '@ratecad/core':
         specifier: workspace:*
         version: link:../core
+      '@ratecad/geometry':
+        specifier: workspace:*
+        version: link:../geometry
     devDependencies:
       typescript:
         specifier: ^5.8.2

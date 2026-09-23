@@ -157,6 +157,14 @@ export function dimensionLayout(dim: DimensionEntity['geometry']): {
     const x = start.x;
     a = { x, y: start.y };
     b = { x, y: end.y };
+  } else if (kind === 'radius' || kind === 'diameter') {
+    // Radial: start = center, end = rim — dimension along the radius
+    a = { ...start };
+    b = { ...end };
+  } else if (kind === 'angular') {
+    // Use chord between ray points for layout line
+    a = { ...start };
+    b = { ...end };
   }
   const dir = normalize({ x: b.x - a.x, y: b.y - a.y });
   if (!dir) return null;

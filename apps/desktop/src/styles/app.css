@@ -336,6 +336,22 @@
   margin-bottom: 8px;
 }
 
+.prop-row.units-convert-row {
+  align-items: start;
+}
+
+@media (max-width: 720px) {
+  .prop-row {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+
+  .prop-select {
+    width: 100%;
+    max-width: 100%;
+  }
+}
+
 .prop-row label {
   color: var(--text-dim);
   font-size: 12px;

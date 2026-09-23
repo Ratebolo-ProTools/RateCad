@@ -1,7 +1,7 @@
 export type EntityId = string;
 export type LayerId = string;
 
-export type LengthUnit = 'ft' | 'm' | 'mm' | 'in';
+export type LengthUnit = 'ft' | 'ft-in' | 'in' | 'm' | 'cm' | 'mm';
 
 export interface Vec2 {
   x: number;
@@ -73,12 +73,23 @@ export interface PolylineEntity extends EntityBase {
   };
 }
 
-export type DimensionKind = 'horizontal' | 'vertical' | 'aligned';
+export type DimensionKind =
+  | 'horizontal'
+  | 'vertical'
+  | 'aligned'
+  | 'angular'
+  | 'radius'
+  | 'diameter';
 
 /**
- * Structured dimension — measurement is always derived from start/end.
+ * Structured dimension — measurement is always derived from geometry.
  * Offset controls dimension-line placement (world units along the
  * perpendicular from the measured segment midpoint).
+ *
+ * kind:
+ *  - horizontal / vertical / aligned → linear (start–end)
+ *  - radius / diameter → start = center, end = rim point
+ *  - angular → start/end define rays from an implied vertex at midpoint offset
  */
 export interface DimensionEntity extends EntityBase {
   type: 'dimension';
@@ -90,6 +101,11 @@ export interface DimensionEntity extends EntityBase {
     offset: number;
     /** Optional text shift along the dimension line (0 = centered). */
     textOffset?: number;
+    /**
+     * Angular dimensions: third point (vertex). When omitted, vertex is
+     * inferred as the intersection / start point.
+     */
+    vertex?: Vec2;
   };
   properties: {
     color?: string;
@@ -256,8 +272,20 @@ export interface ConstructionDefaults {
 }
 
 export interface DrawingSettings {
+  /**
+   * Canonical storage unit for all coordinates/lengths in this document.
+   * Changing display `units` must NOT change geometry or worldUnit.
+   */
+  worldUnit: LengthUnit;
+  /** Linear display unit (formatting only). */
   units: LengthUnit;
+  /** Decimal display precision (0–4). */
   precision: number;
+  /**
+   * Architectural fractional-inch denominator when units is `ft-in`
+   * (1 | 2 | 4 | 8 | 16 | 32).
+   */
+  fractionDenominator: number;
   gridSize: number;
   /** Master snap toggle (grid + object snaps). */
   snapToGrid: boolean;
@@ -290,8 +318,8 @@ export const DOORS_LAYER_ID = 'layer-doors' as LayerId;
 export const WINDOWS_LAYER_ID = 'layer-windows' as LayerId;
 export const ROOMS_LAYER_ID = 'layer-rooms' as LayerId;
 
-export const SCHEMA_VERSION = 4;
-export const APP_VERSION = '0.5.0';
+export const SCHEMA_VERSION = 5;
+export const APP_VERSION = '0.6.0';
 
 export const DEFAULT_DIMENSION_STYLE: DimensionStyle = {
   textHeight: 0.35,

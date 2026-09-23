@@ -21,6 +21,7 @@ function makeEngine() {
   const cursor = { x: 10, y: 0 };
   const host = {
     getUnits: () => bus.getDocument().settings.units,
+    getWorldUnit: () => bus.getDocument().settings.worldUnit ?? 'ft',
     getSelectedIds: () => bus.getDocument().selection,
     getCursor: () => cursor,
     activateTool: (t: string) => {
@@ -70,12 +71,13 @@ describe('command engine registry', () => {
 });
 
 describe('point / distance / angle parsers', () => {
-  const units = 'ft' as const;
+  const units = 'ft-in' as const;
   const ctx = {
     lastPoint: { x: 0, y: 0 },
     cursor: { x: 10, y: 0 },
     angleOverrideDeg: null as number | null,
     units,
+    worldUnit: 'ft' as const,
   };
 
   it('parses absolute and relative Cartesian', () => {
@@ -118,8 +120,11 @@ describe('point / distance / angle parsers', () => {
   });
 
   it('distance and angle parsers', () => {
-    expect(parseDistanceInput('10', units)).toMatchObject({ ok: true, value: 10 });
-    expect(parseDistanceInput('abc', units).ok).toBe(false);
+    expect(parseDistanceInput('10', 'ft-in', 'ft')).toMatchObject({
+      ok: true,
+      value: 10,
+    });
+    expect(parseDistanceInput('abc', 'ft-in', 'ft').ok).toBe(false);
     expect(parseAngleInput('45')).toMatchObject({ ok: true, degrees: 45 });
     expect(parseAngleInput('x').ok).toBe(false);
   });

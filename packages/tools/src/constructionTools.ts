@@ -197,7 +197,8 @@ export function commitWallThickness(
   buffer: string,
 ): ToolSession {
   const units = bus.getDocument().settings.units;
-  const value = parseLengthInput(buffer, units);
+  const worldUnit = bus.getDocument().settings.worldUnit ?? 'ft';
+  const value = parseLengthInput(buffer, units, worldUnit);
   if (value == null || !(value > 0)) {
     return {
       ...session,

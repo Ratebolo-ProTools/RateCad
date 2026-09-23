@@ -122,7 +122,7 @@ export const rectangleCommand: CadEngineCommand = {
       }
     }
     if (prompt.id === 'length') {
-      const d = parseDistanceInput(text, ctx.units);
+      const d = parseDistanceInput(text, ctx.units, ctx.worldUnit);
       if (!d.ok) return { kind: 'reject', message: d.error, prompt };
       s.length = d.value;
       return {
@@ -139,7 +139,7 @@ export const rectangleCommand: CadEngineCommand = {
       };
     }
     if (prompt.id === 'width') {
-      const d = parseDistanceInput(text, ctx.units);
+      const d = parseDistanceInput(text, ctx.units, ctx.worldUnit);
       if (!d.ok) return { kind: 'reject', message: d.error, prompt };
       s.width = d.value;
       return {

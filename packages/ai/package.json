@@ -18,7 +18,8 @@
   },
   "dependencies": {
     "@ratecad/commands": "workspace:*",
-    "@ratecad/core": "workspace:*"
+    "@ratecad/core": "workspace:*",
+    "@ratecad/geometry": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.8.2",

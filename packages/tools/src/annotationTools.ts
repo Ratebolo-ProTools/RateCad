@@ -71,6 +71,7 @@ export function handleDimensionPointerDown(
 ): ToolSession {
   const layerId = getCurrentLayer(bus.getDocument()).id;
   const kind = session.dimKind;
+  const needThree = kind === 'angular';
 
   // Phase 1: first point
   if (session.vertices.length === 0) {
@@ -81,7 +82,11 @@ export function handleDimensionPointerDown(
       anchor: point,
       previewEntities: null,
       lastSnap: snap,
-      statusMessage: `Dimension (${kind}): specify second point`,
+      statusMessage: needThree
+        ? `Dimension (angular): specify first ray point`
+        : kind === 'radius' || kind === 'diameter'
+          ? `Dimension (${kind}): specify rim point`
+          : `Dimension (${kind}): specify second point`,
     };
   }
 
@@ -93,6 +98,16 @@ export function handleDimensionPointerDown(
         ...session,
         lastSnap: snap,
         statusMessage: `Dimension (${kind}): points too close — pick again`,
+      };
+    }
+    if (needThree) {
+      return {
+        ...session,
+        mode: 'dimension',
+        vertices: [start, point],
+        anchor: point,
+        lastSnap: snap,
+        statusMessage: `Dimension (angular): specify second ray point`,
       };
     }
     return {
@@ -108,7 +123,62 @@ export function handleDimensionPointerDown(
     };
   }
 
-  // Phase 3: place offset
+  // Angular: third ray point
+  if (needThree && session.vertices.length === 2) {
+    const vertex = session.vertices[0]!;
+    const rayA = session.vertices[1]!;
+    if (distance(vertex, point) < 1e-9) {
+      return {
+        ...session,
+        lastSnap: snap,
+        statusMessage: 'Dimension (angular): points too close — pick again',
+      };
+    }
+    return {
+      ...session,
+      mode: 'dimension',
+      vertices: [vertex, rayA, point],
+      anchor: point,
+      previewEntities: [
+        previewDimension(kind, rayA, point, 1, layerId),
+      ],
+      lastSnap: snap,
+      statusMessage: 'Dimension (angular): place dimension arc',
+    };
+  }
+
+  // Final: place offset
+  if (needThree && session.vertices.length >= 3) {
+    const vertex = session.vertices[0]!;
+    const rayA = session.vertices[1]!;
+    const rayB = session.vertices[2]!;
+    const offset = offsetFromPlacement(rayA, rayB, 'aligned', point);
+    try {
+      bus.execute(
+        new CreateDimensionCommand(
+          kind,
+          rayA,
+          rayB,
+          offset,
+          layerId,
+          undefined,
+          vertex,
+        ),
+      );
+    } catch {
+      return {
+        ...cancelTool(session),
+        lastSnap: snap,
+        statusMessage: 'Dimension failed: invalid geometry',
+      };
+    }
+    return {
+      ...cancelTool(session),
+      lastSnap: snap,
+      statusMessage: toolStatus('dimension', kind),
+    };
+  }
+
   const start = session.vertices[0]!;
   const end = session.vertices[1]!;
   const offset = offsetFromPlacement(start, end, kind, point);

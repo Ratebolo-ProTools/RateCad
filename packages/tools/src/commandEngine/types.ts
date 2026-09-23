@@ -68,7 +68,10 @@ export interface CadPointContext {
   cursor: Vec2 | null;
   /** Active angle override in degrees, or null. */
   angleOverrideDeg: number | null;
+  /** Display / default unit for bare numbers. */
   units: LengthUnit;
+  /** Canonical storage unit. */
+  worldUnit: LengthUnit;
 }
 
 export type CadParsedPoint =
@@ -90,6 +93,7 @@ export type CadParsedOption =
 /** Runtime context passed into command handlers. */
 export interface CadCommandContext {
   units: LengthUnit;
+  worldUnit: LengthUnit;
   lastPoint: Vec2 | null;
   cursor: Vec2 | null;
   angleOverrideDeg: number | null;

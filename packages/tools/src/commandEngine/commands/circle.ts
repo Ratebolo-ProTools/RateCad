@@ -74,7 +74,7 @@ export const circleCommand: CadEngineCommand = {
   onText: (text, prompt, ctx, state) => {
     const s = state as CircleState;
     if (prompt.id === 'radius') {
-      const d = parseDistanceInput(text, ctx.units);
+      const d = parseDistanceInput(text, ctx.units, ctx.worldUnit);
       if (!d.ok) return { kind: 'reject', message: d.error, prompt };
       return commitRadius(s, d.value, prompt);
     }

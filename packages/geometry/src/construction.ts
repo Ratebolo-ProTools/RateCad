@@ -9,6 +9,7 @@ import type {
 } from '@ratecad/core';
 import { distance } from './math.js';
 import { normalize } from './intersect.js';
+import { convertLength, parseLength } from './unitEngine.js';
 
 export interface WallLayout {
   start: Vec2;
@@ -338,52 +339,19 @@ export function wallOutlineSegments(
   return segments;
 }
 
-/** Parse a length typed by the user in the drawing's units. */
+/**
+ * Parse a length typed by the user into world storage units.
+ *
+ * @param units Display / default unit for bare numbers (settings.units)
+ * @param worldUnit Canonical storage unit (settings.worldUnit) — defaults to units
+ */
 export function parseLengthInput(
   raw: string,
   units: LengthUnit,
+  worldUnit: LengthUnit = units === 'ft-in' ? 'ft' : units,
 ): number | null {
-  const text = raw.trim().toLowerCase().replace(/,/g, '');
-  if (!text) return null;
-
-  // Architectural: 9", 0'-9", 1'-6", 1'6"
-  const arch = text.match(/^(-?\d+)'\s*-?\s*(\d+(?:\.\d+)?)"?$/);
-  if (arch) {
-    const feet = Number(arch[1]);
-    const inches = Number(arch[2]);
-    if (!Number.isFinite(feet) || !Number.isFinite(inches)) return null;
-    const valueFt = feet + inches / 12;
-    return convertToWorld(valueFt, 'ft', units);
-  }
-  const inchesOnly = text.match(/^(-?\d+(?:\.\d+)?)\s*"$/);
-  if (inchesOnly) {
-    const inches = Number(inchesOnly[1]);
-    if (!Number.isFinite(inches)) return null;
-    return convertToWorld(inches / 12, 'ft', units);
-  }
-  const feetOnly = text.match(/^(-?\d+(?:\.\d+)?)\s*'$/);
-  if (feetOnly) {
-    const feet = Number(feetOnly[1]);
-    if (!Number.isFinite(feet)) return null;
-    return convertToWorld(feet, 'ft', units);
-  }
-
-  // Explicit unit suffix
-  const withUnit = text.match(/^(-?\d+(?:\.\d+)?)\s*(mm|cm|m|ft|in|")$/);
-  if (withUnit) {
-    const n = Number(withUnit[1]);
-    if (!Number.isFinite(n)) return null;
-    const u = withUnit[2] === '"' || withUnit[2] === 'in' ? 'in' : withUnit[2];
-    if (u === 'cm') return convertToWorld(n / 100, 'm', units);
-    if (u === 'mm' || u === 'm' || u === 'ft' || u === 'in') {
-      return convertToWorld(n, u, units);
-    }
-  }
-
-  const plain = Number(text);
-  if (!Number.isFinite(plain) || plain === 0) return null;
-  // Bare number = current document units
-  return plain;
+  const parsed = parseLength(raw, worldUnit, units);
+  return parsed ? parsed.worldValue : null;
 }
 
 /** Convert a length expressed in `from` into document world units (`world`). */
@@ -392,31 +360,9 @@ export function convertToWorld(
   from: LengthUnit,
   world: LengthUnit,
 ): number {
-  const toMeters = (v: number, u: LengthUnit): number => {
-    switch (u) {
-      case 'm':
-        return v;
-      case 'mm':
-        return v / 1000;
-      case 'ft':
-        return v * 0.3048;
-      case 'in':
-        return v * 0.0254;
-    }
-  };
-  const fromMeters = (v: number, u: LengthUnit): number => {
-    switch (u) {
-      case 'm':
-        return v;
-      case 'mm':
-        return v * 1000;
-      case 'ft':
-        return v / 0.3048;
-      case 'in':
-        return v / 0.0254;
-    }
-  };
-  return fromMeters(toMeters(value, from), world);
+  const fromUnit: LengthUnit = from === 'ft-in' ? 'ft' : from;
+  const toUnit: LengthUnit = world === 'ft-in' ? 'ft' : world;
+  return convertLength(value, fromUnit, toUnit);
 }
 
 export function validateWallGeometry(wall: WallEntity): boolean {

@@ -43,7 +43,42 @@ export {
   vecDelta,
 } from './transform.js';
 
-export { formatLengthInUnits, measuredLength } from './units.js';
+export {
+  formatAngleDegrees,
+  formatLengthInUnits,
+  measuredAngleDeg,
+  measuredLength,
+} from './units.js';
+
+export type {
+  DecimalPrecision,
+  FractionDenominator,
+  ParsedLength,
+} from './unitEngine.js';
+export {
+  DECIMAL_PRECISIONS,
+  FRACTION_DENOMINATORS,
+  LENGTH_UNIT_LABELS,
+  MM_PER,
+  SUPPORTED_LENGTH_UNITS,
+  convertArea,
+  convertLength,
+  convertVolume,
+  displayToWorld,
+  formatArchitecturalFeet,
+  formatLengthValue,
+  formatWorldArea,
+  formatWorldLength,
+  formatWorldVolume,
+  fromMillimeters,
+  normalizeLengthUnit,
+  parseArchitecturalLength,
+  parseLength,
+  resolveUnitAlias,
+  suggestedGridSize,
+  toMillimeters,
+  worldToDisplay,
+} from './unitEngine.js';
 
 export type { OpeningLayout, WallLayout } from './construction.js';
 export {

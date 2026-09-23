@@ -111,7 +111,7 @@ export const lineCommand: CadEngineCommand = {
       return { kind: 'complete', status: 'LINE cancelled (no segment)' };
     }
     // Distance fallback handled by engine for point prompts
-    const dist = parseDistanceInput(text, ctx.units);
+    const dist = parseDistanceInput(text, ctx.units, ctx.worldUnit);
     if (dist.ok) {
       return {
         kind: 'reject',

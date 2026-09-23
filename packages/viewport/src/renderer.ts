@@ -14,8 +14,10 @@ import {
   dimensionLayout,
   distance,
   doorLayout,
+  formatAngleDegrees,
   formatLengthInUnits,
   formatRoomLabelLines,
+  measuredAngleDeg,
   measuredLength,
   wallOutlineSegments,
   windowLayout,
@@ -206,11 +208,21 @@ function strokeDimension(
   );
 
   const value = measuredLength(start, end, entity.geometry.kind);
-  const label = formatLengthInUnits(
-    value,
-    doc.settings.units,
-    precision,
-  );
+  const worldUnit = doc.settings.worldUnit ?? 'ft';
+  const displayUnit = doc.settings.units;
+  const frac = doc.settings.fractionDenominator ?? 16;
+  let label: string;
+  if (entity.geometry.kind === 'angular') {
+    const vertex = entity.geometry.vertex ?? start;
+    const deg = measuredAngleDeg(vertex, start, end);
+    label = formatAngleDegrees(deg, precision);
+  } else if (entity.geometry.kind === 'radius') {
+    label = `R ${formatLengthInUnits(value, displayUnit, precision, worldUnit, frac)}`;
+  } else if (entity.geometry.kind === 'diameter') {
+    label = `Ø ${formatLengthInUnits(value, displayUnit, precision, worldUnit, frac)}`;
+  } else {
+    label = formatLengthInUnits(value, displayUnit, precision, worldUnit, frac);
+  }
 
   // Screen-stable minimum text size so annotations stay readable when zoomed out
   const screenHeight = Math.max(textH * camera.zoom, 11);
@@ -530,6 +542,8 @@ function strokeEntity(
         entity,
         doc.settings.units,
         doc.settings.precision,
+        doc.settings.worldUnit ?? 'ft',
+        doc.settings.fractionDenominator ?? 16,
       );
       const lp = worldToScreen(
         entity.geometry.labelPosition,

@@ -16,6 +16,7 @@ import {
 } from '@ratecad/core';
 import { distance } from './math.js';
 import { formatLengthInUnits } from './units.js';
+import { formatWorldArea } from './unitEngine.js';
 
 export interface DetectedLoop {
   wallIds: EntityId[];
@@ -113,18 +114,9 @@ export function formatAreaInUnits(
   area: number,
   units: LengthUnit,
   precision = 2,
+  worldUnit: LengthUnit = units === 'ft-in' ? 'ft' : units,
 ): string {
-  if (!Number.isFinite(area) || area < 0) return '—';
-  switch (units) {
-    case 'ft':
-      return `${area.toFixed(Math.max(0, precision))} sq ft`;
-    case 'in':
-      return `${area.toFixed(Math.max(0, precision))} sq in`;
-    case 'm':
-      return `${area.toFixed(Math.max(0, precision))} m²`;
-    case 'mm':
-      return `${area.toFixed(Math.max(0, precision))} mm²`;
-  }
+  return formatWorldArea(area, worldUnit, units, precision);
 }
 
 /** Bounding dimensions of a polygon AABB for label secondary line. */
@@ -147,14 +139,21 @@ export function formatRoomLabelLines(
   room: RoomEntity,
   units: LengthUnit,
   precision = 2,
+  worldUnit: LengthUnit = units === 'ft-in' ? 'ft' : units,
+  fractionDenominator = 16,
 ): string[] {
   const name = (room.properties.name || 'ROOM').toUpperCase();
   const { width, height } = polygonAABBSize(room.geometry.polygon);
   const sizeLine =
     width > 1e-9 && height > 1e-9
-      ? `${formatLengthInUnits(width, units, precision)} × ${formatLengthInUnits(height, units, precision)}`
+      ? `${formatLengthInUnits(width, units, precision, worldUnit, fractionDenominator)} × ${formatLengthInUnits(height, units, precision, worldUnit, fractionDenominator)}`
       : '';
-  const areaLine = formatAreaInUnits(room.geometry.area, units, precision);
+  const areaLine = formatAreaInUnits(
+    room.geometry.area,
+    units,
+    precision,
+    worldUnit,
+  );
   return sizeLine ? [name, sizeLine, areaLine] : [name, areaLine];
 }
 

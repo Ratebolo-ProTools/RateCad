@@ -16,13 +16,23 @@ function parseNumberToken(raw: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-function parseCoordComponent(raw: string, units: LengthUnit): number | null {
+function parseCoordComponent(
+  raw: string,
+  units: LengthUnit,
+  worldUnit: LengthUnit,
+): number | null {
   const text = raw.trim();
   if (!text) return null;
   // Allow zero for coordinates (unlike positive-only lengths)
   const plain = Number(text);
-  if (Number.isFinite(plain)) return plain;
-  return parseLengthInput(text, units);
+  if (Number.isFinite(plain)) {
+    // Bare coordinate component is in display units → world
+    const parsed = parseLengthInput(String(plain), units, worldUnit);
+    // parseLengthInput rejects 0; allow zero coords explicitly
+    if (plain === 0) return 0;
+    return parsed;
+  }
+  return parseLengthInput(text, units, worldUnit);
 }
 
 /**
@@ -54,7 +64,7 @@ export function parsePointInput(
   const polar = text.match(/^(@)?\s*(.+?)\s*<\s*(-?\d+(?:\.\d+)?)\s*$/);
   if (polar) {
     const relative = !!polar[1];
-    const dist = parseLengthInput(polar[2]!, ctx.units);
+    const dist = parseLengthInput(polar[2]!, ctx.units, ctx.worldUnit);
     const ang = Number(polar[3]);
     if (dist == null || !(dist > 0) || !Number.isFinite(ang)) {
       return { ok: false, error: 'Invalid polar coordinates' };
@@ -78,8 +88,8 @@ export function parsePointInput(
   const cart = text.match(/^(@)?\s*([^,]+)\s*,\s*(.+)\s*$/);
   if (cart) {
     const relative = !!cart[1];
-    const x = parseCoordComponent(cart[2]!, ctx.units);
-    const y = parseCoordComponent(cart[3]!, ctx.units);
+    const x = parseCoordComponent(cart[2]!, ctx.units, ctx.worldUnit);
+    const y = parseCoordComponent(cart[3]!, ctx.units, ctx.worldUnit);
     if (x == null || y == null) {
       return { ok: false, error: 'Invalid coordinates' };
     }
@@ -96,7 +106,7 @@ export function parsePointInput(
   }
 
   // Direct distance: single length token
-  const dist = parseLengthInput(text, ctx.units);
+  const dist = parseLengthInput(text, ctx.units, ctx.worldUnit);
   if (dist != null && dist > 0) {
     return { ok: true, value: dist };
   }
@@ -132,10 +142,11 @@ export function pointFromDirectDistance(
 export function parseDistanceInput(
   raw: string,
   units: LengthUnit,
+  worldUnit: LengthUnit = units === 'ft-in' ? 'ft' : units,
 ): CadParsedDistance {
   const text = raw.trim();
   if (!text) return { ok: false, error: 'Empty distance' };
-  const value = parseLengthInput(text, units);
+  const value = parseLengthInput(text, units, worldUnit);
   if (value == null || !(value > 0)) {
     return { ok: false, error: 'Invalid distance' };
   }

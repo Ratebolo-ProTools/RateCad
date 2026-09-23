@@ -269,6 +269,9 @@ function migrateDocument(
     }
   }
 
+  // v4 → v5: worldUnit + fractionDenominator; legacy 'ft' display → 'ft-in'
+  // (geometry stays in previous world units — no scaling on migration)
+
   // Validate host relationships — drop orphaned doors/windows with warning via filter
   const wallIds = new Set(
     entities.filter((e) => e.type === 'wall').map((e) => e.id),
@@ -317,9 +320,55 @@ function migrateDocument(
           : '0.0.0',
     },
     settings: {
-      units: (settingsRaw.units as DrawingDocument['settings']['units']) ?? 'ft',
+      worldUnit: (() => {
+        const raw = settingsRaw.worldUnit;
+        if (
+          raw === 'ft' ||
+          raw === 'in' ||
+          raw === 'm' ||
+          raw === 'cm' ||
+          raw === 'mm'
+        ) {
+          return raw;
+        }
+        // Legacy: coordinates were stored in settings.units (ft meant foot world)
+        const legacy = settingsRaw.units;
+        if (legacy === 'ft' || legacy === 'ft-in') return 'ft';
+        if (
+          legacy === 'in' ||
+          legacy === 'm' ||
+          legacy === 'cm' ||
+          legacy === 'mm'
+        ) {
+          return legacy;
+        }
+        return 'ft';
+      })(),
+      units: (() => {
+        const raw = settingsRaw.units;
+        if (
+          raw === 'ft-in' ||
+          raw === 'ft' ||
+          raw === 'in' ||
+          raw === 'm' ||
+          raw === 'cm' ||
+          raw === 'mm'
+        ) {
+          // Pre-v5 files used 'ft' for architectural feet-inches display
+          if (fileSchema < 5 && raw === 'ft' && settingsRaw.worldUnit == null) {
+            return 'ft-in';
+          }
+          return raw;
+        }
+        return 'ft-in';
+      })(),
       precision:
         typeof settingsRaw.precision === 'number' ? settingsRaw.precision : 2,
+      fractionDenominator:
+        typeof settingsRaw.fractionDenominator === 'number' &&
+        [1, 2, 4, 8, 16, 32].includes(settingsRaw.fractionDenominator)
+          ? settingsRaw.fractionDenominator
+          : 16,
       gridSize:
         typeof settingsRaw.gridSize === 'number' ? settingsRaw.gridSize : 1,
       snapToGrid:

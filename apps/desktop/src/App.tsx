@@ -9,10 +9,12 @@ import {
 } from 'react';
 import {
   CommandBus,
+  ConvertDrawingWorldUnitCommand,
   CreateLayerCommand,
   DeleteEntitiesCommand,
   DeleteLayerCommand,
   SetCurrentLayerCommand,
+  SetDrawingUnitsCommand,
   UpdateDoorCommand,
   UpdateLayerCommand,
   UpdateRoomCommand,
@@ -46,10 +48,14 @@ import {
   formatAreaInUnits,
   formatLength,
   formatLengthInUnits,
+  LENGTH_UNIT_LABELS,
   measuredLength,
   parseLengthInput,
   PolarTrackingEngine,
   resolveSnap,
+  SUPPORTED_LENGTH_UNITS,
+  suggestedGridSize,
+  toMillimeters,
   wallLength,
 } from '@ratecad/geometry';
 import { serializeDocument, tryParseDocument } from '@ratecad/io';
@@ -97,6 +103,9 @@ const DRAW_TOOLS: Array<{
   { id: 'dimension', label: 'DimH', glyph: '↔', dimKind: 'horizontal' },
   { id: 'dimension', label: 'DimV', glyph: '↕', dimKind: 'vertical' },
   { id: 'dimension', label: 'DimA', glyph: '⤡', dimKind: 'aligned' },
+  { id: 'dimension', label: 'DimR', glyph: '⌒', dimKind: 'radius' },
+  { id: 'dimension', label: 'DimØ', glyph: '⌀', dimKind: 'diameter' },
+  { id: 'dimension', label: 'Dim∠', glyph: '∠', dimKind: 'angular' },
   { id: 'text', label: 'Text', glyph: 'T' },
   { id: 'leader', label: 'Leader', glyph: '⤷' },
   { id: 'wall', label: 'Wall', glyph: '▮' },
@@ -114,7 +123,17 @@ const DRAW_TOOLS: Array<{
   { id: 'pan', label: 'Pan', glyph: '✥' },
 ];
 
-const UNIT_OPTIONS: LengthUnit[] = ['ft', 'in', 'm', 'mm'];
+const UNIT_OPTIONS: LengthUnit[] = [...SUPPORTED_LENGTH_UNITS];
+
+function fmtLen(doc: DrawingDocument, value: number, precision?: number): string {
+  return formatLengthInUnits(
+    value,
+    doc.settings.units,
+    precision ?? doc.settings.precision,
+    doc.settings.worldUnit ?? 'ft',
+    doc.settings.fractionDenominator ?? 16,
+  );
+}
 
 function createBus(): CommandBus {
   return new CommandBus(createEmptyDocument('Untitled Drawing'));
@@ -144,24 +163,48 @@ function describeEntity(
       return [
         ...common,
         {
+          label: 'Length',
+          value: fmtLen(
+            doc,
+            Math.hypot(
+              entity.geometry.end.x - entity.geometry.start.x,
+              entity.geometry.end.y - entity.geometry.start.y,
+            ),
+          ),
+        },
+        {
           label: 'Start',
-          value: `${formatLength(entity.geometry.start.x)}, ${formatLength(entity.geometry.start.y)}`,
+          value: `${fmtLen(doc, entity.geometry.start.x)}, ${fmtLen(doc, entity.geometry.start.y)}`,
         },
         {
           label: 'End',
-          value: `${formatLength(entity.geometry.end.x)}, ${formatLength(entity.geometry.end.y)}`,
+          value: `${fmtLen(doc, entity.geometry.end.x)}, ${fmtLen(doc, entity.geometry.end.y)}`,
         },
       ];
     case 'rectangle':
       return [
         ...common,
         {
+          label: 'Width',
+          value: fmtLen(
+            doc,
+            Math.abs(entity.geometry.corner2.x - entity.geometry.corner1.x),
+          ),
+        },
+        {
+          label: 'Height',
+          value: fmtLen(
+            doc,
+            Math.abs(entity.geometry.corner2.y - entity.geometry.corner1.y),
+          ),
+        },
+        {
           label: 'Corner1',
-          value: `${formatLength(entity.geometry.corner1.x)}, ${formatLength(entity.geometry.corner1.y)}`,
+          value: `${fmtLen(doc, entity.geometry.corner1.x)}, ${fmtLen(doc, entity.geometry.corner1.y)}`,
         },
         {
           label: 'Corner2',
-          value: `${formatLength(entity.geometry.corner2.x)}, ${formatLength(entity.geometry.corner2.y)}`,
+          value: `${fmtLen(doc, entity.geometry.corner2.x)}, ${fmtLen(doc, entity.geometry.corner2.y)}`,
         },
       ];
     case 'circle':
@@ -169,9 +212,13 @@ function describeEntity(
         ...common,
         {
           label: 'Center',
-          value: `${formatLength(entity.geometry.center.x)}, ${formatLength(entity.geometry.center.y)}`,
+          value: `${fmtLen(doc, entity.geometry.center.x)}, ${fmtLen(doc, entity.geometry.center.y)}`,
         },
-        { label: 'Radius', value: formatLength(entity.geometry.radius) },
+        { label: 'Radius', value: fmtLen(doc, entity.geometry.radius) },
+        {
+          label: 'Diameter',
+          value: fmtLen(doc, entity.geometry.radius * 2),
+        },
       ];
     case 'polyline':
       return [
@@ -232,27 +279,15 @@ function describeEntity(
         ...common,
         {
           label: 'Length',
-          value: formatLengthInUnits(
-            wallLength(entity),
-            doc.settings.units,
-            doc.settings.precision,
-          ),
+          value: fmtLen(doc, wallLength(entity)),
         },
         {
           label: 'Thickness',
-          value: formatLengthInUnits(
-            entity.geometry.thickness,
-            doc.settings.units,
-            doc.settings.precision,
-          ),
+          value: fmtLen(doc, entity.geometry.thickness),
         },
         {
           label: 'Height',
-          value: formatLengthInUnits(
-            entity.geometry.height,
-            doc.settings.units,
-            doc.settings.precision,
-          ),
+          value: fmtLen(doc, entity.geometry.height),
         },
         { label: 'Material', value: entity.properties.material ?? '—' },
         { label: 'Type', value: entity.properties.wallType ?? '—' },
@@ -272,19 +307,11 @@ function describeEntity(
         { label: 'Host wall', value: host?.id ?? entity.geometry.hostWallId },
         {
           label: 'Width',
-          value: formatLengthInUnits(
-            entity.geometry.width,
-            doc.settings.units,
-            doc.settings.precision,
-          ),
+          value: fmtLen(doc, entity.geometry.width),
         },
         {
           label: 'Height',
-          value: formatLengthInUnits(
-            entity.geometry.height,
-            doc.settings.units,
-            doc.settings.precision,
-          ),
+          value: fmtLen(doc, entity.geometry.height),
         },
         { label: 'Swing', value: entity.geometry.swing },
         {
@@ -305,27 +332,15 @@ function describeEntity(
         { label: 'Host wall', value: host?.id ?? entity.geometry.hostWallId },
         {
           label: 'Width',
-          value: formatLengthInUnits(
-            entity.geometry.width,
-            doc.settings.units,
-            doc.settings.precision,
-          ),
+          value: fmtLen(doc, entity.geometry.width),
         },
         {
           label: 'Height',
-          value: formatLengthInUnits(
-            entity.geometry.height,
-            doc.settings.units,
-            doc.settings.precision,
-          ),
+          value: fmtLen(doc, entity.geometry.height),
         },
         {
           label: 'Sill',
-          value: formatLengthInUnits(
-            entity.geometry.sillHeight,
-            doc.settings.units,
-            doc.settings.precision,
-          ),
+          value: fmtLen(doc, entity.geometry.sillHeight),
         },
         { label: 'Type', value: entity.properties.windowType ?? '—' },
         {
@@ -544,6 +559,8 @@ export function App() {
   useEffect(() => {
     const host = {
       getUnits: () => busRef.current.getDocument().settings.units,
+      getWorldUnit: () =>
+        busRef.current.getDocument().settings.worldUnit ?? 'ft',
       getSelectedIds: () => busRef.current.getDocument().selection,
       getCursor: () => cursorWorldRef.current,
       activateTool: (tool: string) => {
@@ -613,11 +630,13 @@ export function App() {
   const applyRectangleDimensions = useCallback(
     (lengthRaw: string, widthRaw: string) => {
       const units = busRef.current.getDocument().settings.units;
+      const worldUnit =
+        busRef.current.getDocument().settings.worldUnit ?? 'ft';
       const length = lengthRaw.trim()
-        ? parseLengthInput(lengthRaw, units)
+        ? parseLengthInput(lengthRaw, units, worldUnit)
         : null;
       const width = widthRaw.trim()
-        ? parseLengthInput(widthRaw, units)
+        ? parseLengthInput(widthRaw, units, worldUnit)
         : null;
       const nextLength = lengthRaw.trim() === '' ? null : length;
       const nextWidth = widthRaw.trim() === '' ? null : width;
@@ -887,10 +906,34 @@ export function App() {
   }, [polarOn]);
 
   const setUnits = useCallback((units: LengthUnit) => {
-    busRef.current.updateWithoutHistory((d) => ({
-      ...d,
-      settings: { ...d.settings, units },
-    }));
+    const doc = busRef.current.getDocument();
+    const gridSize = suggestedGridSize(doc.settings.worldUnit ?? 'ft', units);
+    busRef.current.execute(
+      new SetDrawingUnitsCommand(doc, { units, gridSize }),
+    );
+  }, []);
+
+  const setPrecision = useCallback((precision: number) => {
+    const doc = busRef.current.getDocument();
+    busRef.current.execute(new SetDrawingUnitsCommand(doc, { precision }));
+  }, []);
+
+  const setFractionDenominator = useCallback((fractionDenominator: number) => {
+    const doc = busRef.current.getDocument();
+    busRef.current.execute(
+      new SetDrawingUnitsCommand(doc, { fractionDenominator }),
+    );
+  }, []);
+
+  const convertWorldUnit = useCallback((toUnit: LengthUnit) => {
+    const doc = busRef.current.getDocument();
+    if ((doc.settings.worldUnit ?? 'ft') === toUnit) return;
+    const ok = window.confirm(
+      `Convert all geometry from ${doc.settings.worldUnit} to ${toUnit}?\n` +
+        'This scales coordinates (import-style conversion) and is undoable.',
+    );
+    if (!ok) return;
+    busRef.current.execute(new ConvertDrawingWorldUnitCommand(doc, toUnit));
   }, []);
 
   const setCurrentLayer = useCallback((layerId: string) => {
@@ -1893,16 +1936,74 @@ export function App() {
               <div className="value">{doc.entities.length}</div>
             </div>
             <div className="prop-row">
-              <label>Units</label>
+              <label>Linear Unit</label>
               <select
                 className="prop-select"
                 value={doc.settings.units}
                 onChange={(e) => setUnits(e.target.value as LengthUnit)}
-                aria-label="Drawing units"
+                aria-label="Drawing display units"
               >
                 {UNIT_OPTIONS.map((u) => (
                   <option key={u} value={u}>
-                    {u}
+                    {LENGTH_UNIT_LABELS[u]}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="prop-row">
+              <label>Precision</label>
+              {doc.settings.units === 'ft-in' ? (
+                <select
+                  className="prop-select"
+                  value={String(doc.settings.fractionDenominator ?? 16)}
+                  onChange={(e) =>
+                    setFractionDenominator(Number(e.target.value))
+                  }
+                  aria-label="Architectural fraction precision"
+                >
+                  {[1, 2, 4, 8, 16, 32].map((d) => (
+                    <option key={d} value={d}>
+                      {d === 1 ? `1"` : `1/${d}"`}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <select
+                  className="prop-select"
+                  value={String(doc.settings.precision)}
+                  onChange={(e) => setPrecision(Number(e.target.value))}
+                  aria-label="Decimal precision"
+                >
+                  {[0, 1, 2, 3, 4].map((d) => (
+                    <option key={d} value={d}>
+                      {d === 0 ? '0' : `0.${'0'.repeat(d)}`}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
+            <div className="prop-row">
+              <label>World</label>
+              <div className="value">{doc.settings.worldUnit ?? 'ft'}</div>
+            </div>
+            <div className="prop-row units-convert-row">
+              <label>Convert</label>
+              <select
+                className="prop-select"
+                defaultValue=""
+                onChange={(e) => {
+                  const v = e.target.value as LengthUnit | '';
+                  e.target.value = '';
+                  if (v) convertWorldUnit(v);
+                }}
+                aria-label="Convert drawing world unit"
+              >
+                <option value="" disabled>
+                  Scale geometry…
+                </option>
+                {(['ft', 'in', 'm', 'cm', 'mm'] as LengthUnit[]).map((u) => (
+                  <option key={u} value={u}>
+                    → {LENGTH_UNIT_LABELS[u]}
                   </option>
                 ))}
               </select>
@@ -2031,7 +2132,7 @@ export function App() {
                         );
                         if (next == null) return;
                         const n =
-                          parseLengthInput(next, doc.settings.units) ??
+                          parseLengthInput(next, doc.settings.units, doc.settings.worldUnit ?? 'ft') ??
                           Number(next);
                         if (!(n > 0)) return;
                         busRef.current.execute(
@@ -2053,7 +2154,7 @@ export function App() {
                         );
                         if (next == null) return;
                         const n =
-                          parseLengthInput(next, doc.settings.units) ??
+                          parseLengthInput(next, doc.settings.units, doc.settings.worldUnit ?? 'ft') ??
                           Number(next);
                         if (!(n > 0)) return;
                         busRef.current.execute(
@@ -2101,7 +2202,7 @@ export function App() {
                         );
                         if (next == null) return;
                         const n =
-                          parseLengthInput(next, doc.settings.units) ??
+                          parseLengthInput(next, doc.settings.units, doc.settings.worldUnit ?? 'ft') ??
                           Number(next);
                         if (!(n > 0)) return;
                         busRef.current.execute(
@@ -2152,7 +2253,7 @@ export function App() {
                         );
                         if (next == null) return;
                         const n =
-                          parseLengthInput(next, doc.settings.units) ??
+                          parseLengthInput(next, doc.settings.units, doc.settings.worldUnit ?? 'ft') ??
                           Number(next);
                         if (!(n > 0)) return;
                         busRef.current.execute(
@@ -2174,7 +2275,7 @@ export function App() {
                         );
                         if (next == null) return;
                         const n =
-                          parseLengthInput(next, doc.settings.units) ??
+                          parseLengthInput(next, doc.settings.units, doc.settings.worldUnit ?? 'ft') ??
                           Number(next);
                         if (!(n > 0)) return;
                         busRef.current.execute(
@@ -2247,16 +2348,16 @@ export function App() {
         </div>
         <div className="status-right">
           <span>
-            X: <strong>{formatLengthInUnits(cursorWorld.x, doc.settings.units, doc.settings.precision)}</strong>
+            X: <strong>{fmtLen(doc, cursorWorld.x)}</strong>
           </span>
           <span>
-            Y: <strong>{formatLengthInUnits(cursorWorld.y, doc.settings.units, doc.settings.precision)}</strong>
+            Y: <strong>{fmtLen(doc, cursorWorld.y)}</strong>
           </span>
           <span>
             Zoom: <strong>{((camera.zoom / 40) * 100).toFixed(0)}%</strong>
           </span>
           <span>
-            Units: <strong>{doc.settings.units}</strong>
+            Units: <strong>{LENGTH_UNIT_LABELS[doc.settings.units]}</strong> · World: <strong>{doc.settings.worldUnit ?? 'ft'}</strong>
           </span>
           <span>
             Layer: <strong>{currentLayer?.name ?? '—'}</strong>

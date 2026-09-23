@@ -48,3 +48,8 @@ export {
   RefreshRoomsCommand,
   UpdateRoomCommand,
 } from './roomCommands.js';
+export {
+  ConvertDrawingWorldUnitCommand,
+  SetDrawingUnitsCommand,
+  scaleEntityToWorldUnit,
+} from './settingsCommands.js';

@@ -37,6 +37,7 @@ export class CreateDimensionCommand implements Command {
     offset: number,
     layerId?: LayerId,
     entityId?: EntityId,
+    vertex?: Vec2,
   ) {
     this.layerId = layerId;
     this.entity = {
@@ -50,6 +51,7 @@ export class CreateDimensionCommand implements Command {
         start: { ...start },
         end: { ...end },
         offset,
+        ...(vertex ? { vertex: { ...vertex } } : {}),
       },
       properties: {},
     };

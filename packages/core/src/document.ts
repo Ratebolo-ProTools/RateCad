@@ -76,8 +76,10 @@ export function createEmptyDocument(
     schemaVersion: SCHEMA_VERSION,
     meta,
     settings: {
-      units: 'ft',
+      worldUnit: 'ft',
+      units: 'ft-in',
       precision: 2,
+      fractionDenominator: 16,
       gridSize: 1,
       snapToGrid: true,
       ...settings,
