@@ -18,6 +18,7 @@ export {
 export {
   type PaperViewTransform,
   cameraForViewport,
+  drawPaperPreviewRect,
   drawPaperSheet,
   drawViewportFrame,
   fitPaperInCanvas,
@@ -27,6 +28,17 @@ export {
   paperViewForLayout,
   screenToPaper,
 } from './paperSpace.js';
+
+export {
+  type ViewportGrip,
+  type ViewportGripRole,
+  applyViewportGripResize,
+  applyViewportMove,
+  getViewportGrips,
+  hitTestViewportGrip,
+  panViewportModel,
+  zoomViewportScale,
+} from './viewportGrips.js';
 
 export {
   entityBounds,

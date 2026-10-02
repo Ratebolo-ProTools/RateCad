@@ -29,6 +29,8 @@ import {
   getLayout,
   type Layout,
   type LayoutId,
+  type LayoutViewport,
+  type ViewportId,
 } from './layout.js';
 
 function withLayerDefaults(
@@ -221,6 +223,63 @@ export function addLayout(
 
 export function getActiveLayout(doc: DrawingDocument): Layout | undefined {
   return getLayout(doc.layouts ?? [], doc.activeLayoutId);
+}
+
+/** Replace one viewport inside a layout (immutable). */
+export function replaceViewport(
+  doc: DrawingDocument,
+  layoutId: LayoutId,
+  viewport: LayoutViewport,
+): DrawingDocument {
+  const layouts = doc.layouts ?? [];
+  const li = layouts.findIndex((l) => l.id === layoutId);
+  if (li < 0) return doc;
+  const layout = layouts[li]!;
+  const vi = layout.viewports.findIndex((v) => v.id === viewport.id);
+  if (vi < 0) return doc;
+  const viewports = layout.viewports.slice();
+  viewports[vi] = structuredClone(viewport);
+  const nextLayouts = layouts.slice();
+  nextLayouts[li] = { ...layout, viewports };
+  return touchDocument({ ...doc, layouts: nextLayouts });
+}
+
+/** Append a viewport to a layout. */
+export function addViewport(
+  doc: DrawingDocument,
+  layoutId: LayoutId,
+  viewport: LayoutViewport,
+): DrawingDocument {
+  const layouts = doc.layouts ?? [];
+  const li = layouts.findIndex((l) => l.id === layoutId);
+  if (li < 0) return doc;
+  const layout = layouts[li]!;
+  if (layout.viewports.some((v) => v.id === viewport.id)) {
+    throw new Error(`Duplicate viewport id: ${viewport.id}`);
+  }
+  const nextLayouts = layouts.slice();
+  nextLayouts[li] = {
+    ...layout,
+    viewports: [...layout.viewports, structuredClone(viewport)],
+  };
+  return touchDocument({ ...doc, layouts: nextLayouts });
+}
+
+/** Remove a viewport from a layout. */
+export function removeViewport(
+  doc: DrawingDocument,
+  layoutId: LayoutId,
+  viewportId: ViewportId,
+): DrawingDocument {
+  const layouts = doc.layouts ?? [];
+  const li = layouts.findIndex((l) => l.id === layoutId);
+  if (li < 0) return doc;
+  const layout = layouts[li]!;
+  const viewports = layout.viewports.filter((v) => v.id !== viewportId);
+  if (viewports.length === layout.viewports.length) return doc;
+  const nextLayouts = layouts.slice();
+  nextLayouts[li] = { ...layout, viewports };
+  return touchDocument({ ...doc, layouts: nextLayouts });
 }
 
 

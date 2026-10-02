@@ -4,6 +4,7 @@ import type {
   DrawingDocument,
   Entity,
   Layout,
+  LayoutViewport,
   LeaderEntity,
   TextEntity,
   Vec2,
@@ -36,6 +37,7 @@ import {
 import { getEntityGrips, getSelectionGrips, type Grip } from './grips.js';
 import {
   cameraForViewport,
+  drawPaperPreviewRect,
   drawPaperSheet,
   drawViewportFrame,
   fitPaperInCanvas,
@@ -81,6 +83,13 @@ export interface RenderOptions {
   activeViewportId?: ViewportId | null;
   /** Selected viewport id in paper space (blue frame). */
   selectedViewportId?: ViewportId | null;
+  /**
+   * Live paper-space rectangle preview (page units), e.g. MVIEW / resize.
+   * Drawn in paper coordinates — never mutates the document.
+   */
+  paperPreviewRect?: { a: Vec2; b: Vec2 } | null;
+  /** Override viewport geometry while dragging (preview only). */
+  viewportPreviewOverride?: LayoutViewport | null;
   theme?: {
     background: string;
     gridMajor: string;
@@ -935,8 +944,12 @@ export function renderPaperSpace(
   const selected = new Set(doc.selection);
   const hidden = new Set(options.hideEntityIds ?? []);
 
-  for (const vp of layout.viewports) {
-    if (!vp.visible) continue;
+  for (const vpRaw of layout.viewports) {
+    if (!vpRaw.visible) continue;
+    const vp =
+      options.viewportPreviewOverride?.id === vpRaw.id
+        ? options.viewportPreviewOverride
+        : vpRaw;
     const { camera, screenRect } = cameraForViewport(vp, view);
     if (screenRect.w < 2 || screenRect.h < 2) continue;
 
@@ -981,6 +994,16 @@ export function renderPaperSpace(
       options.selectedViewportId === vp.id,
       options.workspaceMode === 'VIEWPORT_MODEL_SPACE' &&
         options.activeViewportId === vp.id,
+      vp.locked,
+    );
+  }
+
+  if (options.paperPreviewRect) {
+    drawPaperPreviewRect(
+      ctx,
+      view,
+      options.paperPreviewRect.a,
+      options.paperPreviewRect.b,
     );
   }
 }

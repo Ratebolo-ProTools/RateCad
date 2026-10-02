@@ -146,29 +146,92 @@ export function drawViewportFrame(
   screenRect: { x: number; y: number; w: number; h: number },
   selected: boolean,
   activeModel: boolean,
+  locked = false,
 ): void {
   ctx.save();
-  ctx.strokeStyle = selected
-    ? '#4da3ff'
-    : activeModel
-      ? '#3ecf8e'
-      : '#2a6fad';
-  ctx.lineWidth = selected || activeModel ? 2 : 1.5;
+  if (locked && !selected && !activeModel) {
+    ctx.strokeStyle = '#8a6a3a';
+  } else if (selected) {
+    ctx.strokeStyle = '#4da3ff';
+  } else if (activeModel) {
+    ctx.strokeStyle = '#3ecf8e';
+  } else {
+    ctx.strokeStyle = '#2a6fad';
+  }
+  ctx.lineWidth = selected || activeModel ? 2.25 : 1.5;
+  if (locked) {
+    ctx.setLineDash([6, 3]);
+  } else {
+    ctx.setLineDash([]);
+  }
+  ctx.strokeRect(screenRect.x + 0.5, screenRect.y + 0.5, screenRect.w - 1, screenRect.h - 1);
   ctx.setLineDash([]);
-  ctx.strokeRect(screenRect.x, screenRect.y, screenRect.w, screenRect.h);
-  // Corner grips hint
-  const s = 5;
-  ctx.fillStyle = ctx.strokeStyle;
-  for (const [cx, cy] of [
-    [screenRect.x, screenRect.y],
-    [screenRect.x + screenRect.w, screenRect.y],
-    [screenRect.x, screenRect.y + screenRect.h],
-    [screenRect.x + screenRect.w, screenRect.y + screenRect.h],
-  ] as const) {
-    ctx.fillRect(cx - s / 2, cy - s / 2, s, s);
+
+  if (selected) {
+    // Corner + edge grips
+    const s = 7;
+    ctx.fillStyle = '#0f141a';
+    ctx.strokeStyle = '#4da3ff';
+    ctx.lineWidth = 1.25;
+    const pts: Array<[number, number]> = [
+      [screenRect.x, screenRect.y],
+      [screenRect.x + screenRect.w / 2, screenRect.y],
+      [screenRect.x + screenRect.w, screenRect.y],
+      [screenRect.x + screenRect.w, screenRect.y + screenRect.h / 2],
+      [screenRect.x + screenRect.w, screenRect.y + screenRect.h],
+      [screenRect.x + screenRect.w / 2, screenRect.y + screenRect.h],
+      [screenRect.x, screenRect.y + screenRect.h],
+      [screenRect.x, screenRect.y + screenRect.h / 2],
+    ];
+    for (const [cx, cy] of pts) {
+      ctx.fillRect(cx - s / 2, cy - s / 2, s, s);
+      ctx.strokeRect(cx - s / 2, cy - s / 2, s, s);
+    }
+  } else {
+    // Subtle corner markers
+    const s = 5;
+    ctx.fillStyle = ctx.strokeStyle;
+    for (const [cx, cy] of [
+      [screenRect.x, screenRect.y],
+      [screenRect.x + screenRect.w, screenRect.y],
+      [screenRect.x, screenRect.y + screenRect.h],
+      [screenRect.x + screenRect.w, screenRect.y + screenRect.h],
+    ] as const) {
+      ctx.fillRect(cx - s / 2, cy - s / 2, s, s);
+    }
+  }
+
+  if (locked) {
+    ctx.fillStyle = selected ? '#4da3ff' : '#c4a35a';
+    ctx.font = '10px "IBM Plex Sans", system-ui, sans-serif';
+    ctx.fillText('Locked', screenRect.x + 6, screenRect.y + 14);
   }
   ctx.restore();
 }
+
+/** Draw a paper-space rectangle preview (e.g. MVIEW). */
+export function drawPaperPreviewRect(
+  ctx: CanvasRenderingContext2D,
+  view: PaperViewTransform,
+  a: Vec2,
+  b: Vec2,
+): void {
+  const p0 = paperToScreen(a, view);
+  const p1 = paperToScreen(b, view);
+  const x = Math.min(p0.x, p1.x);
+  const y = Math.min(p0.y, p1.y);
+  const w = Math.abs(p1.x - p0.x);
+  const h = Math.abs(p1.y - p0.y);
+  ctx.save();
+  ctx.strokeStyle = '#7eb6ff';
+  ctx.fillStyle = 'rgba(77, 163, 255, 0.12)';
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([5, 4]);
+  ctx.fillRect(x, y, w, h);
+  ctx.strokeRect(x, y, w, h);
+  ctx.restore();
+}
+
 
 export function layoutSheetLabel(layout: Layout): string {
   const sheet = sheetSizeInPageUnits(layout.pageSettings);

@@ -16,9 +16,9 @@ import {
 import {
   layoutCommand,
   mspaceCommand,
-  mviewCommand,
   pspaceCommand,
 } from './commands/layoutStubs.js';
+import { mviewCommand } from './commands/mview.js';
 import type { CadCommandCategory, CadEngineCommand } from './types.js';
 
 /** Tool-bridge stubs for remaining aliases (activate existing tool path). */

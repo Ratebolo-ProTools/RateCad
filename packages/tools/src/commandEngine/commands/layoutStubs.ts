@@ -2,7 +2,7 @@ import type { CadEngineCommand } from '../types.js';
 
 /**
  * Foundation stubs for layout-related AutoCAD-style commands.
- * Full behavior arrives in later parts — do not fake functionality.
+ * MVIEW is implemented in mview.ts — LAYOUT / MSPACE / PSPACE remain stubs.
  */
 function notImplemented(
   id: string,
@@ -59,11 +59,4 @@ export const pspaceCommand = notImplemented(
   'PSPACE',
   ['PSPACE', 'PS'],
   'Return to Paper Space from a layout viewport',
-);
-
-export const mviewCommand = notImplemented(
-  'mview',
-  'MVIEW',
-  ['MVIEW', 'MV'],
-  'Create layout viewports',
 );

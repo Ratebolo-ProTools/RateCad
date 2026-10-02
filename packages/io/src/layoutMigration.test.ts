@@ -66,4 +66,32 @@ describe('layout schema migration', () => {
     expect(opened.layouts[0]!.viewports[0]!.scale).toBeGreaterThan(0);
     expect(opened.layouts[0]!.paperSpaceEntities).toEqual([]);
   });
+
+  it('persists viewport position, size, scale, center, lock, rotation', () => {
+    const doc = createEmptyDocument('VpPersist');
+    const layout = doc.layouts[0]!;
+    const vp = layout.viewports[0]!;
+    vp.x = 33;
+    vp.y = 44;
+    vp.width = 120;
+    vp.height = 90;
+    vp.scale = 0.1;
+    vp.modelCenterX = 7.5;
+    vp.modelCenterY = -2;
+    vp.rotation = 0.25;
+    vp.locked = true;
+    vp.visible = true;
+    const opened = parseDocument(serializeDocument(doc));
+    const ov = opened.layouts[0]!.viewports[0]!;
+    expect(ov.x).toBe(33);
+    expect(ov.y).toBe(44);
+    expect(ov.width).toBe(120);
+    expect(ov.height).toBe(90);
+    expect(ov.scale).toBe(0.1);
+    expect(ov.modelCenterX).toBe(7.5);
+    expect(ov.modelCenterY).toBe(-2);
+    expect(ov.rotation).toBe(0.25);
+    expect(ov.locked).toBe(true);
+    expect(ov.visible).toBe(true);
+  });
 });

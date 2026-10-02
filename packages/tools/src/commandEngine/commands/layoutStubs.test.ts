@@ -10,7 +10,7 @@ describe('layout command stubs', () => {
     }
   });
 
-  it('returns not-implemented status without faking behavior', () => {
+  it('returns not-implemented status for LAYOUT stub without faking behavior', () => {
     const reg = createDefaultEngineRegistry();
     const r = reg.resolve('LAYOUT');
     expect(r.ok).toBe(true);
@@ -24,5 +24,22 @@ describe('layout command stubs', () => {
       selectedIds: [],
     });
     expect(started.status?.toLowerCase()).toContain('not implemented');
+  });
+
+  it('MVIEW is a real command (not a stub)', () => {
+    const reg = createDefaultEngineRegistry();
+    const r = reg.resolve('MVIEW');
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const started = r.command.start({
+      units: 'ft',
+      worldUnit: 'ft',
+      lastPoint: null,
+      cursor: null,
+      angleOverrideDeg: null,
+      selectedIds: [],
+    });
+    expect(started.status?.toLowerCase()).not.toContain('not implemented');
+    expect(started.prompt.message.toLowerCase()).toContain('corner');
   });
 });

@@ -1,12 +1,20 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   addLayout,
+  addViewport,
   assertLayoutsValid,
   createDefaultLayout,
   createEmptyDocument,
   createLayout,
+  createViewportFromRect,
+  formatViewportScale,
+  getViewport,
   hitTestViewport,
+  hitTestViewportBoundary,
+  isStandardViewportScale,
+  replaceViewport,
   resetIdCounter,
+  scaleFromRatio,
   setActiveLayout,
   sheetSizeInPageUnits,
   workspaceModeLabel,
@@ -106,5 +114,43 @@ describe('Layout / Model-Paper foundation', () => {
     for (const layout of doc.layouts) {
       expect(layout.paperSpaceEntities.find((e) => e.id === 'line-model-1')).toBeUndefined();
     }
+  });
+
+  it('addViewport / replaceViewport / scale helpers', () => {
+    let doc = createEmptyDocument();
+    const layoutId = doc.layouts[0]!.id;
+    const vp2 = createViewportFromRect(
+      { x: 5, y: 5, width: 40, height: 30 },
+      { scale: scaleFromRatio(100), locked: true },
+    );
+    doc = addViewport(doc, layoutId, vp2);
+    expect(doc.layouts[0]!.viewports.length).toBe(2);
+    expect(formatViewportScale(vp2.scale)).toBe('1:100');
+    expect(isStandardViewportScale(vp2.scale)).toBe(100);
+
+    const updated = { ...vp2, modelCenterX: 42 };
+    doc = replaceViewport(doc, layoutId, updated);
+    expect(getViewport(doc.layouts[0]!, vp2.id)?.modelCenterX).toBe(42);
+
+    // Switching layouts preserves viewport cameras on each layout
+    const other = addLayout(doc);
+    doc = other.document;
+    const first = doc.layouts.find((l) => l.id === layoutId)!;
+    expect(getViewport(first, vp2.id)?.modelCenterX).toBe(42);
+    expect(getViewport(first, vp2.id)?.locked).toBe(true);
+  });
+
+  it('viewport boundary hit-test', () => {
+    const layout = createDefaultLayout();
+    const vp = layout.viewports[0]!;
+    const onEdge = hitTestViewportBoundary(layout, vp.x, vp.y + vp.height / 2, 2);
+    expect(onEdge?.id).toBe(vp.id);
+    const deepInside = hitTestViewportBoundary(
+      layout,
+      vp.x + vp.width / 2,
+      vp.y + vp.height / 2,
+      1,
+    );
+    expect(deepInside).toBeNull();
   });
 });

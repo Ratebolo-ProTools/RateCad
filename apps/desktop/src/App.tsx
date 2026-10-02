@@ -13,6 +13,8 @@ import {
   CreateLayerCommand,
   DeleteEntitiesCommand,
   DeleteLayerCommand,
+  MoveViewportCommand,
+  ResizeViewportCommand,
   SetCurrentLayerCommand,
   SetDrawingUnitsCommand,
   UpdateDoorCommand,
@@ -27,13 +29,16 @@ import {
   clearSelection,
   createEmptyDocument,
   ensureLayouts,
+  formatViewportScale,
   getEntity,
   getHostedByWall,
   getLayer,
   getSelectedEntities,
   getWall,
   hitTestViewport,
+  hitTestViewportBoundary,
   isEntityModifiable,
+  replaceViewport,
   setActiveLayout,
   workspaceModeLabel,
   type DimensionKind,
@@ -43,6 +48,7 @@ import {
   type Layer,
   type LengthUnit,
   type LayoutId,
+  type LayoutViewport,
   type RoomEntity,
   type TextEntity,
   type ViewportId,
@@ -70,6 +76,10 @@ import {
   wallLength,
 } from '@ratecad/geometry';
 import { PropertiesPanel } from './PropertiesPanel';
+import {
+  ViewportPropertiesPanel,
+  viewportStatusLine,
+} from './ViewportPropertiesPanel';
 import { serializeDocument, tryParseDocument } from '@ratecad/io';
 import {
   appendInputBuffer,
@@ -103,15 +113,23 @@ import {
   type ToolSession,
 } from '@ratecad/tools';
 import {
+  applyViewportGripResize,
+  applyViewportMove,
+  cameraForViewport,
   createCamera,
   fitPaperInCanvas,
+  getViewportGrips,
+  hitTestViewportGrip,
   panCamera,
+  panViewportModel,
   renderDocument,
   screenToPaper,
   screenToWorld,
   screenToleranceToWorld,
   zoomAtScreenPoint,
+  zoomViewportScale,
   type Camera,
+  type ViewportGripRole,
 } from '@ratecad/viewport';
 import './styles/app.css';
 
@@ -460,6 +478,27 @@ export function App() {
   );
   const [selectedViewportId, setSelectedViewportId] =
     useState<ViewportId | null>(null);
+  /** Live paper-space viewport drag (move/resize) — preview only until pointer up. */
+  type VpDragSession =
+    | {
+        kind: 'move';
+        layoutId: LayoutId;
+        viewportId: ViewportId;
+        startPaper: { x: number; y: number };
+        original: LayoutViewport;
+        preview: LayoutViewport;
+      }
+    | {
+        kind: 'resize';
+        layoutId: LayoutId;
+        viewportId: ViewportId;
+        role: ViewportGripRole;
+        original: LayoutViewport;
+        preview: LayoutViewport;
+      };
+  const vpDragRef = useRef<VpDragSession | null>(null);
+  const [vpDragTick, setVpDragTick] = useState(0);
+  const bumpVpDrag = useCallback(() => setVpDragTick((n) => n + 1), []);
   const [cursorWorld, setCursorWorld] = useState({ x: 0, y: 0 });
   const [size, setSize] = useState({ width: 800, height: 600 });
   const [canUndo, setCanUndo] = useState(false);
@@ -560,6 +599,13 @@ export function App() {
     const inPaper =
       workspaceMode === 'PAPER_SPACE' ||
       workspaceMode === 'VIEWPORT_MODEL_SPACE';
+    const drag = vpDragRef.current;
+    const paperPreviewFromEngine =
+      inPaper &&
+      engUi?.preview?.kind === 'rectangle' &&
+      engineRef.current?.getRunningCommand()?.id === 'mview'
+        ? { a: engUi.preview.start, b: engUi.preview.end }
+        : null;
     renderDocument(ctx, {
       width: size.width,
       height: size.height,
@@ -580,6 +626,8 @@ export function App() {
       workspaceMode,
       activeViewportId,
       selectedViewportId,
+      paperPreviewRect: paperPreviewFromEngine,
+      viewportPreviewOverride: drag?.preview ?? null,
     });
   }, [
     doc,
@@ -592,6 +640,7 @@ export function App() {
     workspaceMode,
     activeViewportId,
     selectedViewportId,
+    vpDragTick,
   ]);
 
   const switchToModelTab = useCallback(() => {
@@ -654,19 +703,88 @@ export function App() {
     document.title = `${name} — RateCAD`;
   }, [doc.meta.name, dirty]);
 
-  const getWorldFromEvent = useCallback(
+  const getScreenFromEvent = useCallback(
     (event: { clientX: number; clientY: number }) => {
       const canvas = canvasRef.current;
       if (!canvas) return { x: 0, y: 0 };
       const rect = canvas.getBoundingClientRect();
-      const screen = {
+      return {
         x: event.clientX - rect.left,
         y: event.clientY - rect.top,
       };
+    },
+    [],
+  );
+
+  const getPaperFromEvent = useCallback(
+    (event: { clientX: number; clientY: number }) => {
+      const d = busRef.current.getDocument();
+      const layout = d.layouts.find((l) => l.id === d.activeLayoutId);
+      if (!layout) return { x: 0, y: 0 };
+      const view = fitPaperInCanvas(
+        layout.pageSettings,
+        size.width,
+        size.height,
+      );
+      return screenToPaper(getScreenFromEvent(event), view);
+    },
+    [getScreenFromEvent, size.height, size.width],
+  );
+
+  const getWorldFromEvent = useCallback(
+    (event: { clientX: number; clientY: number }) => {
+      const screen = getScreenFromEvent(event);
+      // Inside an active layout viewport: map through that viewport's camera.
+      if (workspaceModeRef.current === 'VIEWPORT_MODEL_SPACE') {
+        const d = busRef.current.getDocument();
+        const layout = d.layouts.find((l) => l.id === d.activeLayoutId);
+        const vpId = activeViewportIdRef.current;
+        const vp = layout?.viewports.find((v) => v.id === vpId);
+        if (layout && vp) {
+          const view = fitPaperInCanvas(
+            layout.pageSettings,
+            size.width,
+            size.height,
+          );
+          const { camera, screenRect } = cameraForViewport(vp, view);
+          const local = {
+            x: screen.x - screenRect.x,
+            y: screen.y - screenRect.y,
+          };
+          // Outside the active viewport → still return a world point but tools
+          // should prefer clipped selection; mapping uses full vp size.
+          return screenToWorld(local, camera, screenRect.w, screenRect.h);
+        }
+      }
       return screenToWorld(screen, cameraRef.current, size.width, size.height);
     },
-    [size.height, size.width],
+    [getScreenFromEvent, size.height, size.width],
   );
+
+  const getActiveInteractionCamera = useCallback((): Camera => {
+    if (workspaceModeRef.current === 'VIEWPORT_MODEL_SPACE') {
+      const d = busRef.current.getDocument();
+      const layout = d.layouts.find((l) => l.id === d.activeLayoutId);
+      const vp = layout?.viewports.find(
+        (v) => v.id === activeViewportIdRef.current,
+      );
+      if (layout && vp) {
+        const view = fitPaperInCanvas(
+          layout.pageSettings,
+          size.width,
+          size.height,
+        );
+        return cameraForViewport(vp, view).camera;
+      }
+    }
+    return cameraRef.current;
+  }, [size.height, size.width]);
+
+  const cancelViewportDrag = useCallback(() => {
+    if (!vpDragRef.current) return;
+    vpDragRef.current = null;
+    bumpVpDrag();
+  }, [bumpVpDrag]);
 
   const activateToolOnly = useCallback(
     (tool: ToolId, dimKind?: DimensionKind) => {
@@ -1265,6 +1383,11 @@ export function App() {
 
       if (event.key === 'Escape') {
         event.preventDefault();
+        if (vpDragRef.current) {
+          cancelViewportDrag();
+          setCommandFeedback('Viewport edit cancelled');
+          return;
+        }
         const eng = engineRef.current;
         // 1) Cancel in-progress tool preview / grip / window without committing
         const s = sessionRef.current;
@@ -1553,6 +1676,7 @@ export function App() {
   }, [
     activateToolOnly,
     cancelTextPrompt,
+    cancelViewportDrag,
     clearCommandLine,
     confirmTextPrompt,
     deleteSelection,
@@ -1588,16 +1712,49 @@ export function App() {
     const pending = pendingPanRef.current;
     if (!pending) return;
     pendingPanRef.current = null;
+
+    // VIEWPORT_MODEL_SPACE: pan the viewport camera (not model geometry).
+    if (workspaceModeRef.current === 'VIEWPORT_MODEL_SPACE') {
+      const d = busRef.current.getDocument();
+      const layoutId = d.activeLayoutId;
+      const vpId = activeViewportIdRef.current;
+      if (!layoutId || !vpId) return;
+      const layout = d.layouts.find((l) => l.id === layoutId);
+      const vp = layout?.viewports.find((v) => v.id === vpId);
+      if (!layout || !vp || vp.locked) return;
+      const view = fitPaperInCanvas(
+        layout.pageSettings,
+        size.width,
+        size.height,
+      );
+      const { camera, screenRect } = cameraForViewport(vp, view);
+      // Screen pan → model delta (same convention as panCamera).
+      const modelDx = -pending.dx / camera.zoom;
+      const modelDy = pending.dy / camera.zoom;
+      void screenRect;
+      const next = panViewportModel(vp, { x: modelDx, y: modelDy });
+      busRef.current.updateWithoutHistory((doc) =>
+        replaceViewport(doc, layoutId, next),
+      );
+      return;
+    }
+
+    // PAPER_SPACE: do not pan the global model camera (sheet is fitted).
+    if (workspaceModeRef.current === 'PAPER_SPACE') {
+      return;
+    }
+
     syncCamera(panCamera(cameraRef.current, pending.dx, pending.dy));
-  }, [syncCamera]);
+  }, [size.height, size.width, syncCamera]);
 
   const snapWorld = useCallback(
     (world: { x: number; y: number }) => {
       const d = busRef.current.getDocument();
+      const cam = getActiveInteractionCamera();
       const snap = resolveSnap(world, d, {
         enabled: d.settings.snapToGrid,
         gridSize: d.settings.gridSize,
-        tolerance: screenToleranceToWorld(cameraRef.current, 10),
+        tolerance: screenToleranceToWorld(cam, 10),
       });
       const eng = engineRef.current;
       // Typed angle override / absolute coords take priority — skip visual tracking.
@@ -1629,7 +1786,7 @@ export function App() {
               : snap.label,
       };
     },
-    [orthoOn, polarOn, polarIncrement],
+    [getActiveInteractionCamera, orthoOn, polarOn, polarIncrement],
   );
 
   const onPointerDown = (event: ReactPointerEvent<HTMLCanvasElement>) => {
@@ -1642,6 +1799,22 @@ export function App() {
       event.button === 1;
 
     if (panMode) {
+      // Locked viewport: ignore pan gesture inside VIEWPORT_MODEL_SPACE
+      if (workspaceModeRef.current === 'VIEWPORT_MODEL_SPACE') {
+        const d = busRef.current.getDocument();
+        const layout = d.layouts.find((l) => l.id === d.activeLayoutId);
+        const vp = layout?.viewports.find(
+          (v) => v.id === activeViewportIdRef.current,
+        );
+        if (vp?.locked) {
+          setStatusExtra('Viewport locked — unlock to pan/zoom');
+          return;
+        }
+      }
+      if (workspaceModeRef.current === 'PAPER_SPACE') {
+        // Paper sheet is fitted — no free pan of the desk (viewport move is separate).
+        return;
+      }
       canvas.setPointerCapture(event.pointerId);
       isPanningRef.current = true;
       lastPointerRef.current = { x: event.clientX, y: event.clientY };
@@ -1650,30 +1823,110 @@ export function App() {
 
     if (event.button !== 0) return;
 
-    // Paper Space: select viewports only — do not create Model Space geometry.
+    // Paper Space: viewport select / move / resize, or MVIEW points.
     if (workspaceModeRef.current === 'PAPER_SPACE') {
-      const layout = busRef.current
-        .getDocument()
-        .layouts.find((l) => l.id === busRef.current.getDocument().activeLayoutId);
-      if (layout) {
-        const rect = canvas.getBoundingClientRect();
-        const screen = {
-          x: event.clientX - rect.left,
-          y: event.clientY - rect.top,
+      const d = busRef.current.getDocument();
+      const layout = d.layouts.find((l) => l.id === d.activeLayoutId);
+      if (!layout) return;
+      const screen = getScreenFromEvent(event);
+      const view = fitPaperInCanvas(
+        layout.pageSettings,
+        size.width,
+        size.height,
+      );
+      const paper = screenToPaper(screen, view);
+      const eng = engineRef.current;
+
+      // MVIEW (and any running paper command) — feed paper coordinates.
+      if (eng?.isRunning()) {
+        eng.submitPoint(paper, { shiftKey: event.shiftKey });
+        refreshEngineUi();
+        bumpVpDrag();
+        return;
+      }
+
+      // Resize grips on selected viewport
+      if (selectedViewportId) {
+        const selected = layout.viewports.find((v) => v.id === selectedViewportId);
+        if (selected) {
+          const grips = getViewportGrips(selected, view);
+          const grip = hitTestViewportGrip(grips, screen, 8);
+          if (grip) {
+            vpDragRef.current = {
+              kind: 'resize',
+              layoutId: layout.id,
+              viewportId: selected.id,
+              role: grip.role,
+              original: structuredClone(selected),
+              preview: structuredClone(selected),
+            };
+            canvas.setPointerCapture(event.pointerId);
+            bumpVpDrag();
+            setStatusExtra(`Resize Viewport`);
+            return;
+          }
+        }
+      }
+
+      // Prefer boundary hit, then interior (paper space never selects model ents).
+      const boundaryTol =
+        (8 / Math.max(1e-6, view.pxPerMm)) /
+        (layout.pageSettings.units === 'inch' ? 25.4 : 1);
+      const boundary = hitTestViewportBoundary(
+        layout,
+        paper.x,
+        paper.y,
+        Math.max(2, boundaryTol),
+      );
+      const hit = boundary ?? hitTestViewport(layout, paper.x, paper.y);
+      setSelectedViewportId(hit?.id ?? null);
+      if (hit) {
+        // Clear model selection so properties show viewport
+        busRef.current.updateWithoutHistory((doc) => clearSelection(doc));
+        const idx = layout.viewports.findIndex((v) => v.id === hit.id);
+        setStatusExtra(viewportStatusLine(hit, idx >= 0 ? idx : 0));
+        // Start move drag from interior / boundary
+        vpDragRef.current = {
+          kind: 'move',
+          layoutId: layout.id,
+          viewportId: hit.id,
+          startPaper: paper,
+          original: structuredClone(hit),
+          preview: structuredClone(hit),
         };
+        canvas.setPointerCapture(event.pointerId);
+        bumpVpDrag();
+      } else {
+        setStatusExtra(`PAPER SPACE · ${layout.name}`);
+      }
+      return;
+    }
+
+    // VIEWPORT_MODEL_SPACE: clip interaction to active viewport screen rect.
+    if (workspaceModeRef.current === 'VIEWPORT_MODEL_SPACE') {
+      const d = busRef.current.getDocument();
+      const layout = d.layouts.find((l) => l.id === d.activeLayoutId);
+      const vp = layout?.viewports.find(
+        (v) => v.id === activeViewportIdRef.current,
+      );
+      if (layout && vp) {
+        const screen = getScreenFromEvent(event);
         const view = fitPaperInCanvas(
           layout.pageSettings,
           size.width,
           size.height,
         );
-        const paper = screenToPaper(screen, view);
-        const hit = hitTestViewport(layout, paper.x, paper.y);
-        setSelectedViewportId(hit?.id ?? null);
-        if (hit) {
-          setStatusExtra(`Viewport selected · ${layout.name}`);
+        const { screenRect } = cameraForViewport(vp, view);
+        const inside =
+          screen.x >= screenRect.x &&
+          screen.x <= screenRect.x + screenRect.w &&
+          screen.y >= screenRect.y &&
+          screen.y <= screenRect.y + screenRect.h;
+        if (!inside) {
+          // Click outside active viewport → stay in mode but ignore (exit via dbl-click)
+          return;
         }
       }
-      return;
     }
 
     const world = getWorldFromEvent(event);
@@ -1686,7 +1939,7 @@ export function App() {
       };
       const next = handleToolPointerDown(selectSession, busRef.current, {
         world,
-        camera: cameraRef.current,
+        camera: getActiveInteractionCamera(),
         detail: event.detail,
         ctrlKey: event.ctrlKey,
         metaKey: event.metaKey,
@@ -1713,7 +1966,7 @@ export function App() {
 
     const next = handleToolPointerDown(sessionRef.current, busRef.current, {
       world,
-      camera: cameraRef.current,
+      camera: getActiveInteractionCamera(),
       detail: event.detail,
       ctrlKey: event.ctrlKey,
       metaKey: event.metaKey,
@@ -1726,6 +1979,45 @@ export function App() {
   };
 
   const onPointerMove = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    // Paper-space viewport drag preview
+    if (
+      workspaceModeRef.current === 'PAPER_SPACE' &&
+      vpDragRef.current &&
+      !isPanningRef.current
+    ) {
+      const paper = getPaperFromEvent(event);
+      const drag = vpDragRef.current;
+      if (drag.kind === 'move') {
+        const dx = paper.x - drag.startPaper.x;
+        const dy = paper.y - drag.startPaper.y;
+        drag.preview = applyViewportMove(drag.original, { x: dx, y: dy });
+      } else {
+        drag.preview = applyViewportGripResize(
+          drag.original,
+          drag.role,
+          paper,
+        );
+      }
+      cursorWorldRef.current = paper;
+      setCursorWorld(paper);
+      bumpVpDrag();
+      return;
+    }
+
+    // Paper Space cursor in paper units; MVIEW live preview
+    if (workspaceModeRef.current === 'PAPER_SPACE') {
+      const paper = getPaperFromEvent(event);
+      cursorWorldRef.current = paper;
+      setCursorWorld(paper);
+      const eng = engineRef.current;
+      if (eng?.isRunning()) {
+        eng.onPointerMove(paper);
+        refreshEngineUi();
+        bumpVpDrag();
+      }
+      return;
+    }
+
     const world = getWorldFromEvent(event);
     cursorWorldRef.current = world;
     setCursorWorld(world);
@@ -1751,7 +2043,7 @@ export function App() {
       };
       const next = handleToolPointerMove(selectSession, busRef.current, {
         world,
-        camera: cameraRef.current,
+        camera: getActiveInteractionCamera(),
         ctrlKey: event.ctrlKey,
         metaKey: event.metaKey,
         shiftKey: event.shiftKey,
@@ -1775,7 +2067,7 @@ export function App() {
 
     // Hover / preselection when idle pointer (select) mode
     if (sessionRef.current.activeTool === 'select' && sessionRef.current.mode === 'idle') {
-      const tol = screenToleranceToWorld(cameraRef.current, 8);
+      const tol = screenToleranceToWorld(getActiveInteractionCamera(), 8);
       const sm = selectionManagerRef.current;
       const id = sm
         ? sm.updateHover(world, tol)
@@ -1792,7 +2084,7 @@ export function App() {
 
     const next = handleToolPointerMove(sessionRef.current, busRef.current, {
       world,
-      camera: cameraRef.current,
+      camera: getActiveInteractionCamera(),
       ctrlKey: event.ctrlKey,
       metaKey: event.metaKey,
       shiftKey: event.shiftKey,
@@ -1810,7 +2102,50 @@ export function App() {
     if (canvas?.hasPointerCapture(event.pointerId)) {
       canvas.releasePointerCapture(event.pointerId);
     }
+
+    // Commit paper-space viewport move/resize
+    if (vpDragRef.current) {
+      const drag = vpDragRef.current;
+      vpDragRef.current = null;
+      const moved =
+        Math.hypot(
+          drag.preview.x - drag.original.x,
+          drag.preview.y - drag.original.y,
+        ) > 1e-6 ||
+        Math.abs(drag.preview.width - drag.original.width) > 1e-6 ||
+        Math.abs(drag.preview.height - drag.original.height) > 1e-6;
+      if (moved) {
+        if (drag.kind === 'move') {
+          busRef.current.execute(
+            new MoveViewportCommand(drag.layoutId, drag.original, {
+              x: drag.preview.x - drag.original.x,
+              y: drag.preview.y - drag.original.y,
+            }),
+          );
+        } else {
+          busRef.current.execute(
+            new ResizeViewportCommand(drag.layoutId, drag.original, {
+              x: drag.preview.x,
+              y: drag.preview.y,
+              width: drag.preview.width,
+              height: drag.preview.height,
+            }),
+          );
+        }
+        const d = busRef.current.getDocument();
+        const layout = d.layouts.find((l) => l.id === drag.layoutId);
+        const vp = layout?.viewports.find((v) => v.id === drag.viewportId);
+        if (layout && vp) {
+          const idx = layout.viewports.findIndex((v) => v.id === vp.id);
+          setStatusExtra(viewportStatusLine(vp, idx >= 0 ? idx : 0));
+        }
+      }
+      bumpVpDrag();
+      return;
+    }
+
     if (wasPanning || event.button !== 0) return;
+    if (workspaceModeRef.current === 'PAPER_SPACE') return;
 
     const world = getWorldFromEvent(event);
     const eng = engineRef.current;
@@ -1822,7 +2157,7 @@ export function App() {
       };
       const next = handleToolPointerUp(selectSession, busRef.current, {
         world,
-        camera: cameraRef.current,
+        camera: getActiveInteractionCamera(),
         ctrlKey: event.ctrlKey,
         metaKey: event.metaKey,
         shiftKey: event.shiftKey,
@@ -1833,7 +2168,7 @@ export function App() {
     }
     const next = handleToolPointerUp(sessionRef.current, busRef.current, {
       world,
-      camera: cameraRef.current,
+      camera: getActiveInteractionCamera(),
       ctrlKey: event.ctrlKey,
       metaKey: event.metaKey,
       shiftKey: event.shiftKey,
@@ -1847,12 +2182,50 @@ export function App() {
     event.preventDefault();
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const rect = canvas.getBoundingClientRect();
-    const screen = {
-      x: event.clientX - rect.left,
-      y: event.clientY - rect.top,
-    };
+    const screen = getScreenFromEvent(event);
     const factor = event.deltaY < 0 ? 1.1 : 1 / 1.1;
+
+    if (workspaceModeRef.current === 'PAPER_SPACE') {
+      // Sheet is fitted — wheel does not zoom paper (viewport scale is explicit).
+      return;
+    }
+
+    if (workspaceModeRef.current === 'VIEWPORT_MODEL_SPACE') {
+      const d = busRef.current.getDocument();
+      const layoutId = d.activeLayoutId;
+      const vpId = activeViewportIdRef.current;
+      if (!layoutId || !vpId) return;
+      const layout = d.layouts.find((l) => l.id === layoutId);
+      const vp = layout?.viewports.find((v) => v.id === vpId);
+      if (!layout || !vp) return;
+      if (vp.locked) {
+        setStatusExtra('Viewport locked — unlock to pan/zoom');
+        return;
+      }
+      const view = fitPaperInCanvas(
+        layout.pageSettings,
+        size.width,
+        size.height,
+      );
+      const { screenRect } = cameraForViewport(vp, view);
+      const inside =
+        screen.x >= screenRect.x &&
+        screen.x <= screenRect.x + screenRect.w &&
+        screen.y >= screenRect.y &&
+        screen.y <= screenRect.y + screenRect.h;
+      if (!inside) return;
+      // Preserve model center; change scale only (geometry untouched).
+      const next = zoomViewportScale(vp, factor);
+      busRef.current.updateWithoutHistory((doc) =>
+        replaceViewport(doc, layoutId, next),
+      );
+      const idx = layout.viewports.findIndex((v) => v.id === vpId);
+      setStatusExtra(
+        `${workspaceModeLabel('VIEWPORT_MODEL_SPACE', layout.name, idx)} · ${formatViewportScale(next.scale)}`,
+      );
+      return;
+    }
+
     syncCamera(
       zoomAtScreenPoint(
         cameraRef.current,
@@ -2715,11 +3088,30 @@ export function App() {
             </ul>
           </section>
 
-          <PropertiesPanel
-            doc={doc}
-            bus={busRef.current}
-            fmtLen={(w) => fmtLen(doc, w)}
-          />
+          {selectedViewportId &&
+          doc.activeLayoutId &&
+          workspaceMode !== 'MODEL_SPACE' &&
+          selected.length === 0 ? (
+            <ViewportPropertiesPanel
+              doc={doc}
+              bus={busRef.current}
+              layoutId={doc.activeLayoutId}
+              viewportId={selectedViewportId}
+              viewportIndex={Math.max(
+                0,
+                (doc.layouts
+                  .find((l) => l.id === doc.activeLayoutId)
+                  ?.viewports.findIndex((v) => v.id === selectedViewportId) ??
+                  0),
+              )}
+            />
+          ) : (
+            <PropertiesPanel
+              doc={doc}
+              bus={busRef.current}
+              fmtLen={(w) => fmtLen(doc, w)}
+            />
+          )}
           <section className="panel-section">
             <h2 className="panel-title">Object tools</h2>
             {selected[0]?.type === 'text' ? (
@@ -2966,8 +3358,27 @@ export function App() {
               );
             })()}
           </span>
+          {selectedViewportId && workspaceMode === 'PAPER_SPACE'
+            ? (() => {
+                const layout = doc.layouts.find(
+                  (l) => l.id === doc.activeLayoutId,
+                );
+                const vp = layout?.viewports.find(
+                  (v) => v.id === selectedViewportId,
+                );
+                const idx =
+                  layout?.viewports.findIndex(
+                    (v) => v.id === selectedViewportId,
+                  ) ?? -1;
+                return vp
+                  ? ` · ${viewportStatusLine(vp, idx >= 0 ? idx : 0)}`
+                  : '';
+              })()
+            : ''}
           {session.statusMessage ? ` · ${session.statusMessage}` : ''}
-          {statusExtra && !statusExtra.includes('SPACE')
+          {statusExtra &&
+          !statusExtra.includes('SPACE') &&
+          !statusExtra.startsWith('Viewport')
             ? ` · ${statusExtra}`
             : ''}
           {snapLabel ? ` · Snap: ${snapLabel}` : ''}

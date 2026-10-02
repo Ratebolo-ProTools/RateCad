@@ -143,7 +143,7 @@ export function createDefaultViewport(
     height: h,
     modelCenterX: 0,
     modelCenterY: 0,
-    scale: 0.05,
+    scale: scaleFromRatio(50),
     rotation: 0,
     locked: false,
     visible: true,
@@ -272,4 +272,125 @@ export function collectPaperSpaceEntityIds(layouts: Layout[]): Set<EntityId> {
     }
   }
   return ids;
+}
+
+/** Minimum viewport width/height in page units. */
+export const MIN_VIEWPORT_SIZE = 10;
+
+/**
+ * Standard viewport scale denominators (display as 1:N).
+ * Stored `LayoutViewport.scale` = N / VIEWPORT_SCALE_RATIO_DIVISOR
+ * so default 0.05 ≈ 1:50 and 1:50 appears larger than 1:100.
+ */
+export const VIEWPORT_SCALE_RATIO_DIVISOR = 1000;
+
+export const VIEWPORT_SCALE_PRESETS = [
+  20, 25, 50, 75, 100, 150, 200, 250, 500,
+] as const;
+
+export type ViewportScalePreset = (typeof VIEWPORT_SCALE_PRESETS)[number];
+
+/** Map display ratio 1:N → stored scale (model units per paper unit). */
+export function scaleFromRatio(n: number): number {
+  if (!(n > 0) || !Number.isFinite(n)) {
+    throw new Error(`Invalid scale ratio: ${n}`);
+  }
+  return n / VIEWPORT_SCALE_RATIO_DIVISOR;
+}
+
+/** Best-effort inverse: stored scale → ratio denominator N. */
+export function ratioFromScale(scale: number): number {
+  if (!(scale > 0) || !Number.isFinite(scale)) return 1;
+  return scale * VIEWPORT_SCALE_RATIO_DIVISOR;
+}
+
+export function isStandardViewportScale(
+  scale: number,
+  epsilon = 1e-9,
+): ViewportScalePreset | null {
+  const n = ratioFromScale(scale);
+  for (const preset of VIEWPORT_SCALE_PRESETS) {
+    if (Math.abs(n - preset) <= epsilon * VIEWPORT_SCALE_RATIO_DIVISOR) {
+      return preset;
+    }
+  }
+  return null;
+}
+
+/** Human-readable scale label, e.g. "1:100" or "Custom (1:87)". */
+export function formatViewportScale(scale: number): string {
+  const preset = isStandardViewportScale(scale);
+  if (preset != null) return `1:${preset}`;
+  const n = ratioFromScale(scale);
+  const rounded = Math.abs(n - Math.round(n)) < 1e-6 ? Math.round(n) : Number(n.toFixed(3));
+  return `Custom (1:${rounded})`;
+}
+
+/** Normalize two paper corners into a positive-size viewport rect. */
+export function normalizeViewportRect(
+  a: { x: number; y: number },
+  b: { x: number; y: number },
+  minSize = MIN_VIEWPORT_SIZE,
+): { x: number; y: number; width: number; height: number } {
+  const x = Math.min(a.x, b.x);
+  const y = Math.min(a.y, b.y);
+  const width = Math.max(minSize, Math.abs(b.x - a.x));
+  const height = Math.max(minSize, Math.abs(b.y - a.y));
+  return { x, y, width, height };
+}
+
+/** Clone a viewport with a new id (does not copy model geometry). */
+export function createViewportFromRect(
+  rect: { x: number; y: number; width: number; height: number },
+  opts?: Partial<Omit<LayoutViewport, 'id' | 'x' | 'y' | 'width' | 'height'>> & {
+    id?: ViewportId;
+  },
+): LayoutViewport {
+  return {
+    id: opts?.id ?? createViewportId('vp'),
+    x: rect.x,
+    y: rect.y,
+    width: Math.max(MIN_VIEWPORT_SIZE, rect.width),
+    height: Math.max(MIN_VIEWPORT_SIZE, rect.height),
+    modelCenterX: opts?.modelCenterX ?? 0,
+    modelCenterY: opts?.modelCenterY ?? 0,
+    scale: opts?.scale ?? scaleFromRatio(50),
+    rotation: opts?.rotation ?? 0,
+    locked: opts?.locked ?? false,
+    visible: opts?.visible ?? true,
+    layerVisibilityOverrides: opts?.layerVisibilityOverrides
+      ? { ...opts.layerVisibilityOverrides }
+      : {},
+  };
+}
+
+/** Hit-test near the viewport border (for boundary-preferring selection). */
+export function hitTestViewportBoundary(
+  layout: Layout,
+  paperX: number,
+  paperY: number,
+  tol: number,
+): LayoutViewport | null {
+  for (let i = layout.viewports.length - 1; i >= 0; i -= 1) {
+    const vp = layout.viewports[i]!;
+    if (!vp.visible) continue;
+    const left = vp.x;
+    const right = vp.x + vp.width;
+    const bottom = vp.y;
+    const top = vp.y + vp.height;
+    const nearX = paperX >= left - tol && paperX <= right + tol;
+    const nearY = paperY >= bottom - tol && paperY <= top + tol;
+    if (!nearX || !nearY) continue;
+    const onLeft = Math.abs(paperX - left) <= tol;
+    const onRight = Math.abs(paperX - right) <= tol;
+    const onBottom = Math.abs(paperY - bottom) <= tol;
+    const onTop = Math.abs(paperY - top) <= tol;
+    const insideX = paperX >= left && paperX <= right;
+    const insideY = paperY >= bottom && paperY <= top;
+    if ((onLeft || onRight) && insideY) return vp;
+    if ((onBottom || onTop) && insideX) return vp;
+    // Corner / thickened border outside the rect
+    if ((onLeft || onRight) && (onBottom || onTop)) return vp;
+  }
+  return null;
 }

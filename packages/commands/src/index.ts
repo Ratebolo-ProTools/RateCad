@@ -62,3 +62,13 @@ export {
   SetShowLineweightsCommand,
   UpdateEntityGeometryPropertyCommand,
 } from './propertyCommands.js';
+export {
+  CreateViewportCommand,
+  DeleteViewportCommand,
+  MoveViewportCommand,
+  ReplaceViewportCommand,
+  ResizeViewportCommand,
+  SetViewportLockedCommand,
+  SetViewportScaleCommand,
+  UpdateViewportViewCommand,
+} from './layoutCommands.js';
