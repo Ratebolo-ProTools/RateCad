@@ -32,12 +32,15 @@ import {
   createEmptyDocument,
   defaultPaperCamera,
   ensureLayouts,
+  formatAnnotationScale,
   formatViewportScale,
+  getAssociativeRef,
   getEntity,
   getHostedByWall,
   getLayer,
   getSelectedEntities,
   getWall,
+  isAnnotativeEntity,
   hitTestViewport,
   hitTestViewportBoundary,
   isEntityModifiable,
@@ -295,7 +298,8 @@ function describeEntity(
       );
       const precision =
         entity.properties.precision ?? doc.settings.dimensionStyle.precision;
-      return [
+      const assoc = getAssociativeRef(entity);
+      const rows = [
         ...common,
         { label: 'Kind', value: entity.geometry.kind },
         {
@@ -309,13 +313,38 @@ function describeEntity(
           label: 'Text Δ',
           value: formatLength(entity.geometry.textOffset ?? 0),
         },
+        {
+          label: 'Annotation',
+          value: entity.metadata?.paperSpace
+            ? 'Paper'
+            : isAnnotativeEntity(entity)
+              ? `Annotative ${formatAnnotationScale(doc.settings.annotationScale?.ratio ?? 50)}`
+              : 'Model',
+        },
       ];
+      if (assoc) {
+        rows.push({
+          label: 'Associative',
+          value: assoc.valid
+            ? `Yes → ${assoc.modelEntityId}`
+            : `Broken (${assoc.brokenReason ?? 'invalid'})`,
+        });
+      }
+      return rows;
     }
     case 'text':
       return [
         ...common,
         { label: 'Content', value: entity.geometry.content },
         { label: 'Size', value: formatLength(entity.geometry.height) },
+        {
+          label: 'Annotation',
+          value: entity.metadata?.paperSpace
+            ? 'Paper'
+            : isAnnotativeEntity(entity)
+              ? `Annotative ${formatAnnotationScale(doc.settings.annotationScale?.ratio ?? 50)}`
+              : 'Model',
+        },
         {
           label: 'Rotation',
           value: `${((entity.geometry.rotation * 180) / Math.PI).toFixed(1)}°`,
@@ -330,6 +359,14 @@ function describeEntity(
         ...common,
         { label: 'Content', value: entity.geometry.content },
         { label: 'Size', value: formatLength(entity.geometry.textHeight) },
+        {
+          label: 'Annotation',
+          value: entity.metadata?.paperSpace
+            ? 'Paper'
+            : isAnnotativeEntity(entity)
+              ? `Annotative ${formatAnnotationScale(doc.settings.annotationScale?.ratio ?? 50)}`
+              : 'Model',
+        },
         {
           label: 'Arrow',
           value: `${formatLength(entity.geometry.arrow.x)}, ${formatLength(entity.geometry.arrow.y)}`,
@@ -491,6 +528,10 @@ export function App() {
   );
   const [selectedViewportId, setSelectedViewportId] =
     useState<ViewportId | null>(null);
+  const selectedViewportIdRef = useRef<ViewportId | null>(null);
+  useEffect(() => {
+    selectedViewportIdRef.current = selectedViewportId;
+  }, [selectedViewportId]);
   const [selectedPaperEntityIds, setSelectedPaperEntityIds] = useState<
     string[]
   >([]);
@@ -839,6 +880,80 @@ export function App() {
       },
       onNaturalLanguage: (text: string) => {
         setCommandFeedback(`AI (NL): ${text}`);
+      },
+      getWorkspaceMode: () => workspaceModeRef.current,
+      enterMspace: () => {
+        const d = busRef.current.getDocument();
+        const layout = d.layouts.find((l) => l.id === d.activeLayoutId);
+        if (!layout) {
+          return { ok: false, message: 'MSPACE: No active layout' };
+        }
+        const selected = selectedViewportIdRef.current
+          ? layout.viewports.find((v) => v.id === selectedViewportIdRef.current)
+          : null;
+        const target =
+          selected ??
+          layout.viewports.find((v) => v.visible) ??
+          layout.viewports[0] ??
+          null;
+        if (!target) {
+          return { ok: false, message: 'MSPACE: No active viewport' };
+        }
+        workspaceModeRef.current = 'VIEWPORT_MODEL_SPACE';
+        setWorkspaceMode('VIEWPORT_MODEL_SPACE');
+        setActiveViewportId(target.id);
+        activeViewportIdRef.current = target.id;
+        setSelectedViewportId(target.id);
+        const vpIndex = layout.viewports.findIndex((v) => v.id === target.id);
+        const msg = workspaceModeLabel(
+          'VIEWPORT_MODEL_SPACE',
+          layout.name,
+          vpIndex,
+        );
+        setStatusExtra(msg);
+        return { ok: true, message: `MSPACE: ${msg}` };
+      },
+      enterPspace: () => {
+        const d = busRef.current.getDocument();
+        const layout = d.layouts.find((l) => l.id === d.activeLayoutId);
+        if (!layout) {
+          return { ok: false, message: 'PSPACE: No active layout' };
+        }
+        workspaceModeRef.current = 'PAPER_SPACE';
+        setWorkspaceMode('PAPER_SPACE');
+        setActiveViewportId(null);
+        activeViewportIdRef.current = null;
+        setStatusExtra(`PAPER SPACE · ${layout.name}`);
+        return { ok: true, message: `PSPACE: PAPER SPACE · ${layout.name}` };
+      },
+      onLayoutChanged: (layoutId: string | null, message: string) => {
+        setDoc(busRef.current.getDocument());
+        setDirty(true);
+        dirtyRef.current = true;
+        if (layoutId == null) {
+          workspaceModeRef.current = 'MODEL_SPACE';
+          setWorkspaceMode('MODEL_SPACE');
+          setActiveViewportId(null);
+          activeViewportIdRef.current = null;
+          setStatusExtra('MODEL SPACE');
+        } else {
+          if (workspaceModeRef.current === 'MODEL_SPACE') {
+            modelCameraRef.current = { ...cameraRef.current };
+          }
+          workspaceModeRef.current = 'PAPER_SPACE';
+          setWorkspaceMode('PAPER_SPACE');
+          setActiveViewportId(null);
+          activeViewportIdRef.current = null;
+          setSelectedViewportId(null);
+          setSelectedPaperEntityIds([]);
+          const layout = busRef.current
+            .getDocument()
+            .layouts.find((l) => l.id === layoutId);
+          setStatusExtra(
+            layout ? `PAPER SPACE · ${layout.name}` : 'PAPER SPACE',
+          );
+        }
+        setCommandFeedback(message);
       },
     };
     engineRef.current = new CadCommandEngine(

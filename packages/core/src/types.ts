@@ -1,7 +1,9 @@
 import type { AppearanceProperties, CurrentAppearance } from './appearance.js';
+import type { AnnotationScaleSettings } from './annotationScale.js';
 import type { Layout, LayoutId, WorkspaceMode } from './layout.js';
 
 export type { AppearanceProperties, CurrentAppearance } from './appearance.js';
+export type { AnnotationScaleSettings } from './annotationScale.js';
 export type {
   Layout,
   LayoutId,
@@ -316,6 +318,11 @@ export interface DrawingSettings {
   linetypeScale: number;
   /** Display setting — when false, draw thin strokes regardless of lineweight. */
   showLineweights: boolean;
+  /**
+   * Annotation scale foundation for Model Space annotative text/dim/leader.
+   * Paper Space annotations ignore this and use paper-unit sizes.
+   */
+  annotationScale: AnnotationScaleSettings;
 }
 
 export interface DrawingMeta {
@@ -362,7 +369,7 @@ export const DOORS_LAYER_ID = 'layer-doors' as LayerId;
 export const WINDOWS_LAYER_ID = 'layer-windows' as LayerId;
 export const ROOMS_LAYER_ID = 'layer-rooms' as LayerId;
 
-export const SCHEMA_VERSION = 8;
+export const SCHEMA_VERSION = 9;
 export const APP_VERSION = '0.9.0';
 
 export const DEFAULT_DIMENSION_STYLE: DimensionStyle = {

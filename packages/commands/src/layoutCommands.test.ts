@@ -1,14 +1,19 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   CommandBus,
+  CreateLayoutCommand,
   CreateViewportCommand,
   MoveViewportCommand,
+  RenameLayoutCommand,
   ResizeViewportCommand,
+  SetActiveLayoutCommand,
+  SetViewportLayerOverrideCommand,
   SetViewportLockedCommand,
   SetViewportScaleCommand,
   UpdateViewportViewCommand,
 } from '../src/index.js';
 import {
+  WINDOWS_LAYER_ID,
   createEmptyDocument,
   createViewportFromRect,
   formatViewportScale,
@@ -142,5 +147,43 @@ describe('layout viewport commands', () => {
     const r = normalizeViewportRect({ x: 0, y: 0 }, { x: 1, y: 1 });
     expect(r.width).toBeGreaterThanOrEqual(10);
     expect(r.height).toBeGreaterThanOrEqual(10);
+  });
+
+  it('sets per-viewport layer override with undo', () => {
+    const { bus, layoutId } = layoutBus();
+    const vp = getActiveLayout(bus.getDocument())!.viewports[0]!;
+    bus.execute(
+      new SetViewportLayerOverrideCommand(
+        layoutId,
+        vp,
+        WINDOWS_LAYER_ID,
+        false,
+      ),
+    );
+    expect(
+      getActiveLayout(bus.getDocument())!.viewports[0]!
+        .layerVisibilityOverrides[WINDOWS_LAYER_ID],
+    ).toBe(false);
+    bus.undo();
+    expect(
+      getActiveLayout(bus.getDocument())!.viewports[0]!
+        .layerVisibilityOverrides[WINDOWS_LAYER_ID],
+    ).toBeUndefined();
+  });
+
+  it('CreateLayout / RenameLayout / SetActiveLayout with undo', () => {
+    const bus = new CommandBus(createEmptyDocument());
+    const first = bus.getDocument().layouts[0]!.id;
+    bus.execute(new CreateLayoutCommand('Alpha'));
+    const alpha = bus.getDocument().layouts.find((l) => l.name === 'Alpha')!;
+    expect(bus.getDocument().activeLayoutId).toBe(alpha.id);
+    bus.execute(new RenameLayoutCommand(alpha.id, 'Beta'));
+    expect(bus.getDocument().layouts.find((l) => l.id === alpha.id)!.name).toBe(
+      'Beta',
+    );
+    bus.execute(new SetActiveLayoutCommand(first));
+    expect(bus.getDocument().activeLayoutId).toBe(first);
+    bus.undo();
+    expect(bus.getDocument().activeLayoutId).toBe(alpha.id);
   });
 });

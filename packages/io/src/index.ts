@@ -480,6 +480,34 @@ function migrateDocument(
         typeof settingsRaw.showLineweights === 'boolean'
           ? settingsRaw.showLineweights
           : true,
+      annotationScale: (() => {
+        const raw =
+          settingsRaw.annotationScale &&
+          typeof settingsRaw.annotationScale === 'object'
+            ? (settingsRaw.annotationScale as Record<string, unknown>)
+            : {};
+        return {
+          ratio:
+            typeof raw.ratio === 'number' && raw.ratio > 0 ? raw.ratio : 50,
+          paperTextHeightMm:
+            typeof raw.paperTextHeightMm === 'number' && raw.paperTextHeightMm > 0
+              ? raw.paperTextHeightMm
+              : 2.5,
+          paperDimTextHeightMm:
+            typeof raw.paperDimTextHeightMm === 'number' &&
+            raw.paperDimTextHeightMm > 0
+              ? raw.paperDimTextHeightMm
+              : 2.5,
+          paperArrowSizeMm:
+            typeof raw.paperArrowSizeMm === 'number' && raw.paperArrowSizeMm > 0
+              ? raw.paperArrowSizeMm
+              : 2.0,
+          annotativeByDefault:
+            typeof raw.annotativeByDefault === 'boolean'
+              ? raw.annotativeByDefault
+              : true,
+        };
+      })(),
       dimensionStyle: {
         textHeight:
           typeof dimStyleRaw.textHeight === 'number'

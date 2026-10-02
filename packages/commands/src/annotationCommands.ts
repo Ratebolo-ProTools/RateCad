@@ -38,6 +38,10 @@ export class CreateDimensionCommand implements Command {
     layerId?: LayerId,
     entityId?: EntityId,
     vertex?: Vec2,
+    opts?: {
+      properties?: DimensionEntity['properties'];
+      metadata?: Record<string, unknown>;
+    },
   ) {
     this.layerId = layerId;
     this.entity = {
@@ -53,7 +57,8 @@ export class CreateDimensionCommand implements Command {
         offset,
         ...(vertex ? { vertex: { ...vertex } } : {}),
       },
-      properties: {},
+      properties: { ...(opts?.properties ?? {}) },
+      ...(opts?.metadata ? { metadata: { ...opts.metadata } } : {}),
     };
     if (!validateEntityGeometry(this.entity)) {
       throw new Error('Invalid dimension geometry');
@@ -116,6 +121,10 @@ export class CreateTextCommand implements Command {
     rotation = 0,
     layerId?: LayerId,
     entityId?: EntityId,
+    opts?: {
+      properties?: TextEntity['properties'];
+      metadata?: Record<string, unknown>;
+    },
   ) {
     const trimmed = content.trim();
     if (!trimmed) throw new Error('Text content required');
@@ -132,7 +141,8 @@ export class CreateTextCommand implements Command {
         height,
         rotation,
       },
-      properties: {},
+      properties: { ...(opts?.properties ?? {}) },
+      ...(opts?.metadata ? { metadata: { ...opts.metadata } } : {}),
     };
     if (!validateEntityGeometry(this.entity)) {
       throw new Error('Invalid text geometry');
@@ -196,6 +206,10 @@ export class CreateLeaderCommand implements Command {
     textHeight: number,
     layerId?: LayerId,
     entityId?: EntityId,
+    opts?: {
+      properties?: LeaderEntity['properties'];
+      metadata?: Record<string, unknown>;
+    },
   ) {
     if (vertices.length < 1) throw new Error('Leader needs a landing point');
     const trimmed = content.trim();
@@ -213,7 +227,8 @@ export class CreateLeaderCommand implements Command {
         content: trimmed,
         textHeight,
       },
-      properties: {},
+      properties: { ...(opts?.properties ?? {}) },
+      ...(opts?.metadata ? { metadata: { ...opts.metadata } } : {}),
     };
     if (!validateEntityGeometry(this.entity)) {
       throw new Error('Invalid leader geometry');

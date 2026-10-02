@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createDefaultEngineRegistry } from '../index.js';
 
-describe('layout command stubs', () => {
+describe('layout commands registration', () => {
   it('registers LAYOUT / MSPACE / PSPACE / MVIEW aliases', () => {
     const reg = createDefaultEngineRegistry();
     for (const alias of ['LAYOUT', 'MSPACE', 'MS', 'PSPACE', 'PS', 'MVIEW', 'MV']) {
@@ -10,7 +10,7 @@ describe('layout command stubs', () => {
     }
   });
 
-  it('returns not-implemented status for LAYOUT stub without faking behavior', () => {
+  it('LAYOUT is a real command (not a stub)', () => {
     const reg = createDefaultEngineRegistry();
     const r = reg.resolve('LAYOUT');
     expect(r.ok).toBe(true);
@@ -23,7 +23,8 @@ describe('layout command stubs', () => {
       angleOverrideDeg: null,
       selectedIds: [],
     });
-    expect(started.status?.toLowerCase()).toContain('not implemented');
+    expect(started.status?.toLowerCase()).not.toContain('not implemented');
+    expect(started.prompt.message.toLowerCase()).toContain('create');
   });
 
   it('MVIEW is a real command (not a stub)', () => {

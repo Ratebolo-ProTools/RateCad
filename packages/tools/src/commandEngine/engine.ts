@@ -41,6 +41,14 @@ export interface EngineHost {
   onNaturalLanguage?: (text: string) => void;
   /** Optional: clear document selection (ESC when idle). */
   clearSelection?: () => void;
+  /** Workspace mode for LAYOUT / MSPACE / PSPACE. */
+  getWorkspaceMode?: () => import('@ratecad/core').WorkspaceMode;
+  /** Enter VIEWPORT_MODEL_SPACE through the active/selected viewport. */
+  enterMspace?: () => { ok: boolean; message: string };
+  /** Return to PAPER_SPACE from VIEWPORT_MODEL_SPACE. */
+  enterPspace?: () => { ok: boolean; message: string };
+  /** Sync App tabs after LAYOUT CREATE/SET/RENAME. */
+  onLayoutChanged?: (layoutId: string | null, message: string) => void;
 }
 
 type Running = {
@@ -260,10 +268,16 @@ export class CadCommandEngine {
       message: null,
     };
     if (command.bootstrap) {
-      const boot = command.bootstrap(this.bus);
+      const boot = command.bootstrap(this.bus, this.host);
       if (boot.state) Object.assign(this.running.state, boot.state);
       if (boot.prompt) this.running.prompt = boot.prompt;
       if (boot.status) this.running.status = boot.status;
+      if (boot.complete) {
+        this.message = boot.status ?? this.running.status;
+        this.running = null;
+        this.host.activateSelect();
+        return { ok: true };
+      }
     }
     if (command.handoffToTool) {
       // Leave tool active; canvas handlers own interaction.

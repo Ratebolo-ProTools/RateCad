@@ -1,10 +1,12 @@
 import {
+  SetViewportLayerOverrideCommand,
   SetViewportLockedCommand,
   SetViewportScaleCommand,
   type CommandBus,
 } from '@ratecad/commands';
 import {
   VIEWPORT_SCALE_PRESETS,
+  countViewportLayerOverrides,
   formatViewportScale,
   ratioFromScale,
   scaleFromRatio,
@@ -51,10 +53,32 @@ export function ViewportPropertiesPanel({
     bus.execute(new SetViewportLockedCommand(layoutId, vp, locked));
   };
 
+  const applyLayerOverride = (layerId: string, visible: boolean) => {
+    const current = vp.layerVisibilityOverrides[layerId];
+    // If no override and setting visible (default), skip
+    if (current === undefined && visible) return;
+    if (current === visible) return;
+    // Setting to match global default (visible) clears override when layer is globally visible
+    const layer = doc.layers.find((l) => l.id === layerId);
+    const clear =
+      visible && layer?.visible !== false
+        ? null
+        : visible;
+    bus.execute(
+      new SetViewportLayerOverrideCommand(
+        layoutId,
+        vp,
+        layerId,
+        clear === null ? null : visible,
+      ),
+    );
+  };
+
   const preset = VIEWPORT_SCALE_PRESETS.find(
     (n) => Math.abs(scaleFromRatio(n) - vp.scale) < 1e-9,
   );
   const selectValue = preset != null ? String(preset) : 'custom';
+  const overrideCount = countViewportLayerOverrides(vp);
 
   return (
     <section className="panel-section properties-engine">
@@ -143,6 +167,39 @@ export function ViewportPropertiesPanel({
         <label>Visible</label>
         <span className="value">{vp.visible ? 'Yes' : 'No'}</span>
       </div>
+      <div className="prop-row">
+        <label>Layer overrides</label>
+        <span className="value">{overrideCount}</span>
+      </div>
+
+      <h3 className="panel-subtitle" style={{ marginTop: 12 }}>
+        Viewport Layers
+      </h3>
+      <p className="empty-props" style={{ marginTop: 0 }}>
+        Hide a layer in this viewport only. Global layer visibility still applies.
+      </p>
+      {doc.layers.map((layer) => {
+        const ov = vp.layerVisibilityOverrides[layer.id];
+        const effective =
+          !layer.visible ? false : ov === false ? false : true;
+        return (
+          <div className="prop-row" key={layer.id}>
+            <label title={layer.name}>{layer.name}</label>
+            <select
+              className="prop-select"
+              value={effective ? '1' : '0'}
+              disabled={!layer.visible}
+              onChange={(e) =>
+                applyLayerOverride(layer.id, e.target.value === '1')
+              }
+            >
+              <option value="1">Visible</option>
+              <option value="0">Hidden</option>
+            </select>
+          </div>
+        );
+      })}
+
       <p className="empty-props" style={{ marginTop: 8 }}>
         Scale changes the viewport model view only — model geometry is never
         duplicated or moved.

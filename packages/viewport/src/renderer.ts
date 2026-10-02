@@ -13,7 +13,14 @@ import type {
   WindowEntity,
   WorkspaceMode,
 } from '@ratecad/core';
-import { getHostedByWall } from '@ratecad/core';
+import {
+  getHostedByWall,
+  isAnnotativeEntity,
+  isLayerVisibleInViewport,
+  resolveAnnotationSettings,
+  resolvePaperHeightMm,
+  annotativeScreenPx,
+} from '@ratecad/core';
 import {
   dimensionLayout,
   distance,
@@ -45,6 +52,16 @@ import {
   paperViewForLayout,
 } from './paperSpace.js';
 import { drawPaperSpaceEntities } from './paperEntities.js';
+
+/** Annotation render context — Model vs Viewport vs Paper. */
+export type AnnotationRenderContext = {
+  /** model = Model tab; viewport = through layout VP; paper = paper entities */
+  space: 'model' | 'viewport' | 'paper';
+  /** For viewport space — paper millimetres → screen. */
+  pxPerMm?: number;
+  /** Viewport stored scale (model units per paper unit). */
+  viewportScale?: number;
+};
 
 export interface PreviewGeometry {
   kind: 'line' | 'rectangle' | 'circle' | 'polyline' | 'area';
@@ -170,19 +187,41 @@ function strokeDimension(
   height: number,
   color: string,
   lineWidth: number,
+  annotCtx?: AnnotationRenderContext,
 ): void {
   const layout = dimensionLayout(entity.geometry);
   if (!layout) return;
 
   const style = doc.settings.dimensionStyle;
+  const ann = resolveAnnotationSettings(doc.settings.annotationScale);
   const gap = style.extensionGap;
   const beyond = style.extensionBeyond;
-  const arrow =
-    entity.properties.arrowSize ?? style.arrowSize;
-  const textH =
-    entity.properties.textHeight ?? style.textHeight;
+  let arrow = entity.properties.arrowSize ?? style.arrowSize;
+  let textH = entity.properties.textHeight ?? style.textHeight;
   const precision =
     entity.properties.precision ?? style.precision;
+
+  // Annotative model dims through a viewport: size from paper mm + this VP scale
+  // so text/arrows stay readable when viewport scale changes.
+  const annotative =
+    annotCtx?.space === 'viewport' && isAnnotativeEntity(entity);
+  if (annotative && annotCtx.viewportScale != null && annotCtx.viewportScale > 0) {
+    const paperText = resolvePaperHeightMm({
+      paperHeightMm:
+        typeof entity.metadata?.paperHeightMm === 'number'
+          ? entity.metadata.paperHeightMm
+          : null,
+      modelHeight: textH,
+      annotationRatio: ann.ratio,
+      fallbackPaperMm: ann.paperDimTextHeightMm,
+    });
+    const paperArrow =
+      typeof entity.metadata?.paperArrowSizeMm === 'number'
+        ? entity.metadata.paperArrowSizeMm
+        : ann.paperArrowSizeMm;
+    arrow = paperArrow * annotCtx.viewportScale;
+    textH = paperText * annotCtx.viewportScale;
+  }
 
   const { start, end } = entity.geometry;
   const { dimStart, dimEnd, textPos, measuredDir, perp } = layout;
@@ -267,8 +306,22 @@ function strokeDimension(
     label = formatLengthInUnits(value, displayUnit, precision, worldUnit, frac);
   }
 
-  // Screen-stable minimum text size so annotations stay readable when zoomed out
-  const screenHeight = Math.max(textH * camera.zoom, 11);
+  // Screen-stable text: annotative in viewport uses paper mm; else model*zoom
+  let screenHeight: number;
+  if (annotative && annotCtx.pxPerMm != null) {
+    const paperText = resolvePaperHeightMm({
+      paperHeightMm:
+        typeof entity.metadata?.paperHeightMm === 'number'
+          ? entity.metadata.paperHeightMm
+          : null,
+      modelHeight: entity.properties.textHeight ?? style.textHeight,
+      annotationRatio: ann.ratio,
+      fallbackPaperMm: ann.paperDimTextHeightMm,
+    });
+    screenHeight = annotativeScreenPx(paperText, annotCtx.pxPerMm, 11);
+  } else {
+    screenHeight = Math.max(textH * camera.zoom, 11);
+  }
   const tp = worldToScreen(textPos, camera, width, height);
   const angle = Math.atan2(measuredDir.y, measuredDir.x);
   // Keep text upright-ish
@@ -307,9 +360,28 @@ function strokeTextEntity(
   width: number,
   height: number,
   color: string,
+  doc?: DrawingDocument,
+  annotCtx?: AnnotationRenderContext,
 ): void {
   const p = worldToScreen(entity.geometry.position, camera, width, height);
-  const screenHeight = Math.max(entity.geometry.height * camera.zoom, 10);
+  let screenHeight: number;
+  const annotative =
+    annotCtx?.space === 'viewport' && isAnnotativeEntity(entity);
+  if (annotative && annotCtx.pxPerMm != null && doc) {
+    const ann = resolveAnnotationSettings(doc.settings.annotationScale);
+    const paperMm = resolvePaperHeightMm({
+      paperHeightMm:
+        typeof entity.metadata?.paperHeightMm === 'number'
+          ? entity.metadata.paperHeightMm
+          : null,
+      modelHeight: entity.geometry.height,
+      annotationRatio: ann.ratio,
+      fallbackPaperMm: ann.paperTextHeightMm,
+    });
+    screenHeight = annotativeScreenPx(paperMm, annotCtx.pxPerMm, 10);
+  } else {
+    screenHeight = Math.max(entity.geometry.height * camera.zoom, 10);
+  }
   const rot = -entity.geometry.rotation; // world CCW → screen (y-down) CW
   // Match screen rotation from a world unit vector
   const tip = worldToScreen(
@@ -348,6 +420,8 @@ function strokeLeader(
   height: number,
   color: string,
   lineWidth: number,
+  doc?: DrawingDocument,
+  annotCtx?: AnnotationRenderContext,
 ): void {
   const pts = [entity.geometry.arrow, ...entity.geometry.vertices];
   ctx.strokeStyle = color;
@@ -362,7 +436,17 @@ function strokeLeader(
   }
   ctx.stroke();
 
-  const arrowSize = entity.properties.arrowSize ?? 0.2;
+  let arrowSize = entity.properties.arrowSize ?? 0.2;
+  const annotative =
+    annotCtx?.space === 'viewport' && isAnnotativeEntity(entity);
+  if (annotative && annotCtx.viewportScale != null && annotCtx.viewportScale > 0 && doc) {
+    const ann = resolveAnnotationSettings(doc.settings.annotationScale);
+    const paperArrow =
+      typeof entity.metadata?.paperArrowSizeMm === 'number'
+        ? entity.metadata.paperArrowSizeMm
+        : ann.paperArrowSizeMm;
+    arrowSize = paperArrow * annotCtx.viewportScale;
+  }
   if (pts.length >= 2) {
     const dir = {
       x: pts[1]!.x - pts[0]!.x,
@@ -372,7 +456,22 @@ function strokeLeader(
   }
 
   const last = pts[pts.length - 1]!;
-  const screenHeight = Math.max(entity.geometry.textHeight * camera.zoom, 10);
+  let screenHeight: number;
+  if (annotative && annotCtx.pxPerMm != null && doc) {
+    const ann = resolveAnnotationSettings(doc.settings.annotationScale);
+    const paperMm = resolvePaperHeightMm({
+      paperHeightMm:
+        typeof entity.metadata?.paperHeightMm === 'number'
+          ? entity.metadata.paperHeightMm
+          : null,
+      modelHeight: entity.geometry.textHeight,
+      annotationRatio: ann.ratio,
+      fallbackPaperMm: ann.paperTextHeightMm,
+    });
+    screenHeight = annotativeScreenPx(paperMm, annotCtx.pxPerMm, 10);
+  } else {
+    screenHeight = Math.max(entity.geometry.textHeight * camera.zoom, 10);
+  }
   const tp = worldToScreen(last, camera, width, height);
   ctx.font = `${screenHeight}px Cascadia Mono, SF Mono, Consolas, monospace`;
   ctx.textAlign = 'left';
@@ -395,6 +494,7 @@ function strokeEntity(
   lineWidth: number,
   dashPatternWorld: number[] = [],
   alpha = 1,
+  annotCtx?: AnnotationRenderContext,
 ): void {
   ctx.save();
   ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
@@ -458,13 +558,42 @@ function strokeEntity(
       break;
     }
     case 'dimension':
-      strokeDimension(ctx, entity, doc, camera, width, height, color, lineWidth);
+      strokeDimension(
+        ctx,
+        entity,
+        doc,
+        camera,
+        width,
+        height,
+        color,
+        lineWidth,
+        annotCtx,
+      );
       break;
     case 'text':
-      strokeTextEntity(ctx, entity, camera, width, height, color);
+      strokeTextEntity(
+        ctx,
+        entity,
+        camera,
+        width,
+        height,
+        color,
+        doc,
+        annotCtx,
+      );
       break;
     case 'leader':
-      strokeLeader(ctx, entity, camera, width, height, color, lineWidth);
+      strokeLeader(
+        ctx,
+        entity,
+        camera,
+        width,
+        height,
+        color,
+        lineWidth,
+        doc,
+        annotCtx,
+      );
       break;
     case 'wall': {
       const hosted = getHostedByWall(doc, entity.id).map((h) => ({
@@ -863,6 +992,9 @@ function drawModelEntities(
     hidden: Set<string>;
     hoveredEntityId?: string | null;
     skipGrips?: boolean;
+    /** Per-viewport layer visibility overrides (undefined = Model tab). */
+    layerVisibilityOverrides?: Record<string, boolean>;
+    annotCtx?: AnnotationRenderContext;
   },
 ): Grip[] {
   const autoGrips: Grip[] = [];
@@ -870,7 +1002,15 @@ function drawModelEntities(
     if (!entity.visible) continue;
     if (options.hidden.has(entity.id)) continue;
     const layer = doc.layers.find((l) => l.id === entity.layerId);
-    if (layer && !layer.visible) continue;
+    if (layer) {
+      if (options.layerVisibilityOverrides) {
+        if (!isLayerVisibleInViewport(layer, options.layerVisibilityOverrides)) {
+          continue;
+        }
+      } else if (!layer.visible) {
+        continue;
+      }
+    }
 
     const effective = resolveEffectiveAppearance(entity, doc, theme.entity);
     const isSelected = options.selected.has(entity.id);
@@ -912,6 +1052,7 @@ function drawModelEntities(
       lineWidth,
       isSelected || isHovered ? [] : effective.linetypePattern,
       isSelected || isHovered ? 1 : effective.alpha,
+      options.annotCtx ?? { space: 'model' },
     );
     if (isSelected && !options.skipGrips) {
       autoGrips.push(...getSelectionGrips([entity], doc.entities));
@@ -989,6 +1130,12 @@ export function renderPaperSpace(
           ? options.hoveredEntityId
           : null,
       skipGrips: true,
+      layerVisibilityOverrides: vp.layerVisibilityOverrides ?? {},
+      annotCtx: {
+        space: 'viewport',
+        pxPerMm: view.pxPerMm,
+        viewportScale: vp.scale,
+      },
     });
     ctx.restore();
 

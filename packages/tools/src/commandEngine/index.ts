@@ -17,7 +17,7 @@ import {
   layoutCommand,
   mspaceCommand,
   pspaceCommand,
-} from './commands/layoutStubs.js';
+} from './commands/layoutSpace.js';
 import { mviewCommand } from './commands/mview.js';
 import type { CadCommandCategory, CadEngineCommand } from './types.js';
 

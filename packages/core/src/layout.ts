@@ -385,6 +385,48 @@ export function createViewportFromRect(
   };
 }
 
+/**
+ * Effective layer visibility inside a viewport.
+ * Global `layer.visible === false` always hides.
+ * Otherwise `layerVisibilityOverrides[layerId] === false` hides only in this VP.
+ * Missing override → inherit global visibility (visible).
+ */
+export function isLayerVisibleInViewport(
+  layer: { id: string; visible: boolean },
+  overrides: Record<string, boolean> | undefined | null,
+): boolean {
+  if (!layer.visible) return false;
+  if (!overrides) return true;
+  if (Object.prototype.hasOwnProperty.call(overrides, layer.id)) {
+    return overrides[layer.id] !== false;
+  }
+  // Also allow override by layer name key (legacy / UI convenience)
+  return true;
+}
+
+/** Set or clear a per-viewport layer visibility override (immutable). */
+export function withViewportLayerOverride(
+  viewport: LayoutViewport,
+  layerId: string,
+  visible: boolean | null,
+): LayoutViewport {
+  const next = { ...viewport.layerVisibilityOverrides };
+  if (visible === null) {
+    delete next[layerId];
+  } else {
+    next[layerId] = visible;
+  }
+  return {
+    ...viewport,
+    layerVisibilityOverrides: next,
+  };
+}
+
+/** Count of active (non-default) layer overrides on a viewport. */
+export function countViewportLayerOverrides(viewport: LayoutViewport): number {
+  return Object.keys(viewport.layerVisibilityOverrides ?? {}).length;
+}
+
 /** Hit-test near the viewport border (for boundary-preferring selection). */
 export function hitTestViewportBoundary(
   layout: Layout,

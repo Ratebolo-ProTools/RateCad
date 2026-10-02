@@ -187,11 +187,17 @@ export interface CadEngineCommand {
   /**
    * Optional bootstrap after engine injects `bus` into state.
    * Used by TRIM to load document settings and set the correct first prompt.
+   * Second arg is EngineHost when layout/space commands need App callbacks.
    */
-  bootstrap?: (bus: import('@ratecad/commands').CommandBus) => {
+  bootstrap?: (
+    bus: import('@ratecad/commands').CommandBus,
+    host?: unknown,
+  ) => {
     prompt?: CadPromptDefinition;
     status?: string;
     state?: Record<string, unknown>;
+    /** When true, command finishes immediately after bootstrap. */
+    complete?: boolean;
   };
   start: (ctx: CadCommandContext) => CadCommandStartResult;
   /**

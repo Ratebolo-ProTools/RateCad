@@ -47,7 +47,7 @@ describe('layout schema migration', () => {
       },
     };
     const opened = parseDocument(JSON.stringify(legacy));
-    expect(opened.schemaVersion).toBe(8);
+    expect(opened.schemaVersion).toBe(9);
     expect(opened.entities).toHaveLength(1);
     expect(opened.entities[0]!.id).toBe('line-1');
     expect(opened.layouts.length).toBeGreaterThanOrEqual(1);
@@ -139,7 +139,7 @@ describe('layout schema migration', () => {
       },
     ];
     const opened = parseDocument(serializeDocument(doc));
-    expect(opened.schemaVersion).toBe(8);
+    expect(opened.schemaVersion).toBe(9);
     expect(opened.layouts[0]!.sheetInfo?.project).toBe('Tower');
     expect(opened.layouts[0]!.titleBlock?.enabled).toBe(true);
     expect(opened.layouts[0]!.paperCamera?.zoom).toBe(1.25);
@@ -214,7 +214,32 @@ describe('layout schema migration', () => {
       },
     };
     const opened = parseDocument(JSON.stringify(legacy));
-    expect(opened.schemaVersion).toBe(8);
+    expect(opened.schemaVersion).toBe(9);
     expect(opened.layers.some((l) => l.id === 'layer-titleblock')).toBe(true);
+  });
+
+  it('persists viewport layer overrides + annotation scale (schema v9)', () => {
+    const doc = createEmptyDocument('Annot');
+    doc.settings.annotationScale = {
+      ratio: 100,
+      paperTextHeightMm: 2.5,
+      paperDimTextHeightMm: 2.5,
+      paperArrowSizeMm: 2,
+      annotativeByDefault: true,
+    };
+    const layout = doc.layouts[0]!;
+    layout.viewports[0]!.layerVisibilityOverrides = {
+      'layer-windows': false,
+    };
+    layout.viewports[0]!.scale = 0.1;
+    const text = serializeDocument(doc);
+    const opened = parseDocument(text);
+    expect(opened.schemaVersion).toBe(9);
+    expect(opened.settings.annotationScale.ratio).toBe(100);
+    expect(opened.settings.annotationScale.paperTextHeightMm).toBe(2.5);
+    expect(
+      opened.layouts[0]!.viewports[0]!.layerVisibilityOverrides['layer-windows'],
+    ).toBe(false);
+    expect(opened.layouts[0]!.viewports[0]!.scale).toBe(0.1);
   });
 });

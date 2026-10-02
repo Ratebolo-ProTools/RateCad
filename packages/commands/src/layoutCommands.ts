@@ -1,8 +1,13 @@
 import {
   MIN_VIEWPORT_SIZE,
+  addLayout,
   addViewport,
   removeViewport,
+  renameLayout,
   replaceViewport,
+  setActiveLayout,
+  touchDocument,
+  withViewportLayerOverride,
   type DrawingDocument,
   type LayoutId,
   type LayoutViewport,
@@ -193,5 +198,94 @@ export class DeleteViewportCommand implements Command {
 
   undo(doc: DrawingDocument): DrawingDocument {
     return addViewport(doc, this.layoutId, structuredClone(this.removed));
+  }
+}
+
+/** Per-viewport layer visibility override (does not change global layer.visible). */
+export class SetViewportLayerOverrideCommand implements Command {
+  readonly name = 'SetViewportLayerOverride';
+  private readonly replace: ReplaceViewportCommand;
+
+  constructor(
+    layoutId: LayoutId,
+    before: LayoutViewport,
+    layerId: string,
+    /** true = visible, false = hidden in this VP, null = clear override */
+    visible: boolean | null,
+  ) {
+    const after = withViewportLayerOverride(before, layerId, visible);
+    this.replace = new ReplaceViewportCommand(layoutId, before, after);
+  }
+
+  execute(doc: DrawingDocument): DrawingDocument {
+    return this.replace.execute(doc);
+  }
+
+  undo(doc: DrawingDocument): DrawingDocument {
+    return this.replace.undo(doc);
+  }
+}
+
+export class CreateLayoutCommand implements Command {
+  readonly name = 'CreateLayout';
+  private createdId: LayoutId | null = null;
+  private previousActive: LayoutId | null = null;
+
+  constructor(private readonly layoutName?: string) {}
+
+  execute(doc: DrawingDocument): DrawingDocument {
+    this.previousActive = doc.activeLayoutId;
+    const { document, layout } = addLayout(doc, this.layoutName);
+    this.createdId = layout.id;
+    return document;
+  }
+
+  undo(doc: DrawingDocument): DrawingDocument {
+    if (!this.createdId) return doc;
+    const layouts = (doc.layouts ?? []).filter((l) => l.id !== this.createdId);
+    return touchDocument({
+      ...doc,
+      layouts,
+      activeLayoutId: this.previousActive,
+      workspaceMode: this.previousActive == null ? 'MODEL_SPACE' : 'PAPER_SPACE',
+    });
+  }
+}
+
+export class RenameLayoutCommand implements Command {
+  readonly name = 'RenameLayout';
+  private beforeName = '';
+
+  constructor(
+    private readonly layoutId: LayoutId,
+    private readonly newName: string,
+  ) {}
+
+  execute(doc: DrawingDocument): DrawingDocument {
+    const layout = doc.layouts.find((l) => l.id === this.layoutId);
+    if (!layout) return doc;
+    this.beforeName = layout.name;
+    return renameLayout(doc, this.layoutId, this.newName);
+  }
+
+  undo(doc: DrawingDocument): DrawingDocument {
+    if (!this.beforeName) return doc;
+    return renameLayout(doc, this.layoutId, this.beforeName);
+  }
+}
+
+export class SetActiveLayoutCommand implements Command {
+  readonly name = 'SetActiveLayout';
+  private previous: LayoutId | null = null;
+
+  constructor(private readonly layoutId: LayoutId | null) {}
+
+  execute(doc: DrawingDocument): DrawingDocument {
+    this.previous = doc.activeLayoutId;
+    return setActiveLayout(doc, this.layoutId);
+  }
+
+  undo(doc: DrawingDocument): DrawingDocument {
+    return setActiveLayout(doc, this.previous);
   }
 }

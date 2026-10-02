@@ -99,6 +99,46 @@ export {
 } from './layout.js';
 export type { ViewportScalePreset } from './layout.js';
 
+export {
+  countViewportLayerOverrides,
+  isLayerVisibleInViewport,
+  withViewportLayerOverride,
+} from './layout.js';
+
+export type { AnnotationScaleSettings } from './annotationScale.js';
+export {
+  ANNOTATION_SCALE_PRESETS,
+  DEFAULT_ANNOTATION_SCALE,
+  annotationPaperUnitLabel,
+  annotationScaleLabel,
+  annotativeScreenPx,
+  formatAnnotationScale,
+  isAnnotativeEntity,
+  isAnnotationScalePreset,
+  modelSizeFromPaperMm,
+  paperMmFromModelSize,
+  resolvePaperHeightMm,
+} from './annotationScale.js';
+
+export type {
+  AssociativeDimKind,
+  AssociativeDimensionRef,
+} from './associativeDimension.js';
+export {
+  getAssociativeRef,
+  listAssociativePaperDimensions,
+  refreshAllAssociativePaperDimensions,
+  refreshAssociativePaperDimensions,
+  withAssociativeRef,
+} from './associativeDimension.js';
+
+export {
+  annotativeDimensionCreate,
+  annotativeLeaderCreate,
+  annotativeTextCreate,
+  resolveAnnotationSettings,
+} from './annotativeCreate.js';
+
 export type {
   ColorProperty,
   EffectiveAppearance,
@@ -160,6 +200,7 @@ export {
   ensureLayouts,
   getActiveLayout,
   getPaperSpaceEntity,
+  renameLayout,
   setActiveLayout,
   expandDeleteIds,
   findInvalidRooms,

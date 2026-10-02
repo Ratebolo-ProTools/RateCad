@@ -63,11 +63,15 @@ export {
   UpdateEntityGeometryPropertyCommand,
 } from './propertyCommands.js';
 export {
+  CreateLayoutCommand,
   CreateViewportCommand,
   DeleteViewportCommand,
   MoveViewportCommand,
+  RenameLayoutCommand,
   ReplaceViewportCommand,
   ResizeViewportCommand,
+  SetActiveLayoutCommand,
+  SetViewportLayerOverrideCommand,
   SetViewportLockedCommand,
   SetViewportScaleCommand,
   UpdateViewportViewCommand,

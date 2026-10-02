@@ -5,7 +5,11 @@ import {
   CreateTextCommand,
 } from '@ratecad/commands';
 import {
+  annotativeDimensionCreate,
+  annotativeLeaderCreate,
+  annotativeTextCreate,
   getCurrentLayer,
+  resolveAnnotationSettings,
   type DimensionEntity,
   type DimensionKind,
   type LeaderEntity,
@@ -21,6 +25,21 @@ import {
   toolStatus,
   type ToolSession,
 } from './session.js';
+
+function modelAnnotationOpts(bus: CommandBus) {
+  const doc = bus.getDocument();
+  const ann = resolveAnnotationSettings(doc.settings.annotationScale);
+  if (!ann.annotativeByDefault) {
+    return {
+      annotative: false as const,
+      textHeight: doc.settings.dimensionStyle.textHeight,
+      dimTextHeight: doc.settings.dimensionStyle.textHeight,
+      arrowSize: doc.settings.dimensionStyle.arrowSize,
+      ann,
+    };
+  }
+  return { annotative: true as const, ann };
+}
 
 function previewDimension(
   kind: DimensionKind,
@@ -154,6 +173,10 @@ export function handleDimensionPointerDown(
     const rayB = session.vertices[2]!;
     const offset = offsetFromPlacement(rayA, rayB, 'aligned', point);
     try {
+      const opts = modelAnnotationOpts(bus);
+      const dimOpts = opts.annotative
+        ? annotativeDimensionCreate(opts.ann)
+        : null;
       bus.execute(
         new CreateDimensionCommand(
           kind,
@@ -163,6 +186,9 @@ export function handleDimensionPointerDown(
           layerId,
           undefined,
           vertex,
+          dimOpts
+            ? { properties: dimOpts.properties, metadata: dimOpts.metadata }
+            : undefined,
         ),
       );
     } catch {
@@ -183,7 +209,24 @@ export function handleDimensionPointerDown(
   const end = session.vertices[1]!;
   const offset = offsetFromPlacement(start, end, kind, point);
   try {
-    bus.execute(new CreateDimensionCommand(kind, start, end, offset, layerId));
+    const opts = modelAnnotationOpts(bus);
+    const dimOpts = opts.annotative
+      ? annotativeDimensionCreate(opts.ann)
+      : null;
+    bus.execute(
+      new CreateDimensionCommand(
+        kind,
+        start,
+        end,
+        offset,
+        layerId,
+        undefined,
+        undefined,
+        dimOpts
+          ? { properties: dimOpts.properties, metadata: dimOpts.metadata }
+          : undefined,
+      ),
+    );
   } catch {
     return {
       ...cancelTool(session),
@@ -265,12 +308,33 @@ export function commitTextContent(
     };
   }
   const doc = bus.getDocument();
-  const height = doc.settings.dimensionStyle.textHeight;
   const layerId = getCurrentLayer(doc).id;
+  const opts = modelAnnotationOpts(bus);
   try {
-    bus.execute(
-      new CreateTextCommand(session.anchor, trimmed, height, 0, layerId),
-    );
+    if (opts.annotative) {
+      const created = annotativeTextCreate(opts.ann);
+      bus.execute(
+        new CreateTextCommand(
+          session.anchor,
+          trimmed,
+          created.height,
+          0,
+          layerId,
+          undefined,
+          { metadata: created.metadata },
+        ),
+      );
+    } else {
+      bus.execute(
+        new CreateTextCommand(
+          session.anchor,
+          trimmed,
+          opts.textHeight,
+          0,
+          layerId,
+        ),
+      );
+    }
   } catch {
     return {
       ...cancelTool(session),
@@ -290,7 +354,10 @@ export function handleLeaderPointerDown(
   snap: SnapResult | null,
 ): ToolSession {
   const layerId = getCurrentLayer(bus.getDocument()).id;
-  const height = bus.getDocument().settings.dimensionStyle.textHeight;
+  const opts = modelAnnotationOpts(bus);
+  const height = opts.annotative
+    ? annotativeLeaderCreate(opts.ann).textHeight
+    : opts.textHeight;
 
   // Phase 1: arrow
   if (session.vertices.length === 0) {
@@ -340,7 +407,10 @@ export function handleLeaderPointerMove(
   if (session.vertices.length === 1 && session.mode === 'leader') {
     const arrow = session.vertices[0]!;
     const layerId = getCurrentLayer(bus.getDocument()).id;
-    const height = bus.getDocument().settings.dimensionStyle.textHeight;
+    const opts = modelAnnotationOpts(bus);
+    const height = opts.annotative
+      ? annotativeLeaderCreate(opts.ann).textHeight
+      : opts.textHeight;
     return {
       ...session,
       lastSnap: snap,
@@ -371,12 +441,33 @@ export function commitLeaderContent(
   const arrow = session.vertices[0]!;
   const landing = session.vertices[1]!;
   const doc = bus.getDocument();
-  const height = doc.settings.dimensionStyle.textHeight;
   const layerId = getCurrentLayer(doc).id;
+  const opts = modelAnnotationOpts(bus);
   try {
-    bus.execute(
-      new CreateLeaderCommand(arrow, [landing], trimmed, height, layerId),
-    );
+    if (opts.annotative) {
+      const created = annotativeLeaderCreate(opts.ann);
+      bus.execute(
+        new CreateLeaderCommand(
+          arrow,
+          [landing],
+          trimmed,
+          created.textHeight,
+          layerId,
+          undefined,
+          { properties: created.properties, metadata: created.metadata },
+        ),
+      );
+    } else {
+      bus.execute(
+        new CreateLeaderCommand(
+          arrow,
+          [landing],
+          trimmed,
+          opts.textHeight,
+          layerId,
+        ),
+      );
+    }
   } catch {
     return {
       ...cancelTool(session),

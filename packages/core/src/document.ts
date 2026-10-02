@@ -23,6 +23,7 @@ import {
   WINDOWS_LAYER_ID,
 } from './types.js';
 import { DEFAULT_CURRENT_APPEARANCE } from './appearance.js';
+import { DEFAULT_ANNOTATION_SCALE } from './annotationScale.js';
 import {
   createDefaultLayout,
   createLayout,
@@ -180,6 +181,10 @@ export function createEmptyDocument(
         ...DEFAULT_CONSTRUCTION,
         ...(settings?.constructionDefaults ?? {}),
       },
+      annotationScale: {
+        ...DEFAULT_ANNOTATION_SCALE,
+        ...(settings?.annotationScale ?? {}),
+      },
     },
     layers,
     currentLayerId: DEFAULT_LAYER_ID,
@@ -226,6 +231,26 @@ export function addLayout(
     workspaceMode: 'PAPER_SPACE',
   });
   return { document, layout };
+}
+
+/** Rename a layout (unique name required, case-insensitive). */
+export function renameLayout(
+  doc: DrawingDocument,
+  layoutId: LayoutId,
+  name: string,
+): DrawingDocument {
+  const trimmed = name.trim();
+  if (!trimmed) return doc;
+  const layout = getLayout(doc.layouts ?? [], layoutId);
+  if (!layout) return doc;
+  const clash = (doc.layouts ?? []).some(
+    (l) =>
+      l.id !== layoutId && l.name.toLowerCase() === trimmed.toLowerCase(),
+  );
+  if (clash) {
+    throw new Error(`Layout name already exists: ${trimmed}`);
+  }
+  return replaceLayout(doc, { ...layout, name: trimmed });
 }
 
 export function getActiveLayout(doc: DrawingDocument): Layout | undefined {
