@@ -5,6 +5,7 @@ import type {
   LengthUnit,
   Vec2,
 } from '@ratecad/core';
+import { drawingUnitsFromLegacy } from '@ratecad/core';
 import { convertLength } from '@ratecad/geometry';
 import type { Command } from './bus.js';
 
@@ -13,7 +14,11 @@ export class SetDrawingUnitsCommand implements Command {
   readonly name = 'SetDrawingUnits';
   private readonly before: Pick<
     DrawingSettings,
-    'units' | 'precision' | 'fractionDenominator' | 'gridSize'
+    | 'units'
+    | 'precision'
+    | 'fractionDenominator'
+    | 'gridSize'
+    | 'drawingUnits'
   >;
   private readonly after: Partial<
     Pick<
@@ -36,16 +41,27 @@ export class SetDrawingUnitsCommand implements Command {
       precision: previous.settings.precision,
       fractionDenominator: previous.settings.fractionDenominator ?? 16,
       gridSize: previous.settings.gridSize,
+      drawingUnits: structuredClone(
+        previous.settings.drawingUnits ??
+          drawingUnitsFromLegacy(previous.settings),
+      ),
     };
     this.after = patch;
   }
 
   execute(doc: DrawingDocument): DrawingDocument {
+    const next = { ...doc.settings, ...this.after };
+    const drawingUnits = drawingUnitsFromLegacy({
+      units: next.units,
+      precision: next.precision,
+      fractionDenominator: next.fractionDenominator,
+      worldUnit: next.worldUnit,
+    });
     return {
       ...doc,
       settings: {
-        ...doc.settings,
-        ...this.after,
+        ...next,
+        drawingUnits,
       },
       meta: { ...doc.meta, updatedAt: new Date().toISOString() },
     };
@@ -215,6 +231,20 @@ export class ConvertDrawingWorldUnitCommand implements Command {
       scaleEntityToWorldUnit(e, factor),
     );
     const s = doc.settings;
+    const dimensionStyles = (s.dimensionStyles ?? []).map((style) => ({
+      ...style,
+      text: { ...style.text, height: style.text.height * factor },
+      lines: {
+        ...style.lines,
+        extendBeyond: style.lines.extendBeyond * factor,
+        offsetFromOrigin: style.lines.offsetFromOrigin * factor,
+      },
+      symbols: {
+        ...style.symbols,
+        arrowSize: style.symbols.arrowSize * factor,
+        centerMarkSize: style.symbols.centerMarkSize * factor,
+      },
+    }));
     return {
       ...doc,
       entities,
@@ -222,6 +252,7 @@ export class ConvertDrawingWorldUnitCommand implements Command {
         ...s,
         worldUnit: this.toUnit,
         gridSize: s.gridSize * factor,
+        dimensionStyles,
         dimensionStyle: {
           ...s.dimensionStyle,
           textHeight: s.dimensionStyle.textHeight * factor,

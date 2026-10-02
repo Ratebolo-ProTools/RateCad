@@ -109,8 +109,9 @@ export const lineCommand: CadEngineCommand = {
     if (!text.trim() && prompt.id === 'next' && s.points.length >= 2) {
       return { kind: 'complete', status: 'LINE complete' };
     }
+    // No committed segment — treat as cancel (do not store as last completed)
     if (!text.trim() && prompt.id === 'next' && s.points.length < 2) {
-      return { kind: 'complete', status: 'LINE cancelled (no segment)' };
+      return { kind: 'cancel' };
     }
     // Distance fallback handled by engine for point prompts
     const dist = parseDistanceInput(text, ctx.units, ctx.worldUnit);

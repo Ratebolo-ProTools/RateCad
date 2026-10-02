@@ -80,6 +80,31 @@ export {
   worldToDisplay,
 } from './unitEngine.js';
 
+export {
+  formatAngleByDrawingUnits,
+  formatLinearByFormat,
+  formatWorldByDrawingUnits,
+  roundTo,
+} from './drawingUnitFormat.js';
+
+export {
+  dimConversionMultiplier,
+  formatDimensionLength,
+  formatDimensionTolerance,
+} from './dimStyleFormat.js';
+export type { FormatDimensionOptions } from './dimStyleFormat.js';
+
+export {
+  AreaMeasurementEngine,
+  areaMeasurementEngine,
+  formatAreaMeasurement,
+  toAreaMeasurement,
+} from './areaMeasurementEngine.js';
+export type {
+  AreaMeasurement,
+  AreaMeasurementDisplay,
+} from './areaMeasurementEngine.js';
+
 export type { OpeningLayout, WallLayout } from './construction.js';
 export {
   clampHostedPosition,
@@ -228,6 +253,7 @@ export {
   addAreaEntry,
   areaFromCircle,
   areaFromEntity,
+  areaFromOrientedRectangle,
   areaFromPoints,
   areaFromPolygon,
   areaFromPolyline,

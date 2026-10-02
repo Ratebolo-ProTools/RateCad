@@ -55,6 +55,14 @@ export {
   scaleEntityToWorldUnit,
 } from './settingsCommands.js';
 export {
+  CopyDimensionStyleCommand,
+  DeleteDimensionStyleCommand,
+  RenameDimensionStyleCommand,
+  SetActiveDimensionStyleCommand,
+  SetDrawingUnitsSettingsCommand,
+  UpdateDimensionStyleCommand,
+} from './unitsDimStyleCommands.js';
+export {
   ChangeEntitiesAppearanceCommand,
   MatchPropertiesCommand,
   SetByLayerCommand,

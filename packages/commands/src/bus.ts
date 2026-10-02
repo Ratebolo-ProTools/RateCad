@@ -67,6 +67,11 @@ export class CommandBus {
     return this.redoStack.length > 0;
   }
 
+  /** Number of undoable commands (for detecting commits during a CAD session). */
+  getUndoDepth(): number {
+    return this.undoStack.length;
+  }
+
   undo(): void {
     const command = this.undoStack.pop();
     if (!command) return;

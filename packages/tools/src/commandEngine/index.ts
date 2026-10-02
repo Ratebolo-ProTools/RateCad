@@ -19,6 +19,12 @@ import {
   pspaceCommand,
 } from './commands/layoutSpace.js';
 import { mviewCommand } from './commands/mview.js';
+import {
+  dashUnitsCommand,
+  dimstyleCommand,
+  distCommand,
+  unitsCommand,
+} from './commands/unitsDimStyle.js';
 import type { CadCommandCategory, CadEngineCommand } from './types.js';
 
 /** Tool-bridge stubs for remaining aliases (activate existing tool path). */
@@ -80,6 +86,10 @@ export function createDefaultEngineRegistry(): CadEngineRegistry {
     mspaceCommand,
     pspaceCommand,
     mviewCommand,
+    unitsCommand,
+    dashUnitsCommand,
+    dimstyleCommand,
+    distCommand,
     toolBridge('polyline', 'POLYLINE', ['PL', 'PLINE'], 'polyline', 'Draw a polyline', {
       category: 'Draw',
       keywords: ['polyline', 'pline', 'path', 'arc'],
@@ -151,6 +161,7 @@ export {
   isCadKeyboardCaptureContext,
   resolveKeyboardContextFromTarget,
   spaceConfirmsCommand,
+  spaceRepeatsLastCommand,
   type KeyboardContext,
 } from './keyboardContext.js';
 export {

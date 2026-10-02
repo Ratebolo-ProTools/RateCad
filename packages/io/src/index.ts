@@ -6,7 +6,10 @@ import {
   SCHEMA_VERSION,
   createDefaultLayers,
   createDefaultLayout,
+  drawingUnitsFromLegacy,
+  migrateDimensionStylesFromLegacy,
   normalizeColorProperty,
+  normalizeDrawingUnits,
   type CurrentAppearance,
   type DrawingDocument,
   type Entity,
@@ -369,7 +372,7 @@ function migrateDocument(
       ? (settingsRaw.constructionDefaults as Record<string, unknown>)
       : {};
 
-  return {
+  const doc: DrawingDocument = {
     schemaVersion: SCHEMA_VERSION,
     meta: {
       name: (d.meta as DrawingDocument['meta']).name,
@@ -530,6 +533,9 @@ function migrateDocument(
             ? dimStyleRaw.extensionBeyond
             : DEFAULT_DIMENSION_STYLE.extensionBeyond,
       },
+      drawingUnits: normalizeDrawingUnits(settingsRaw.drawingUnits),
+      dimensionStyles: [],
+      activeDimensionStyleName: 'Standard',
       constructionDefaults: {
         wallThickness:
           typeof constructionRaw.wallThickness === 'number'
@@ -568,6 +574,30 @@ function migrateDocument(
     activeLayoutId: parseActiveLayoutId(d.activeLayoutId, d.layouts),
     selection: [],
   };
+
+  // v9 → v10: ensure AutoCAD-style drawingUnits + named DIMSTYLE table.
+  // Existing geometry and legacy dimensionStyle sizes are preserved.
+  const migratedDims = migrateDimensionStylesFromLegacy(
+    doc.settings.dimensionStyle,
+    settingsRaw.dimensionStyles,
+    settingsRaw.activeDimensionStyleName,
+  );
+  doc.settings.dimensionStyles = migratedDims.dimensionStyles;
+  doc.settings.activeDimensionStyleName = migratedDims.activeDimensionStyleName;
+  doc.settings.dimensionStyle = migratedDims.dimensionStyle;
+
+  if (!settingsRaw.drawingUnits || typeof settingsRaw.drawingUnits !== 'object') {
+    doc.settings.drawingUnits = drawingUnitsFromLegacy({
+      units: doc.settings.units,
+      precision: doc.settings.precision,
+      fractionDenominator: doc.settings.fractionDenominator,
+      worldUnit: doc.settings.worldUnit,
+    });
+  } else {
+    doc.settings.drawingUnits = normalizeDrawingUnits(settingsRaw.drawingUnits);
+  }
+
+  return doc;
 }
 
 function parsePageSettings(raw: unknown): PageSettings {

@@ -18,6 +18,12 @@ import {
   ResizeViewportCommand,
   SetCurrentLayerCommand,
   SetDrawingUnitsCommand,
+  SetDrawingUnitsSettingsCommand,
+  SetActiveDimensionStyleCommand,
+  UpdateDimensionStyleCommand,
+  CopyDimensionStyleCommand,
+  RenameDimensionStyleCommand,
+  DeleteDimensionStyleCommand,
   SyncViewportLabelsCommand,
   UpdateDoorCommand,
   UpdateLayerCommand,
@@ -62,6 +68,7 @@ import {
   type WallEntity,
   type WindowEntity,
   type WorkspaceMode,
+  LINEAR_UNIT_FORMAT_LABELS,
 } from '@ratecad/core';
 import {
   findDoorsForRoom,
@@ -88,6 +95,8 @@ import {
   viewportStatusLine,
 } from './ViewportPropertiesPanel';
 import { LayoutPropertiesPanel } from './LayoutPropertiesPanel';
+import { UnitsDialog } from './UnitsDialog';
+import { DimStyleManager } from './DimStyleManager';
 import { serializeDocument, tryParseDocument } from '@ratecad/io';
 import {
   appendInputBuffer,
@@ -104,7 +113,9 @@ import {
   createDefaultEngineRegistry,
   createToolSession,
   finishAreaPoints,
+  finishAreaSession,
   finishPolyline,
+  formatAreaMeasurementReport,
   formatRoomAreaReport,
   handlePaperDimensionPointerDown,
   handlePaperLeaderPointerDown,
@@ -119,6 +130,7 @@ import {
   setAreaToolMode,
   setRectangleConstraints,
   spaceConfirmsCommand,
+  spaceRepeatsLastCommand,
   undoAreaPoint,
   undoAreaSessionEntry,
   type AreaToolMode,
@@ -574,6 +586,10 @@ export function App() {
   const [rectWidthText, setRectWidthText] = useState('');
   const [engineUi, setEngineUi] = useState<CadCommandUiState | null>(null);
   const [orthoOn, setOrthoOn] = useState(false);
+  const [showUnitsDialog, setShowUnitsDialog] = useState(false);
+  const [showDimStyleDialog, setShowDimStyleDialog] = useState(false);
+  const showUnitsDialogRef = useRef(false);
+  const showDimStyleDialogRef = useRef(false);
   const [polarOn, setPolarOn] = useState(false);
   const [polarIncrement, setPolarIncrement] = useState(90);
 
@@ -954,6 +970,14 @@ export function App() {
           );
         }
         setCommandFeedback(message);
+      },
+      openUnitsDialog: () => {
+        showUnitsDialogRef.current = true;
+        setShowUnitsDialog(true);
+      },
+      openDimStyleDialog: () => {
+        showDimStyleDialogRef.current = true;
+        setShowDimStyleDialog(true);
       },
     };
     engineRef.current = new CadCommandEngine(
@@ -1511,6 +1535,22 @@ export function App() {
           refreshEngineUi();
           return;
         }
+        // Selection Mode: SPACE repeats last completed command (AutoCAD-like).
+        // Do not repeat while focus is in editable non-canvas contexts.
+        if (
+          eng &&
+          spaceRepeatsLastCommand(kbCtx) &&
+          !eng.isRunning() &&
+          !eng.hasPendingHandoff() &&
+          eng.getLastCompletedName()
+        ) {
+          event.preventDefault();
+          eng.confirm('space');
+          refreshEngineUi();
+          const name = eng.getRunningCommand()?.name ?? eng.getLastCompletedName();
+          if (name) setCommandFeedback(name);
+          return;
+        }
         spaceDownRef.current = true;
         event.preventDefault();
         return;
@@ -1571,25 +1611,31 @@ export function App() {
           !!s.refEntityId ||
           s.inputBuffer.length > 0;
         if (eng?.isRunning()) {
-          eng.cancel(true);
-          if (inProgress) syncSession(cancelTool(s));
+          // Cancel active engine command (preview only); keep committed geometry.
+          eng.handleEscape();
+          // Always return to Selection Mode — do not leave previous draw tool active.
+          activateToolOnly('select');
+          clearCommandLine();
           refreshEngineUi();
           setCommandFeedback('Select');
+          setDoc(busRef.current.getDocument());
           return;
         }
-        if (inProgress) {
-          syncSession(cancelTool(s));
+        if (inProgress || eng?.hasPendingHandoff()) {
+          // End handoff/tool session; store last command only if geometry was committed.
+          eng?.handleEscape();
           activateToolOnly('select');
+          clearCommandLine();
+          refreshEngineUi();
           setCommandFeedback('Select');
+          setDoc(busRef.current.getDocument());
           return;
         }
         // 2) Engine ESC: clear buffer → clear selection → idle pointer
         const action = eng?.handleEscape() ?? { kind: 'idle' as const };
         clearCommandLine();
         refreshEngineUi();
-        if (action.kind === 'clear-selection' || action.kind === 'idle') {
-          activateToolOnly('select');
-        }
+        activateToolOnly('select');
         setCommandFeedback(
           action.kind === 'clear-selection'
             ? 'Selection cleared'
@@ -1623,7 +1669,23 @@ export function App() {
         const eng = engineRef.current;
         if (!eng?.isRunning()) {
           if (s.activeTool === 'area' && s.areaMode === 'points') {
-            syncSession(finishAreaPoints(s, busRef.current));
+            const finished = finishAreaPoints(s, busRef.current);
+            syncSession(finished);
+            eng?.completeHandoff();
+            refreshEngineUi();
+            setCommandFeedback(finished.statusMessage);
+            return;
+          }
+          if (
+            s.activeTool === 'area' &&
+            (s.areaMode === 'add' || s.areaMode === 'subtract') &&
+            (s.areaSession?.entries.length ?? 0) > 0
+          ) {
+            const finished = finishAreaSession(s, busRef.current);
+            syncSession(finished);
+            eng?.completeHandoff();
+            refreshEngineUi();
+            setCommandFeedback(finished.statusMessage);
             return;
           }
           if (s.activeTool === 'polyline' && s.vertices.length >= 2) {
@@ -2197,6 +2259,23 @@ export function App() {
       canvas.setPointerCapture(event.pointerId);
     }
     syncSession(next);
+    // Handoff tools (MIRROR, etc.): after a successful commit, return to Selection Mode.
+    if (eng?.hasPendingHandoff() && eng.finalizeHandoffIfCommitted()) {
+      activateToolOnly('select');
+      refreshEngineUi();
+      setCommandFeedback('Select');
+    }
+    // AREA measurement success (no geometry commit) → Selection Mode + SPACE repeat.
+    // Do not call activateToolOnly here — it would wipe areaLastResult.
+    if (
+      eng?.hasPendingHandoff() &&
+      next.areaLastResult &&
+      next.activeTool === 'select'
+    ) {
+      eng.completeHandoff();
+      refreshEngineUi();
+      setCommandFeedback(next.statusMessage);
+    }
   };
 
   const onPointerMove = (event: ReactPointerEvent<HTMLCanvasElement>) => {
@@ -2526,6 +2605,78 @@ export function App() {
           </div>
         </div>
       ) : null}
+      {showUnitsDialog ? (
+        <UnitsDialog
+          initial={
+            doc.settings.drawingUnits ?? {
+              linearFormat: 'architectural',
+              linearPrecision: 4,
+              angularFormat: 'decimal-degrees',
+              angularPrecision: 0,
+              insertionUnit: 'ft',
+            }
+          }
+          onApply={(next) => {
+            busRef.current.execute(
+              new SetDrawingUnitsSettingsCommand(busRef.current.getDocument(), next),
+            );
+            setDoc(busRef.current.getDocument());
+            setCommandFeedback('UNITS updated');
+          }}
+          onClose={() => {
+            showUnitsDialogRef.current = false;
+            setShowUnitsDialog(false);
+          }}
+        />
+      ) : null}
+      {showDimStyleDialog ? (
+        <DimStyleManager
+          styles={doc.settings.dimensionStyles ?? []}
+          activeName={doc.settings.activeDimensionStyleName ?? 'Standard'}
+          onSetActive={(name) => {
+            busRef.current.execute(
+              new SetActiveDimensionStyleCommand(busRef.current.getDocument(), name),
+            );
+            setDoc(busRef.current.getDocument());
+          }}
+          onUpdate={(style) => {
+            busRef.current.execute(
+              new UpdateDimensionStyleCommand(busRef.current.getDocument(), style),
+            );
+            setDoc(busRef.current.getDocument());
+          }}
+          onCopy={(source, name) => {
+            busRef.current.execute(
+              new CopyDimensionStyleCommand(
+                busRef.current.getDocument(),
+                source,
+                name,
+              ),
+            );
+            setDoc(busRef.current.getDocument());
+          }}
+          onRename={(from, to) => {
+            busRef.current.execute(
+              new RenameDimensionStyleCommand(
+                busRef.current.getDocument(),
+                from,
+                to,
+              ),
+            );
+            setDoc(busRef.current.getDocument());
+          }}
+          onDelete={(name) => {
+            busRef.current.execute(
+              new DeleteDimensionStyleCommand(busRef.current.getDocument(), name),
+            );
+            setDoc(busRef.current.getDocument());
+          }}
+          onClose={() => {
+            showDimStyleDialogRef.current = false;
+            setShowDimStyleDialog(false);
+          }}
+        />
+      ) : null}
       {showTextDialog ? (
         <div className="modal-backdrop" role="dialog" aria-modal="true" data-cad-dialog="1">
           <div className="modal-panel">
@@ -2717,6 +2868,32 @@ export function App() {
           ) : null}
         </div>
       </div>
+
+      {session.areaLastResult ? (
+        <div className="area-result-panel" data-testid="area-result-panel" role="status">
+          <div className="area-result-title">AREA Result</div>
+          {formatAreaMeasurementReport(
+            session.areaLastResult,
+            doc,
+            session.areaLastResult.calculationMethod === 'circle'
+              ? 'circle'
+              : session.areaLastResult.calculationMethod === 'rectangle'
+                ? 'rectangle'
+                : undefined,
+          ).map((line) => (
+            <div key={line} className="area-result-line">
+              {line}
+            </div>
+          ))}
+          {session.areaSession && session.areaSession.entries.length > 0 ? (
+            <div className="area-result-line area-result-net">
+              Session entries: {session.areaSession.entries.length} · Net:{' '}
+              {session.areaSession.totalArea.toFixed(doc.settings.precision ?? 2)}{' '}
+              (world²)
+            </div>
+          ) : null}
+        </div>
+      ) : null}
 
       <div className="workspace">
         <aside className="left-rail" aria-label="Tools">
@@ -3090,123 +3267,79 @@ export function App() {
               <div className="value">{displayName}</div>
             </div>
             <div className="prop-row">
-              <label>File</label>
+              <label>Units</label>
               <div className="value">
-                {filePath ? basename(filePath) : '(unsaved)'}
+                {LINEAR_UNIT_FORMAT_LABELS[
+                  doc.settings.drawingUnits?.linearFormat ?? 'architectural'
+                ] ?? LENGTH_UNIT_LABELS[doc.settings.units]}
               </div>
             </div>
             <div className="prop-row">
-              <label>Entities</label>
-              <div className="value">{doc.entities.length}</div>
-            </div>
-            <div className="prop-row">
-              <label>TRIM Mode</label>
-              <select
-                className="prop-select"
-                value={doc.settings.trimMode ?? 'quick'}
-                onChange={(e) => {
-                  const trimMode = e.target.value === 'standard' ? 'standard' : 'quick';
-                  busRef.current.updateWithoutHistory((d) => ({
-                    ...d,
-                    settings: { ...d.settings, trimMode },
-                    meta: { ...d.meta, updatedAt: new Date().toISOString() },
-                  }));
-                }}
-                aria-label="TRIM mode Quick or Standard"
-              >
-                <option value="quick">Quick</option>
-                <option value="standard">Standard</option>
-              </select>
-            </div>
-            <div className="prop-row">
-              <label>Edge Mode</label>
-              <select
-                className="prop-select"
-                value={doc.settings.edgeMode ?? 'no-extend'}
-                onChange={(e) => {
-                  const edgeMode =
-                    e.target.value === 'extend' ? 'extend' : 'no-extend';
-                  busRef.current.updateWithoutHistory((d) => ({
-                    ...d,
-                    settings: { ...d.settings, edgeMode },
-                    meta: { ...d.meta, updatedAt: new Date().toISOString() },
-                  }));
-                }}
-                aria-label="TRIM edge mode"
-              >
-                <option value="no-extend">No Extend</option>
-                <option value="extend">Extend</option>
-              </select>
-            </div>
-            <div className="prop-row">
-              <label>Fillet Trim</label>
-              <select
-                className="prop-select"
-                value={doc.settings.filletTrim === false ? 'off' : 'on'}
-                onChange={(e) => {
-                  const filletTrim = e.target.value !== 'off';
-                  busRef.current.updateWithoutHistory((d) => ({
-                    ...d,
-                    settings: { ...d.settings, filletTrim },
-                    meta: { ...d.meta, updatedAt: new Date().toISOString() },
-                  }));
-                }}
-                aria-label="FILLET trim mode"
-              >
-                <option value="on">ON</option>
-                <option value="off">OFF</option>
-              </select>
-            </div>
-            <div className="prop-row">
-              <label>Linear Unit</label>
-              <select
-                className="prop-select"
-                value={doc.settings.units}
-                onChange={(e) => setUnits(e.target.value as LengthUnit)}
-                aria-label="Drawing display units"
-              >
-                {UNIT_OPTIONS.map((u) => (
-                  <option key={u} value={u}>
-                    {LENGTH_UNIT_LABELS[u]}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="prop-row">
               <label>Precision</label>
-              {doc.settings.units === 'ft-in' ? (
-                <select
-                  className="prop-select"
-                  value={String(doc.settings.fractionDenominator ?? 16)}
-                  onChange={(e) =>
-                    setFractionDenominator(Number(e.target.value))
-                  }
-                  aria-label="Architectural fraction precision"
-                >
-                  {[1, 2, 4, 8, 16, 32].map((d) => (
-                    <option key={d} value={d}>
-                      {d === 1 ? `1"` : `1/${d}"`}
-                    </option>
-                  ))}
-                </select>
-              ) : (
-                <select
-                  className="prop-select"
-                  value={String(doc.settings.precision)}
-                  onChange={(e) => setPrecision(Number(e.target.value))}
-                  aria-label="Decimal precision"
-                >
-                  {[0, 1, 2, 3, 4].map((d) => (
-                    <option key={d} value={d}>
-                      {d === 0 ? '0' : `0.${'0'.repeat(d)}`}
-                    </option>
-                  ))}
-                </select>
-              )}
+              <div className="value">
+                {doc.settings.drawingUnits?.linearFormat === 'architectural' ||
+                doc.settings.units === 'ft-in'
+                  ? `1/${doc.settings.fractionDenominator ?? 16}"`
+                  : doc.settings.precision}
+              </div>
             </div>
             <div className="prop-row">
-              <label>World</label>
-              <div className="value">{doc.settings.worldUnit ?? 'ft'}</div>
+              <label>Dim style</label>
+              <div className="value">
+                {doc.settings.activeDimensionStyleName ?? 'Standard'}
+              </div>
+            </div>
+            <div className="prop-row">
+              <label>Layer</label>
+              <div className="value">{currentLayer?.name ?? '—'}</div>
+            </div>
+            <div className="prop-row">
+              <label>Snap</label>
+              <div className="value">{doc.settings.snapToGrid ? 'ON' : 'OFF'}</div>
+            </div>
+            <div className="prop-row">
+              <label>Ortho</label>
+              <div className="value">{orthoOn ? 'ON' : 'OFF'}</div>
+            </div>
+            <div className="prop-row">
+              <label>Polar</label>
+              <div className="value">
+                {polarOn ? `ON ${polarIncrement}°` : 'OFF'}
+              </div>
+            </div>
+            <div className="prop-row">
+              <label>Coords</label>
+              <div className="value mono-coords">
+                {cursorWorld
+                  ? `${cursorWorld.x.toFixed(doc.settings.precision ?? 2)}, ${cursorWorld.y.toFixed(doc.settings.precision ?? 2)}`
+                  : '—'}
+              </div>
+            </div>
+            <div className="doc-action-row">
+              <button
+                type="button"
+                className="mini-btn"
+                onClick={() => setShowUnitsDialog(true)}
+              >
+                UNITS…
+              </button>
+              <button
+                type="button"
+                className="mini-btn"
+                onClick={() => setShowDimStyleDialog(true)}
+              >
+                DIMSTYLE…
+              </button>
+              <button
+                type="button"
+                className="mini-btn"
+                onClick={() => {
+                  const el = document.querySelector('.layers-section');
+                  el?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                }}
+              >
+                LAYERS…
+              </button>
             </div>
             <div className="prop-row units-convert-row">
               <label>Convert</label>
@@ -3229,28 +3362,6 @@ export function App() {
                   </option>
                 ))}
               </select>
-            </div>
-            <div className="prop-row">
-              <label>Grid</label>
-              <div className="value">{doc.settings.gridSize}</div>
-            </div>
-            <div className="prop-row">
-              <label>Snap</label>
-              <div className="value">{doc.settings.snapToGrid ? 'ON' : 'OFF'}</div>
-            </div>
-            <div className="prop-row">
-              <label>Ortho</label>
-              <div className="value">{orthoOn ? 'ON' : 'OFF'}</div>
-            </div>
-            <div className="prop-row">
-              <label>Polar</label>
-              <div className="value">
-                {polarOn ? `ON ${polarIncrement}°` : 'OFF'}
-              </div>
-            </div>
-            <div className="prop-row">
-              <label>Current</label>
-              <div className="value">{currentLayer?.name ?? '—'}</div>
             </div>
           </section>
 

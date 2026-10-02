@@ -64,3 +64,11 @@ export function resolveKeyboardContextFromTarget(
 export function spaceConfirmsCommand(ctx: KeyboardContext): boolean {
   return ctx === 'cad-canvas' || ctx === 'command-input';
 }
+
+/**
+ * SPACE repeats the last completed command only in CAD capture contexts.
+ * Must not fire while typing in text editors, property fields, dialogs, or other inputs.
+ */
+export function spaceRepeatsLastCommand(ctx: KeyboardContext): boolean {
+  return ctx === 'cad-canvas';
+}

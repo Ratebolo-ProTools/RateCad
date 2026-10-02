@@ -397,6 +397,8 @@ export function rebuildRoomGeometry(
   const tol = joinTol ?? joinToleranceForWalls([...wallsById.values()]);
   if (!nearlyEqual(first, lastTo, tol * 2)) return null;
 
+  // Shared shoelace primitive (same math as AreaMeasurementEngine / areaFromPolygon).
+  // Kept local to avoid circular import with areaEngine → rooms.
   const area = polygonArea(polygon);
   if (!(area > 1e-9)) return null;
 

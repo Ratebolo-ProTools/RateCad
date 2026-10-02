@@ -1,6 +1,8 @@
 import type { AppearanceProperties, CurrentAppearance } from './appearance.js';
 import type { AnnotationScaleSettings } from './annotationScale.js';
 import type { Layout, LayoutId, WorkspaceMode } from './layout.js';
+import type { DrawingUnitsSettings } from './drawingUnits.js';
+import type { DimensionStyleDefinition } from './dimensionStyles.js';
 
 export type { AppearanceProperties, CurrentAppearance } from './appearance.js';
 export type { AnnotationScaleSettings } from './annotationScale.js';
@@ -15,6 +17,23 @@ export type {
   ViewportId,
   WorkspaceMode,
 } from './layout.js';
+export type {
+  AngularUnitFormat,
+  DrawingUnitsSettings,
+  InsertionUnit,
+  LinearUnitFormat,
+} from './drawingUnits.js';
+export type {
+  DimensionStyleDefinition,
+  DimensionStyleId,
+  DimAlternateUnits,
+  DimFitSettings,
+  DimLineSettings,
+  DimPrimaryUnits,
+  DimSymbolsSettings,
+  DimTextSettings,
+  DimToleranceSettings,
+} from './dimensionStyles.js';
 
 export type EntityId = string;
 export type LayerId = string;
@@ -258,6 +277,10 @@ export type Entity =
   | RoomEntity;
 export type EntityType = Entity['type'];
 
+/**
+ * Legacy flat dimension style snapshot (active style sizes).
+ * Prefer `dimensionStyles` + `activeDimensionStyleName` for full DIMSTYLE data.
+ */
 export interface DimensionStyle {
   textHeight: number;
   arrowSize: number;
@@ -280,21 +303,37 @@ export interface ConstructionDefaults {
 export interface DrawingSettings {
   /**
    * Canonical storage unit for all coordinates/lengths in this document.
-   * Changing display `units` must NOT change geometry or worldUnit.
+   * Changing display `units` / drawingUnits must NOT change geometry or worldUnit.
    */
   worldUnit: LengthUnit;
-  /** Linear display unit (formatting only). */
+  /**
+   * AutoCAD-style UNITS settings (LUNITS / AUNITS / INSUNITS).
+   * Source of truth for coordinate/distance/angle display formatting.
+   * Does not control dimension text (DIMSTYLE).
+   */
+  drawingUnits: DrawingUnitsSettings;
+  /**
+   * Legacy linear display unit (formatting only) — kept in sync with drawingUnits.
+   */
   units: LengthUnit;
-  /** Decimal display precision (0–4). */
+  /** Decimal display precision (0–4) — synced from drawingUnits.linearPrecision. */
   precision: number;
   /**
    * Architectural fractional-inch denominator when units is `ft-in`
-   * (1 | 2 | 4 | 8 | 16 | 32).
+   * (1 | 2 | 4 | 8 | 16 | 32) — synced from drawingUnits.
    */
   fractionDenominator: number;
   gridSize: number;
   /** Master snap toggle (grid + object snaps). */
   snapToGrid: boolean;
+  /** Named dimension styles (DIMSTYLE). */
+  dimensionStyles: DimensionStyleDefinition[];
+  /** Active dimension style name. */
+  activeDimensionStyleName: string;
+  /**
+   * Legacy flat snapshot of the active dim style sizes (compat / quick access).
+   * Kept in sync when the active style changes.
+   */
   dimensionStyle: DimensionStyle;
   constructionDefaults: ConstructionDefaults;
   /** TRIM / EXTEND default mode (Quick = all objects as cutters). */
@@ -369,8 +408,8 @@ export const DOORS_LAYER_ID = 'layer-doors' as LayerId;
 export const WINDOWS_LAYER_ID = 'layer-windows' as LayerId;
 export const ROOMS_LAYER_ID = 'layer-rooms' as LayerId;
 
-export const SCHEMA_VERSION = 9;
-export const APP_VERSION = '0.9.0';
+export const SCHEMA_VERSION = 10;
+export const APP_VERSION = '0.10.0';
 
 export const DEFAULT_DIMENSION_STYLE: DimensionStyle = {
   textHeight: 0.35,

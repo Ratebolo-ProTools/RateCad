@@ -14,7 +14,7 @@ const handoffPrompt: CadPromptDefinition = {
 export const areaCommand: CadEngineCommand = {
   id: 'area',
   name: 'AREA',
-  aliases: ['AA', 'MEASUREAREA', 'MEASUREGEOM'],
+  aliases: ['AA', 'AREA', 'MEASUREAREA', 'MEASUREGEOM'],
   description: 'Measure area and perimeter (object, points, pick inside, add/subtract)',
   tool: 'area',
   category: 'Measure',

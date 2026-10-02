@@ -19,6 +19,7 @@ import {
   addAreaEntry,
   areaFromEntity,
   areaFromPoints,
+  areaMeasurementEngine,
   createAreaSession,
   defaultBoundaryTolerance,
   findBoundaryAtPoint,
@@ -29,6 +30,7 @@ import {
   polygonCentroid,
   previewAreaFromPoints,
   setAreaSessionMode,
+  toAreaMeasurement,
   undoAreaEntry,
   type AreaComputation,
   type AreaResult,
@@ -109,14 +111,86 @@ function formatResultStatus(
   result: AreaResult,
   doc: DrawingDocument,
   prefix = 'Area',
+  entityType?: string,
 ): string {
   const u = docUnits(doc);
-  const fmt = formatAreaResult(result, u.world, u.display, u.precision);
+  const measurement = toAreaMeasurement(result, u.world, entityType);
+  const fmt = areaMeasurementEngine.format(
+    measurement,
+    u.world,
+    u.display,
+    u.precision,
+  );
   const holeNote =
     result.holes.length > 0
       ? ` · holes ${result.holes.length} (−${formatWorldArea(result.holesArea, u.world, u.display, u.precision)})`
       : '';
-  return `${prefix}: ${fmt.areaText} · Perimeter: ${fmt.perimeterText}${holeNote}`;
+  return `${prefix}: ${fmt.summary}${holeNote}`;
+}
+
+/** Professional multi-line AREA result for command/status UI. */
+export function formatAreaMeasurementReport(
+  result: AreaResult,
+  doc: DrawingDocument,
+  entityType?: string,
+): string[] {
+  const u = docUnits(doc);
+  const measurement = toAreaMeasurement(result, u.world, entityType);
+  return areaMeasurementEngine.format(
+    measurement,
+    u.world,
+    u.display,
+    u.precision,
+  ).lines;
+}
+
+/**
+ * End a successful AREA measurement: keep last result visible, clear draw state.
+ * Caller should activate Selection Mode + completeHandoff on the command engine.
+ */
+export function completeAreaMeasurement(session: ToolSession): ToolSession {
+  return {
+    ...cancelTool({ ...session, activeTool: 'select' }),
+    activeTool: 'select',
+    areaMode: session.areaMode,
+    areaSession: session.areaSession,
+    areaLastResult: session.areaLastResult,
+    areaAwaitingOpen: null,
+    statusMessage: session.statusMessage,
+  };
+}
+
+/** Finish Add/Subtract session and keep net total in status. */
+export function finishAreaSession(
+  session: ToolSession,
+  bus: CommandBus,
+): ToolSession {
+  const areaSession = session.areaSession;
+  if (!areaSession || areaSession.entries.length === 0) {
+    return {
+      ...session,
+      statusMessage: 'AREA: no regions in Add/Subtract session',
+    };
+  }
+  const doc = bus.getDocument();
+  const u = docUnits(doc);
+  const report = formatAreaSessionReport(
+    areaSession,
+    u.world,
+    u.display,
+    u.precision,
+  );
+  const last = areaSession.entries[areaSession.entries.length - 1]!.result;
+  return {
+    ...completeAreaMeasurement({
+      ...session,
+      areaLastResult: last,
+      statusMessage: report.join(' · '),
+    }),
+    areaSession,
+    areaLastResult: last,
+    statusMessage: report.join(' · '),
+  };
 }
 
 function applyComputation(
@@ -124,6 +198,7 @@ function applyComputation(
   bus: CommandBus,
   computation: AreaComputation,
   label: string,
+  entityType?: string,
 ): ToolSession {
   const doc = bus.getDocument();
   if (!computation.ok) {
@@ -168,16 +243,22 @@ function applyComputation(
       areaLastResult: computation,
       areaAwaitingOpen: null,
       preview: areaPreviewFromResult(computation),
-      statusMessage: `${report[report.length - 1]} · ${formatResultStatus(computation, doc, label)}`,
+      statusMessage: `${report[report.length - 1]} · ${formatResultStatus(computation, doc, label, entityType)}`,
     };
   }
 
+  // Object / points / pick-inside / room: one-shot successful measurement.
+  const reportLines = formatAreaMeasurementReport(
+    computation,
+    doc,
+    entityType,
+  );
   return {
     ...session,
     areaLastResult: computation,
     areaAwaitingOpen: null,
     preview: areaPreviewFromResult(computation),
-    statusMessage: formatResultStatus(computation, doc),
+    statusMessage: reportLines.join(' · '),
   };
 }
 
@@ -255,8 +336,18 @@ export function handleAreaPointerDown(
         }
       }
     }
+    const next = applyComputation(session, bus, computation, label, 'room');
+    if (next.areaLastResult) {
+      return {
+        ...completeAreaMeasurement(next),
+        areaLastResult: next.areaLastResult,
+        statusMessage: next.statusMessage,
+        preview: next.preview,
+        lastSnap: snap,
+      };
+    }
     return {
-      ...applyComputation(session, bus, computation, label),
+      ...next,
       lastSnap: snap,
     };
   }
@@ -307,8 +398,26 @@ export function handleAreaPointerDown(
     entity.type === 'room'
       ? entity.properties.name || 'Room'
       : entity.type.charAt(0).toUpperCase() + entity.type.slice(1);
+  const next = applyComputation(
+    session,
+    bus,
+    computation,
+    label,
+    entity.type,
+  );
+  // One-shot object measure → Selection Mode (App also calls completeHandoff).
+  // Add/Subtract keep AREA active for more picks until Enter finishes the session.
+  if (next.areaLastResult && mode === 'object') {
+    return {
+      ...completeAreaMeasurement(next),
+      areaLastResult: next.areaLastResult,
+      statusMessage: next.statusMessage,
+      preview: next.preview,
+      lastSnap: snap,
+    };
+  }
   return {
-    ...applyComputation(session, bus, computation, label),
+    ...next,
     lastSnap: snap,
   };
 }
@@ -371,7 +480,7 @@ export function handleAreaPointerMove(
   return { ...session, lastSnap: snap };
 }
 
-/** Finish points polygon (Enter). */
+/** Finish points polygon (Enter) — closes last→first; does not create geometry. */
 export function finishAreaPoints(
   session: ToolSession,
   bus: CommandBus,
@@ -380,12 +489,16 @@ export function finishAreaPoints(
     return session;
   }
   const computation = areaFromPoints(session.vertices, true);
-  const next = applyComputation(session, bus, computation, 'Points');
+  const next = applyComputation(session, bus, computation, 'Points', 'polygon');
   return {
-    ...next,
-    vertices: [],
-    anchor: null,
-    mode: 'idle',
+    ...completeAreaMeasurement({
+      ...next,
+      vertices: [],
+      anchor: null,
+      mode: 'idle',
+    }),
+    areaLastResult: next.areaLastResult,
+    statusMessage: next.statusMessage,
   };
 }
 

@@ -47,7 +47,7 @@ describe('layout schema migration', () => {
       },
     };
     const opened = parseDocument(JSON.stringify(legacy));
-    expect(opened.schemaVersion).toBe(9);
+    expect(opened.schemaVersion).toBe(10);
     expect(opened.entities).toHaveLength(1);
     expect(opened.entities[0]!.id).toBe('line-1');
     expect(opened.layouts.length).toBeGreaterThanOrEqual(1);
@@ -139,7 +139,7 @@ describe('layout schema migration', () => {
       },
     ];
     const opened = parseDocument(serializeDocument(doc));
-    expect(opened.schemaVersion).toBe(9);
+    expect(opened.schemaVersion).toBe(10);
     expect(opened.layouts[0]!.sheetInfo?.project).toBe('Tower');
     expect(opened.layouts[0]!.titleBlock?.enabled).toBe(true);
     expect(opened.layouts[0]!.paperCamera?.zoom).toBe(1.25);
@@ -214,7 +214,7 @@ describe('layout schema migration', () => {
       },
     };
     const opened = parseDocument(JSON.stringify(legacy));
-    expect(opened.schemaVersion).toBe(9);
+    expect(opened.schemaVersion).toBe(10);
     expect(opened.layers.some((l) => l.id === 'layer-titleblock')).toBe(true);
   });
 
@@ -234,7 +234,7 @@ describe('layout schema migration', () => {
     layout.viewports[0]!.scale = 0.1;
     const text = serializeDocument(doc);
     const opened = parseDocument(text);
-    expect(opened.schemaVersion).toBe(9);
+    expect(opened.schemaVersion).toBe(10);
     expect(opened.settings.annotationScale.ratio).toBe(100);
     expect(opened.settings.annotationScale.paperTextHeightMm).toBe(2.5);
     expect(

@@ -49,6 +49,10 @@ export interface EngineHost {
   enterPspace?: () => { ok: boolean; message: string };
   /** Sync App tabs after LAYOUT CREATE/SET/RENAME. */
   onLayoutChanged?: (layoutId: string | null, message: string) => void;
+  /** Open Drawing Units dialog (UNITS command). */
+  openUnitsDialog?: () => void;
+  /** Open Dimension Style Manager (DIMSTYLE command). */
+  openDimStyleDialog?: () => void;
 }
 
 type Running = {
@@ -80,7 +84,12 @@ export class CadCommandEngine {
   readonly history: CadCommandHistory;
   readonly usage: CommandUsageTracker;
   private running: Running | null = null;
+  /** Last successfully completed command name (SPACE/Enter repeat). */
   private lastCompletedName: string | null = null;
+  /** Handoff tool command waiting for commit or ESC → Selection Mode. */
+  private handoffName: string | null = null;
+  /** Undo depth when the current engine/handoff session started. */
+  private undoDepthAtStart = 0;
   private buffer = '';
   private suggestionRows: CommandSuggestion[] = [];
   private suggestionIndex = -1;
@@ -100,6 +109,46 @@ export class CadCommandEngine {
 
   isRunning(): boolean {
     return !!this.running;
+  }
+
+  /** Name of the last successfully completed command, if any. */
+  getLastCompletedName(): string | null {
+    return this.lastCompletedName;
+  }
+
+  /** True while a handoff tool (MIRROR, etc.) owns the canvas after start(). */
+  hasPendingHandoff(): boolean {
+    return this.handoffName != null;
+  }
+
+  /**
+   * After a handoff tool commits geometry, store it as last completed and clear handoff.
+   * @returns true when a commit was recorded (caller should enter Selection Mode).
+   */
+  finalizeHandoffIfCommitted(): boolean {
+    if (!this.handoffName) return false;
+    if (this.sessionCommittedWork()) {
+      this.lastCompletedName = this.handoffName;
+      this.handoffName = null;
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Mark a successful handoff completion that did not mutate document history
+   * (e.g. AREA measurement). Stores last completed for SPACE repeat.
+   */
+  completeHandoff(): boolean {
+    if (!this.handoffName) return false;
+    this.lastCompletedName = this.handoffName;
+    this.handoffName = null;
+    return true;
+  }
+
+  /** Clear handoff tracking without treating it as a successful completion. */
+  clearHandoff(): void {
+    this.handoffName = null;
   }
 
   /** True while MOVE/COPY (etc.) wait for object selection via canvas. */
@@ -243,9 +292,10 @@ export class CadCommandEngine {
 
   startCommand(command: CadEngineCommand): { ok: true } {
     this.cancel(false);
+    this.handoffName = null;
+    this.undoDepthAtStart = this.bus.getUndoDepth();
     this.host.activateTool(command.tool);
     this.history.push(command.name);
-    this.lastCompletedName = command.name;
     this.usage.record(command.id);
     this.buffer = '';
     this.suggestionRows = [];
@@ -274,6 +324,8 @@ export class CadCommandEngine {
       if (boot.status) this.running.status = boot.status;
       if (boot.complete) {
         this.message = boot.status ?? this.running.status;
+        // Successful immediate completion (e.g. MSPACE/PSPACE).
+        this.lastCompletedName = command.name;
         this.running = null;
         this.host.activateSelect();
         return { ok: true };
@@ -281,6 +333,7 @@ export class CadCommandEngine {
     }
     if (command.handoffToTool) {
       // Leave tool active; canvas handlers own interaction.
+      this.handoffName = command.name;
       this.running = null;
     }
     return { ok: true };
@@ -339,7 +392,11 @@ export class CadCommandEngine {
     if (!this.running) {
       const raw = this.buffer.trim();
       if (!raw) {
-        if (source === 'enter' && this.lastCompletedName) {
+        // Enter or Space with empty buffer repeats last completed command.
+        if (
+          (source === 'enter' || source === 'space') &&
+          this.lastCompletedName
+        ) {
           this.start(this.lastCompletedName);
         }
         return;
@@ -403,6 +460,18 @@ export class CadCommandEngine {
       this.cancel(true);
       return { kind: 'cancel-command' };
     }
+    if (this.handoffName) {
+      // ESC ends handoff tool session; keep lastCompleted only if geometry was committed.
+      this.finalizeHandoffIfCommitted();
+      this.handoffName = null;
+      this.buffer = '';
+      this.suggestionRows = [];
+      this.suggestionIndex = -1;
+      this.message = null;
+      this.naturalLanguagePending = false;
+      this.host.activateSelect();
+      return { kind: 'cancel-command' };
+    }
     if (this.buffer.trim().length > 0 || this.suggestionRows.length > 0) {
       this.buffer = '';
       this.suggestionRows = [];
@@ -421,10 +490,20 @@ export class CadCommandEngine {
   }
 
   cancel(activateSelect = true): void {
-    if (this.running?.command.onCancel) {
-      this.running.command.onCancel(this.running.state);
+    if (this.running) {
+      // Preserve last completed when ESC ends a session that already committed geometry
+      // (e.g. LINE drew segments then ESC). Do not store abandoned/no-op cancels.
+      if (this.sessionCommittedWork()) {
+        this.lastCompletedName = this.running.command.name;
+      }
+      if (this.running.command.onCancel) {
+        this.running.command.onCancel(this.running.state);
+      }
+    } else if (this.handoffName) {
+      this.finalizeHandoffIfCommitted();
     }
     this.running = null;
+    this.handoffName = null;
     this.buffer = '';
     this.suggestionRows = [];
     this.suggestionIndex = -1;
@@ -578,7 +657,10 @@ export class CadCommandEngine {
     }
     if (result.kind === 'complete') {
       this.message = result.message ?? null;
+      // Successful completion — store for SPACE/Enter repeat.
+      this.lastCompletedName = r.command.name;
       this.running = null;
+      this.handoffName = null;
       this.buffer = '';
       this.host.activateSelect();
       return;
@@ -607,5 +689,9 @@ export class CadCommandEngine {
       angleOverrideDeg: this.running?.angleOverrideDeg ?? null,
       selectedIds: this.host.getSelectedIds(),
     };
+  }
+
+  private sessionCommittedWork(): boolean {
+    return this.bus.getUndoDepth() > this.undoDepthAtStart;
   }
 }

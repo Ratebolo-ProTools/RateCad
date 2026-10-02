@@ -279,13 +279,15 @@ export function areaFromRectangle(
   corner2: Vec2,
   sourceId?: EntityId,
 ): AreaComputation {
+  // Axis-aligned rectangle from opposite corners — derive length/width from
+  // actual geometry extents (survives transform of corner storage).
   const minX = Math.min(corner1.x, corner2.x);
   const maxX = Math.max(corner1.x, corner2.x);
   const minY = Math.min(corner1.y, corner2.y);
   const maxY = Math.max(corner1.y, corner2.y);
-  const w = maxX - minX;
-  const h = maxY - minY;
-  if (!(w > 1e-12) || !(h > 1e-12)) {
+  const length = maxX - minX;
+  const width = maxY - minY;
+  if (!(length > 1e-12) || !(width > 1e-12)) {
     return { ok: false, reason: 'Degenerate rectangle', code: 'degenerate' };
   }
   const outer: Vec2[] = [
@@ -294,7 +296,40 @@ export function areaFromRectangle(
     { x: maxX, y: maxY },
     { x: minX, y: maxY },
   ];
-  return areaFromPolygon(outer, {
+  const result = areaFromPolygon(outer, {
+    method: 'rectangle',
+    sourceObjectIds: sourceId ? [sourceId] : [],
+  });
+  // Guard: area must equal length × width; perimeter 2×(L+W)
+  if (result.ok) {
+    const expectedArea = length * width;
+    const expectedPeri = 2 * (length + width);
+    if (Math.abs(result.area - expectedArea) > 1e-6) {
+      return { ...result, area: expectedArea, outerArea: expectedArea };
+    }
+    if (Math.abs(result.perimeter - expectedPeri) > 1e-6) {
+      return { ...result, perimeter: expectedPeri };
+    }
+  }
+  return result;
+}
+
+/**
+ * Oriented / rotated rectangle from four boundary corners (in order).
+ * Uses shoelace — does not assume axis alignment.
+ */
+export function areaFromOrientedRectangle(
+  corners: [Vec2, Vec2, Vec2, Vec2] | Vec2[],
+  sourceId?: EntityId,
+): AreaComputation {
+  if (corners.length !== 4) {
+    return {
+      ok: false,
+      reason: 'Oriented rectangle requires exactly 4 corners',
+      code: 'degenerate',
+    };
+  }
+  return areaFromPolygon([...corners], {
     method: 'rectangle',
     sourceObjectIds: sourceId ? [sourceId] : [],
   });
@@ -427,13 +462,21 @@ export function formatAreaResult(
   worldUnit: LengthUnit,
   displayUnit: LengthUnit,
   precision = 2,
-): { areaText: string; perimeterText: string; netText: string } {
+): {
+  areaText: string;
+  perimeterText: string;
+  netText: string;
+  perimeterLabel: 'Perimeter' | 'Circumference';
+} {
+  const perimeterLabel =
+    result.calculationMethod === 'circle' ? 'Circumference' : 'Perimeter';
   return {
     areaText: formatWorldArea(result.area, worldUnit, displayUnit, precision),
     perimeterText: formatWorldLength(result.perimeter, worldUnit, displayUnit, {
       precision,
     }),
     netText: formatWorldArea(result.area, worldUnit, displayUnit, precision),
+    perimeterLabel,
   };
 }
 

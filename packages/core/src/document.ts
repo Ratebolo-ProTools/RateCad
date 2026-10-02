@@ -25,6 +25,17 @@ import {
 import { DEFAULT_CURRENT_APPEARANCE } from './appearance.js';
 import { DEFAULT_ANNOTATION_SCALE } from './annotationScale.js';
 import {
+  DEFAULT_DRAWING_UNITS,
+  drawingUnitsFromLegacy,
+  legacyDisplayFromDrawingUnits,
+} from './drawingUnits.js';
+import {
+  DEFAULT_ACTIVE_DIMSTYLE_NAME,
+  DEFAULT_DIMENSION_STYLES,
+  getActiveDimensionStyle,
+  legacyStyleFromDefinition,
+} from './dimensionStyles.js';
+import {
   createDefaultLayout,
   createLayout,
   getLayout,
@@ -150,31 +161,58 @@ export function createEmptyDocument(
 
   const layers = createDefaultLayers();
 
+  const worldUnit = settings?.worldUnit ?? 'ft';
+  const drawingUnits = {
+    ...DEFAULT_DRAWING_UNITS,
+    ...(settings?.drawingUnits ??
+      drawingUnitsFromLegacy({
+        units: settings?.units ?? 'ft-in',
+        precision: settings?.precision ?? 2,
+        fractionDenominator: settings?.fractionDenominator ?? 16,
+        worldUnit,
+      })),
+  };
+  const legacyDisplay = legacyDisplayFromDrawingUnits(drawingUnits, worldUnit);
+  const dimensionStyles =
+    settings?.dimensionStyles?.length
+      ? settings.dimensionStyles
+      : DEFAULT_DIMENSION_STYLES.map((s) => structuredClone(s));
+  const activeDimensionStyleName =
+    settings?.activeDimensionStyleName ?? DEFAULT_ACTIVE_DIMSTYLE_NAME;
+  const activeDim = getActiveDimensionStyle(
+    dimensionStyles,
+    activeDimensionStyleName,
+  );
+
   return {
     schemaVersion: SCHEMA_VERSION,
     meta,
     settings: {
-      worldUnit: 'ft',
-      units: 'ft-in',
-      precision: 2,
-      fractionDenominator: 16,
-      gridSize: 1,
-      snapToGrid: true,
-      trimMode: 'quick',
-      edgeMode: 'no-extend',
-      projectMode: 'none',
-      trimEraseUntrimmable: false,
-      filletRadius: 0,
-      filletTrim: true,
-      linetypeScale: 1,
-      showLineweights: true,
-      ...settings,
+      worldUnit,
+      drawingUnits,
+      units: settings?.units ?? legacyDisplay.units,
+      precision: settings?.precision ?? legacyDisplay.precision,
+      fractionDenominator:
+        settings?.fractionDenominator ?? legacyDisplay.fractionDenominator,
+      gridSize: settings?.gridSize ?? 1,
+      snapToGrid: settings?.snapToGrid ?? true,
+      trimMode: settings?.trimMode ?? 'quick',
+      edgeMode: settings?.edgeMode ?? 'no-extend',
+      projectMode: settings?.projectMode ?? 'none',
+      trimEraseUntrimmable: settings?.trimEraseUntrimmable ?? false,
+      filletRadius: settings?.filletRadius ?? 0,
+      filletTrim: settings?.filletTrim ?? true,
+      linetypeScale: settings?.linetypeScale ?? 1,
+      showLineweights: settings?.showLineweights ?? true,
       currentAppearance: {
         ...DEFAULT_CURRENT_APPEARANCE,
         ...(settings?.currentAppearance ?? {}),
       },
+      dimensionStyles,
+      activeDimensionStyleName,
       dimensionStyle: {
         ...DEFAULT_DIMENSION_STYLE,
+        ...legacyStyleFromDefinition(activeDim),
         ...(settings?.dimensionStyle ?? {}),
       },
       constructionDefaults: {

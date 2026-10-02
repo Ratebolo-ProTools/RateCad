@@ -14,6 +14,7 @@ import type {
   WorkspaceMode,
 } from '@ratecad/core';
 import {
+  getActiveDimensionStyle,
   getHostedByWall,
   isAnnotativeEntity,
   isLayerVisibleInViewport,
@@ -26,6 +27,7 @@ import {
   distance,
   doorLayout,
   formatAngleDegrees,
+  formatDimensionLength,
   formatLengthInUnits,
   formatRoomLabelLines,
   lineweightToScreenPx,
@@ -192,14 +194,18 @@ function strokeDimension(
   const layout = dimensionLayout(entity.geometry);
   if (!layout) return;
 
+  const dimStyleDef = getActiveDimensionStyle(
+    doc.settings.dimensionStyles ?? [],
+    doc.settings.activeDimensionStyleName ?? 'Standard',
+  );
   const style = doc.settings.dimensionStyle;
   const ann = resolveAnnotationSettings(doc.settings.annotationScale);
-  const gap = style.extensionGap;
-  const beyond = style.extensionBeyond;
-  let arrow = entity.properties.arrowSize ?? style.arrowSize;
-  let textH = entity.properties.textHeight ?? style.textHeight;
+  const gap = dimStyleDef.lines.offsetFromOrigin || style.extensionGap;
+  const beyond = dimStyleDef.lines.extendBeyond || style.extensionBeyond;
+  let arrow = entity.properties.arrowSize ?? dimStyleDef.symbols.arrowSize ?? style.arrowSize;
+  let textH = entity.properties.textHeight ?? dimStyleDef.text.height ?? style.textHeight;
   const precision =
-    entity.properties.precision ?? style.precision;
+    entity.properties.precision ?? dimStyleDef.primary.precision ?? style.precision;
 
   // Annotative model dims through a viewport: size from paper mm + this VP scale
   // so text/arrows stay readable when viewport scale changes.
@@ -299,10 +305,19 @@ function strokeDimension(
     const deg = measuredAngleDeg(vertex, start, end);
     label = formatAngleDegrees(deg, precision);
   } else if (entity.geometry.kind === 'radius') {
-    label = `R ${formatLengthInUnits(value, displayUnit, precision, worldUnit, frac)}`;
+    label = formatDimensionLength(value, worldUnit, dimStyleDef, {
+      kindPrefix: 'R',
+    });
   } else if (entity.geometry.kind === 'diameter') {
-    label = `Ø ${formatLengthInUnits(value, displayUnit, precision, worldUnit, frac)}`;
+    label = formatDimensionLength(value, worldUnit, dimStyleDef, {
+      kindPrefix: 'Ø',
+    });
   } else {
+    // DIMSTYLE primary/alternate units — not drawing LUNITS.
+    label = formatDimensionLength(value, worldUnit, dimStyleDef);
+  }
+  // Fallback if style table missing in partially migrated docs
+  if (!label || label === '—') {
     label = formatLengthInUnits(value, displayUnit, precision, worldUnit, frac);
   }
 

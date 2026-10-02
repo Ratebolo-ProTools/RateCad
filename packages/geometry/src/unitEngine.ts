@@ -216,13 +216,13 @@ export function formatArchitecturalFeet(
 
 /**
  * Parse architectural length strings into feet.
- * Supports: 3'-4", 3'4", 3'-4 3/16", 0'-6", 12", 3', 3.5'
+ * Supports: 3'-4", 3'4", 3'-4 3/16", 10'-6 1/2", 0'-6", 12", 3', 3.5'
  */
 export function parseArchitecturalLength(raw: string): number | null {
   const text = raw.trim().toLowerCase().replace(/,/g, '');
   if (!text) return null;
 
-  // 3'-4 3/16" or 3' - 4 3/16"
+  // 3'-4 3/16" or 10'-6 1/2" or 3' - 4 3/16"
   const withFrac = text.match(
     /^(-?\d+)\s*'\s*-?\s*(\d+)\s+(\d+)\s*\/\s*(\d+)\s*"?$/,
   );
@@ -235,7 +235,17 @@ export function parseArchitecturalLength(raw: string): number | null {
     return feet + (inches + n / d) / 12;
   }
 
-  // 3'-4" or 3'4" or 3'-4
+  // Fractional inches only: 6 1/2"
+  const inchesFrac = text.match(/^(-?\d+)\s+(\d+)\s*\/\s*(\d+)\s*"$/);
+  if (inchesFrac) {
+    const inches = Number(inchesFrac[1]);
+    const n = Number(inchesFrac[2]);
+    const d = Number(inchesFrac[3]);
+    if (![inches, n, d].every(Number.isFinite) || d === 0) return null;
+    return (inches + n / d) / 12;
+  }
+
+  // 3'-4" or 3'4" or 3'-4 or 10'6"
   const arch = text.match(/^(-?\d+)\s*'\s*-?\s*(\d+(?:\.\d+)?)\s*"?$/);
   if (arch) {
     const feet = Number(arch[1]);
@@ -306,6 +316,9 @@ export interface ParsedLength {
 /**
  * Parse a user length string into world storage units.
  * Bare numbers are interpreted in `defaultUnit` (normally the display unit).
+ *
+ * Explicit unit examples (space optional):
+ *   3000mm, 300cm, 3m, 10ft, 10', 10'6", 10'-6", 10'-6 1/2"
  */
 export function parseLength(
   raw: string,
@@ -315,7 +328,7 @@ export function parseLength(
   const text = raw.trim().replace(/,/g, '');
   if (!text) return null;
 
-  // Architectural forms → feet → world
+  // Architectural forms → feet → world (10'6", 10'-6 1/2", 3'-4", …)
   const archFeet = parseArchitecturalLength(text);
   if (archFeet != null) {
     return {
@@ -324,13 +337,30 @@ export function parseLength(
     };
   }
 
-  // Number + unit suffix (e.g. 3.5 m, 10 feet, 120 in)
+  // Compact feet+inches without separator: 10'6" or 10'6
+  const compactArch = text.match(/^(-?\d+)\s*'\s*(\d+(?:\.\d+)?)\s*"?$/);
+  if (compactArch) {
+    const feet = Number(compactArch[1]);
+    const inches = Number(compactArch[2]);
+    if (Number.isFinite(feet) && Number.isFinite(inches)) {
+      return {
+        worldValue: convertLength(feet + inches / 12, 'ft', worldUnit),
+        sourceUnit: 'ft-in',
+      };
+    }
+  }
+
+  // Number + unit suffix — space optional (3000mm, 3.5 m, 10ft, 120")
   const withUnit = text.match(
     /^(-?\d+(?:\.\d+)?)\s*(mm|cm|m|in|ft|inches|inch|feet|foot|meters?|metres?|centimeters?|centimetres?|millimeters?|millimetres?|"|')$/i,
   );
   if (withUnit) {
     const n = Number(withUnit[1]);
-    if (!Number.isFinite(n) || n === 0) return null;
+    if (!Number.isFinite(n)) return null;
+    // Allow zero only for explicit typed values (rare); reject for bare unitless elsewhere.
+    if (n === 0) {
+      return { worldValue: 0, sourceUnit: defaultUnit === 'ft-in' ? 'ft' : defaultUnit };
+    }
     const alias = resolveUnitAlias(withUnit[2]!);
     if (!alias) return null;
     const source: LengthUnit = alias === 'ft-in' ? 'ft' : alias;

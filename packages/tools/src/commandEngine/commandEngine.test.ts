@@ -375,10 +375,13 @@ describe('command engine sessions', () => {
     expect(engine.getBuffer().length).toBeGreaterThan(0);
   });
 
-  it('empty Enter repeats last command', () => {
+  it('empty Enter repeats last successfully completed command', () => {
     const { engine } = makeEngine();
     engine.start('REC');
-    engine.cancel(true);
+    engine.submitPoint({ x: 0, y: 0 });
+    engine.submitPoint({ x: 4, y: 3 });
+    expect(engine.isRunning()).toBe(false);
+    expect(engine.getLastCompletedName()).toBe('RECTANGLE');
     engine.setBuffer('');
     engine.confirm('enter');
     expect(engine.isRunning()).toBe(true);
