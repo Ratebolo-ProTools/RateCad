@@ -23,6 +23,13 @@ import {
   WINDOWS_LAYER_ID,
 } from './types.js';
 import { DEFAULT_CURRENT_APPEARANCE } from './appearance.js';
+import {
+  createDefaultLayout,
+  createLayout,
+  getLayout,
+  type Layout,
+  type LayoutId,
+} from './layout.js';
 
 function withLayerDefaults(
   partial: Pick<Layer, 'id' | 'name' | 'color'> &
@@ -168,9 +175,54 @@ export function createEmptyDocument(
     layers,
     currentLayerId: DEFAULT_LAYER_ID,
     entities: [],
+    layouts: [createDefaultLayout('Layout1')],
+    activeLayoutId: null,
+    workspaceMode: 'MODEL_SPACE',
     selection: [],
   };
 }
+
+export function ensureLayouts(doc: DrawingDocument): DrawingDocument {
+  if (doc.layouts?.length) return doc;
+  return touchDocument({
+    ...doc,
+    layouts: [createDefaultLayout('Layout1')],
+    activeLayoutId: doc.activeLayoutId ?? null,
+  });
+}
+
+export function setActiveLayout(
+  doc: DrawingDocument,
+  layoutId: LayoutId | null,
+): DrawingDocument {
+  if (layoutId != null && !getLayout(doc.layouts, layoutId)) {
+    return doc;
+  }
+  return touchDocument({
+    ...doc,
+    activeLayoutId: layoutId,
+    workspaceMode: layoutId == null ? 'MODEL_SPACE' : 'PAPER_SPACE',
+  });
+}
+
+export function addLayout(
+  doc: DrawingDocument,
+  name?: string,
+): { document: DrawingDocument; layout: Layout } {
+  const layout = createLayout(doc.layouts ?? [], name);
+  const document = touchDocument({
+    ...doc,
+    layouts: [...(doc.layouts ?? []), layout],
+    activeLayoutId: layout.id,
+    workspaceMode: 'PAPER_SPACE',
+  });
+  return { document, layout };
+}
+
+export function getActiveLayout(doc: DrawingDocument): Layout | undefined {
+  return getLayout(doc.layouts ?? [], doc.activeLayoutId);
+}
+
 
 export function cloneDocument(doc: DrawingDocument): DrawingDocument {
   return structuredClone(doc);

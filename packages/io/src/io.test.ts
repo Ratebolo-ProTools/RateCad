@@ -153,7 +153,7 @@ describe('.ratecad IO', () => {
       },
     };
     const opened = parseDocument(JSON.stringify(v1));
-    expect(opened.schemaVersion).toBe(6);
+    expect(opened.schemaVersion).toBe(7);
     expect(opened.currentLayerId).toBe('layer-0');
     expect(opened.settings.dimensionStyle).toBeDefined();
     expect(opened.settings.constructionDefaults).toBeDefined();
@@ -219,7 +219,7 @@ describe('.ratecad IO', () => {
       },
     };
     const opened = parseDocument(JSON.stringify(v2));
-    expect(opened.schemaVersion).toBe(6);
+    expect(opened.schemaVersion).toBe(7);
     expect(opened.settings.constructionDefaults.wallThickness).toBeGreaterThan(0);
     expect(opened.layers.map((l) => l.name)).toEqual(
       expect.arrayContaining(['Walls', 'Doors', 'Windows', 'Rooms']),
@@ -282,7 +282,7 @@ describe('.ratecad IO', () => {
       },
     };
     const opened = parseDocument(JSON.stringify(v3));
-    expect(opened.schemaVersion).toBe(6);
+    expect(opened.schemaVersion).toBe(7);
     expect(opened.layers.map((l) => l.name)).toEqual(
       expect.arrayContaining(['Rooms']),
     );
@@ -343,7 +343,7 @@ describe('.ratecad IO', () => {
       ],
     };
     const opened = parseDocument(serializeDocument(doc));
-    expect(opened.schemaVersion).toBe(6);
+    expect(opened.schemaVersion).toBe(7);
     expect(opened.entities.map((e) => e.type)).toEqual([
       'wall',
       'door',
@@ -445,7 +445,7 @@ describe('.ratecad IO', () => {
       ],
     };
     const opened = parseDocument(serializeDocument(doc));
-    expect(opened.schemaVersion).toBe(6);
+    expect(opened.schemaVersion).toBe(7);
     const room = opened.entities.find((e) => e.type === 'room');
     expect(room?.type).toBe('room');
     if (room?.type === 'room') {

@@ -3,11 +3,14 @@ import type {
   DoorEntity,
   DrawingDocument,
   Entity,
+  Layout,
   LeaderEntity,
   TextEntity,
   Vec2,
+  ViewportId,
   WallEntity,
   WindowEntity,
+  WorkspaceMode,
 } from '@ratecad/core';
 import { getHostedByWall } from '@ratecad/core';
 import {
@@ -31,6 +34,13 @@ import {
   worldToScreen,
 } from './camera.js';
 import { getEntityGrips, getSelectionGrips, type Grip } from './grips.js';
+import {
+  cameraForViewport,
+  drawPaperSheet,
+  drawViewportFrame,
+  fitPaperInCanvas,
+  layoutSheetLabel,
+} from './paperSpace.js';
 
 export interface PreviewGeometry {
   kind: 'line' | 'rectangle' | 'circle' | 'polyline' | 'area';
@@ -61,6 +71,16 @@ export interface RenderOptions {
   hideEntityIds?: string[];
   /** Preselection hover highlight (not selected). */
   hoveredEntityId?: string | null;
+  /**
+   * When set with workspaceMode PAPER_SPACE or VIEWPORT_MODEL_SPACE,
+   * renders the paper sheet + layout viewports instead of full Model Space.
+   */
+  paperSpaceLayout?: Layout | null;
+  workspaceMode?: WorkspaceMode;
+  /** Active viewport when in VIEWPORT_MODEL_SPACE (green frame). */
+  activeViewportId?: ViewportId | null;
+  /** Selected viewport id in paper space (blue frame). */
+  selectedViewportId?: ViewportId | null;
   theme?: {
     background: string;
     gridMajor: string;
@@ -818,35 +838,29 @@ function drawSnapIndicator(
   ctx.restore();
 }
 
-/**
- * Pure projection of DrawingDocument → canvas.
- * Never mutates the document.
- */
-export function renderDocument(
+function drawModelEntities(
   ctx: CanvasRenderingContext2D,
-  options: RenderOptions,
-): void {
-  const theme = { ...DEFAULT_THEME, ...options.theme };
-  const { width, height, camera, document: doc } = options;
-  const hidden = new Set(options.hideEntityIds ?? []);
-
-  ctx.clearRect(0, 0, width, height);
-  ctx.fillStyle = theme.background;
-  ctx.fillRect(0, 0, width, height);
-
-  drawGrid(ctx, camera, width, height, doc.settings.gridSize, theme);
-
-  const selected = new Set(doc.selection);
+  doc: DrawingDocument,
+  camera: Camera,
+  width: number,
+  height: number,
+  theme: typeof DEFAULT_THEME,
+  options: {
+    selected: Set<string>;
+    hidden: Set<string>;
+    hoveredEntityId?: string | null;
+    skipGrips?: boolean;
+  },
+): Grip[] {
   const autoGrips: Grip[] = [];
-
   for (const entity of doc.entities) {
     if (!entity.visible) continue;
-    if (hidden.has(entity.id)) continue;
+    if (options.hidden.has(entity.id)) continue;
     const layer = doc.layers.find((l) => l.id === entity.layerId);
     if (layer && !layer.visible) continue;
 
     const effective = resolveEffectiveAppearance(entity, doc, theme.entity);
-    const isSelected = selected.has(entity.id);
+    const isSelected = options.selected.has(entity.id);
     const isHovered =
       !!options.hoveredEntityId &&
       options.hoveredEntityId === entity.id &&
@@ -857,12 +871,15 @@ export function renderDocument(
         ? theme.hover
         : effective.colorHex;
     const lineWidth = isSelected
-      ? Math.max(2, lineweightToScreenPx(
-          effective.lineweightMm,
-          camera.zoom,
-          doc.settings.showLineweights ?? true,
+      ? Math.max(
           2,
-        ))
+          lineweightToScreenPx(
+            effective.lineweightMm,
+            camera.zoom,
+            doc.settings.showLineweights ?? true,
+            2,
+          ),
+        )
       : isHovered
         ? 1.75
         : lineweightToScreenPx(
@@ -883,12 +900,126 @@ export function renderDocument(
       isSelected || isHovered ? [] : effective.linetypePattern,
       isSelected || isHovered ? 1 : effective.alpha,
     );
-    if (isSelected && !options.previewEntities?.length) {
-      autoGrips.push(
-        ...getSelectionGrips([entity], doc.entities),
-      );
+    if (isSelected && !options.skipGrips) {
+      autoGrips.push(...getSelectionGrips([entity], doc.entities));
     }
   }
+  return autoGrips;
+}
+
+/**
+ * Render a layout's paper sheet and viewports (Model Space through windows).
+ */
+export function renderPaperSpace(
+  ctx: CanvasRenderingContext2D,
+  options: RenderOptions,
+  layout: Layout,
+): void {
+  const theme = { ...DEFAULT_THEME, ...options.theme };
+  const { width, height, document: doc } = options;
+
+  ctx.clearRect(0, 0, width, height);
+  ctx.fillStyle = '#12141a';
+  ctx.fillRect(0, 0, width, height);
+
+  const view = fitPaperInCanvas(layout.pageSettings, width, height);
+  drawPaperSheet(ctx, view);
+
+  // Sheet label
+  ctx.save();
+  ctx.fillStyle = '#8b9099';
+  ctx.font = '11px "IBM Plex Sans", system-ui, sans-serif';
+  ctx.fillText(layoutSheetLabel(layout), view.originX, view.originY - 8);
+  ctx.restore();
+
+  const selected = new Set(doc.selection);
+  const hidden = new Set(options.hideEntityIds ?? []);
+
+  for (const vp of layout.viewports) {
+    if (!vp.visible) continue;
+    const { camera, screenRect } = cameraForViewport(vp, view);
+    if (screenRect.w < 2 || screenRect.h < 2) continue;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(screenRect.x, screenRect.y, screenRect.w, screenRect.h);
+    ctx.clip();
+    // Viewport interior background
+    ctx.fillStyle = theme.background;
+    ctx.fillRect(screenRect.x, screenRect.y, screenRect.w, screenRect.h);
+    drawGrid(
+      ctx,
+      camera,
+      screenRect.w,
+      screenRect.h,
+      doc.settings.gridSize,
+      theme,
+    );
+    // Temporarily offset world→screen by translating context so worldToScreen
+    // (which assumes full canvas) still works: shift origin to viewport top-left
+    // by adjusting via a nested camera trick — use translated canvas + local size.
+    ctx.translate(screenRect.x, screenRect.y);
+    drawModelEntities(ctx, doc, camera, screenRect.w, screenRect.h, theme, {
+      selected:
+        options.workspaceMode === 'VIEWPORT_MODEL_SPACE' &&
+        options.activeViewportId === vp.id
+          ? selected
+          : new Set(),
+      hidden,
+      hoveredEntityId:
+        options.workspaceMode === 'VIEWPORT_MODEL_SPACE' &&
+        options.activeViewportId === vp.id
+          ? options.hoveredEntityId
+          : null,
+      skipGrips: true,
+    });
+    ctx.restore();
+
+    drawViewportFrame(
+      ctx,
+      screenRect,
+      options.selectedViewportId === vp.id,
+      options.workspaceMode === 'VIEWPORT_MODEL_SPACE' &&
+        options.activeViewportId === vp.id,
+    );
+  }
+}
+
+/**
+ * Pure projection of DrawingDocument → canvas.
+ * Never mutates the document.
+ */
+export function renderDocument(
+  ctx: CanvasRenderingContext2D,
+  options: RenderOptions,
+): void {
+  const theme = { ...DEFAULT_THEME, ...options.theme };
+  const { width, height, camera, document: doc } = options;
+
+  if (
+    options.paperSpaceLayout &&
+    (options.workspaceMode === 'PAPER_SPACE' ||
+      options.workspaceMode === 'VIEWPORT_MODEL_SPACE')
+  ) {
+    renderPaperSpace(ctx, options, options.paperSpaceLayout);
+    return;
+  }
+
+  const hidden = new Set(options.hideEntityIds ?? []);
+
+  ctx.clearRect(0, 0, width, height);
+  ctx.fillStyle = theme.background;
+  ctx.fillRect(0, 0, width, height);
+
+  drawGrid(ctx, camera, width, height, doc.settings.gridSize, theme);
+
+  const selected = new Set(doc.selection);
+  const autoGrips = drawModelEntities(ctx, doc, camera, width, height, theme, {
+    selected,
+    hidden,
+    hoveredEntityId: options.hoveredEntityId,
+    skipGrips: !!options.previewEntities?.length,
+  });
 
   if (options.previewEntities?.length) {
     ctx.save();

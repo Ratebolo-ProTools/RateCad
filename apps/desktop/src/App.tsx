@@ -23,24 +23,32 @@ import {
   UpdateWindowCommand,
 } from '@ratecad/commands';
 import {
+  addLayout,
   clearSelection,
   createEmptyDocument,
+  ensureLayouts,
   getEntity,
   getHostedByWall,
   getLayer,
   getSelectedEntities,
   getWall,
+  hitTestViewport,
   isEntityModifiable,
+  setActiveLayout,
+  workspaceModeLabel,
   type DimensionKind,
   type DoorEntity,
   type DrawingDocument,
   type Entity,
   type Layer,
   type LengthUnit,
+  type LayoutId,
   type RoomEntity,
   type TextEntity,
+  type ViewportId,
   type WallEntity,
   type WindowEntity,
+  type WorkspaceMode,
 } from '@ratecad/core';
 import {
   findDoorsForRoom,
@@ -96,8 +104,10 @@ import {
 } from '@ratecad/tools';
 import {
   createCamera,
+  fitPaperInCanvas,
   panCamera,
   renderDocument,
+  screenToPaper,
   screenToWorld,
   screenToleranceToWorld,
   zoomAtScreenPoint,
@@ -154,7 +164,9 @@ function fmtLen(doc: DrawingDocument, value: number, precision?: number): string
 }
 
 function createBus(): CommandBus {
-  return new CommandBus(createEmptyDocument('Untitled Drawing'));
+  return new CommandBus(
+    ensureLayouts(createEmptyDocument('Untitled Drawing')),
+  );
 }
 
 function basename(filePath: string): string {
@@ -404,7 +416,11 @@ export function App() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const cameraRef = useRef<Camera>(createCamera());
+  /** Preserved Model Space camera when switching to a layout tab. */
+  const modelCameraRef = useRef<Camera>(createCamera());
   const sessionRef = useRef<ToolSession>(createToolSession('select'));
+  const workspaceModeRef = useRef<WorkspaceMode>('MODEL_SPACE');
+  const activeViewportIdRef = useRef<ViewportId | null>(null);
   const isPanningRef = useRef(false);
   const lastPointerRef = useRef<{ x: number; y: number } | null>(null);
   const spaceDownRef = useRef(false);
@@ -432,9 +448,18 @@ export function App() {
     ),
   );
 
-  const [doc, setDoc] = useState<DrawingDocument>(() => busRef.current.getDocument());
+  const [doc, setDoc] = useState<DrawingDocument>(() =>
+    ensureLayouts(busRef.current.getDocument()),
+  );
   const [session, setSession] = useState<ToolSession>(() => sessionRef.current);
   const [camera, setCamera] = useState<Camera>(() => cameraRef.current);
+  const [workspaceMode, setWorkspaceMode] =
+    useState<WorkspaceMode>('MODEL_SPACE');
+  const [activeViewportId, setActiveViewportId] = useState<ViewportId | null>(
+    null,
+  );
+  const [selectedViewportId, setSelectedViewportId] =
+    useState<ViewportId | null>(null);
   const [cursorWorld, setCursorWorld] = useState({ x: 0, y: 0 });
   const [size, setSize] = useState({ width: 800, height: 600 });
   const [canUndo, setCanUndo] = useState(false);
@@ -528,22 +553,101 @@ export function App() {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     const sess = sessionRef.current;
     const engUi = engineRef.current?.getUiState();
+    const activeLayout =
+      doc.activeLayoutId != null
+        ? doc.layouts.find((l) => l.id === doc.activeLayoutId)
+        : null;
+    const inPaper =
+      workspaceMode === 'PAPER_SPACE' ||
+      workspaceMode === 'VIEWPORT_MODEL_SPACE';
     renderDocument(ctx, {
       width: size.width,
       height: size.height,
       camera: cameraRef.current,
       document: doc,
-      preview: engUi?.preview ?? sess.preview,
-      previewEntities: engUi?.previewEntities ?? sess.previewEntities,
-      selectionRect: sess.selectionRect,
+      preview: inPaper ? null : engUi?.preview ?? sess.preview,
+      previewEntities: inPaper
+        ? null
+        : engUi?.previewEntities ?? sess.previewEntities,
+      selectionRect: inPaper ? null : sess.selectionRect,
       hideEntityIds: engUi?.hideEntityIds?.length
         ? engUi.hideEntityIds
         : sess.hideEntityIds,
       cursorWorld,
-      snap: sess.lastSnap,
+      snap: inPaper ? null : sess.lastSnap,
       hoveredEntityId: hoveredId,
+      paperSpaceLayout: inPaper ? activeLayout : null,
+      workspaceMode,
+      activeViewportId,
+      selectedViewportId,
     });
-  }, [doc, session, camera, size, cursorWorld, engineUi, hoveredId]);
+  }, [
+    doc,
+    session,
+    camera,
+    size,
+    cursorWorld,
+    engineUi,
+    hoveredId,
+    workspaceMode,
+    activeViewportId,
+    selectedViewportId,
+  ]);
+
+  const switchToModelTab = useCallback(() => {
+    // Restore Model Space camera preserved when leaving MODEL
+    const restored = { ...modelCameraRef.current };
+    cameraRef.current = restored;
+    setCamera(restored);
+    workspaceModeRef.current = 'MODEL_SPACE';
+    setWorkspaceMode('MODEL_SPACE');
+    setActiveViewportId(null);
+    activeViewportIdRef.current = null;
+    setSelectedViewportId(null);
+    busRef.current.updateWithoutHistory((d) =>
+      setActiveLayout(ensureLayouts(d), null),
+    );
+    setStatusExtra('MODEL SPACE');
+  }, []);
+
+  const switchToLayoutTab = useCallback((layoutId: LayoutId) => {
+    if (workspaceModeRef.current === 'MODEL_SPACE') {
+      modelCameraRef.current = { ...cameraRef.current };
+    }
+    workspaceModeRef.current = 'PAPER_SPACE';
+    setWorkspaceMode('PAPER_SPACE');
+    setActiveViewportId(null);
+    activeViewportIdRef.current = null;
+    setSelectedViewportId(null);
+    busRef.current.updateWithoutHistory((d) =>
+      setActiveLayout(ensureLayouts(d), layoutId),
+    );
+    const layout = busRef.current
+      .getDocument()
+      .layouts.find((l) => l.id === layoutId);
+    setStatusExtra(layout ? `PAPER SPACE · ${layout.name}` : 'PAPER SPACE');
+  }, []);
+
+  const createNewLayoutTab = useCallback(() => {
+    if (workspaceModeRef.current === 'MODEL_SPACE') {
+      modelCameraRef.current = { ...cameraRef.current };
+    }
+    busRef.current.updateWithoutHistory((d) => {
+      const { document } = addLayout(ensureLayouts(d));
+      return document;
+    });
+    const next = busRef.current.getDocument();
+    const layoutId = next.activeLayoutId;
+    workspaceModeRef.current = 'PAPER_SPACE';
+    setWorkspaceMode('PAPER_SPACE');
+    setActiveViewportId(null);
+    activeViewportIdRef.current = null;
+    setSelectedViewportId(null);
+    const layout = next.layouts.find((l) => l.id === layoutId);
+    setStatusExtra(layout ? `PAPER SPACE · ${layout.name}` : 'PAPER SPACE');
+    setDirty(true);
+    dirtyRef.current = true;
+  }, []);
 
   useEffect(() => {
     const name = doc.meta.name + (dirty ? ' *' : '');
@@ -707,7 +811,13 @@ export function App() {
   const newDrawing = useCallback(async () => {
     if (!(await confirmDiscardIfNeeded())) return;
     suppressDirtyRef.current = true;
-    busRef.current.reset(createEmptyDocument('Untitled Drawing'));
+    busRef.current.reset(
+      ensureLayouts(createEmptyDocument('Untitled Drawing')),
+    );
+    workspaceModeRef.current = 'MODEL_SPACE';
+    setWorkspaceMode('MODEL_SPACE');
+    setActiveViewportId(null);
+    setSelectedViewportId(null);
     markDirty(false);
     suppressDirtyRef.current = false;
     setProjectPath(null);
@@ -814,12 +924,19 @@ export function App() {
         return;
       }
       suppressDirtyRef.current = true;
-      busRef.current.reset(parsed.document);
+      const opened = ensureLayouts(parsed.document);
+      busRef.current.reset(opened);
       setProjectPath(path ?? null);
       markDirty(false);
       suppressDirtyRef.current = false;
       syncSession(createToolSession('select'));
       syncCamera(createCamera());
+      modelCameraRef.current = createCamera();
+      workspaceModeRef.current =
+        opened.activeLayoutId == null ? 'MODEL_SPACE' : 'PAPER_SPACE';
+      setWorkspaceMode(workspaceModeRef.current);
+      setActiveViewportId(null);
+      setSelectedViewportId(null);
       setStatusExtra(path ? `Opened ${basename(path)}` : 'Opened drawing');
     };
 
@@ -1533,6 +1650,32 @@ export function App() {
 
     if (event.button !== 0) return;
 
+    // Paper Space: select viewports only — do not create Model Space geometry.
+    if (workspaceModeRef.current === 'PAPER_SPACE') {
+      const layout = busRef.current
+        .getDocument()
+        .layouts.find((l) => l.id === busRef.current.getDocument().activeLayoutId);
+      if (layout) {
+        const rect = canvas.getBoundingClientRect();
+        const screen = {
+          x: event.clientX - rect.left,
+          y: event.clientY - rect.top,
+        };
+        const view = fitPaperInCanvas(
+          layout.pageSettings,
+          size.width,
+          size.height,
+        );
+        const paper = screenToPaper(screen, view);
+        const hit = hitTestViewport(layout, paper.x, paper.y);
+        setSelectedViewportId(hit?.id ?? null);
+        if (hit) {
+          setStatusExtra(`Viewport selected · ${layout.name}`);
+        }
+      }
+      return;
+    }
+
     const world = getWorldFromEvent(event);
     const eng = engineRef.current;
     if (eng?.isRunning() && eng.isAwaitingSelection()) {
@@ -2003,9 +2146,89 @@ export function App() {
             onContextMenu={(e) => e.preventDefault()}
             onDoubleClick={(e) => {
               e.preventDefault();
+              // Layout Paper Space: enter / leave viewport model space
+              if (
+                workspaceModeRef.current === 'PAPER_SPACE' ||
+                workspaceModeRef.current === 'VIEWPORT_MODEL_SPACE'
+              ) {
+                const layout = doc.layouts.find(
+                  (l) => l.id === doc.activeLayoutId,
+                );
+                if (!layout) return;
+                const canvas = canvasRef.current;
+                if (!canvas) return;
+                const rect = canvas.getBoundingClientRect();
+                const screen = {
+                  x: e.clientX - rect.left,
+                  y: e.clientY - rect.top,
+                };
+                const view = fitPaperInCanvas(
+                  layout.pageSettings,
+                  size.width,
+                  size.height,
+                );
+                const paper = screenToPaper(screen, view);
+                const hit = hitTestViewport(layout, paper.x, paper.y);
+                if (hit) {
+                  workspaceModeRef.current = 'VIEWPORT_MODEL_SPACE';
+                  setWorkspaceMode('VIEWPORT_MODEL_SPACE');
+                  setActiveViewportId(hit.id);
+                  activeViewportIdRef.current = hit.id;
+                  setSelectedViewportId(hit.id);
+                  const vpIndex = layout.viewports.findIndex(
+                    (v) => v.id === hit.id,
+                  );
+                  setStatusExtra(
+                    workspaceModeLabel(
+                      'VIEWPORT_MODEL_SPACE',
+                      layout.name,
+                      vpIndex,
+                    ),
+                  );
+                } else {
+                  workspaceModeRef.current = 'PAPER_SPACE';
+                  setWorkspaceMode('PAPER_SPACE');
+                  setActiveViewportId(null);
+                  activeViewportIdRef.current = null;
+                  setStatusExtra(`PAPER SPACE · ${layout.name}`);
+                }
+                return;
+              }
               editSelectedText();
             }}
           />
+          <div className="layout-tabs" role="tablist" aria-label="Model and layouts">
+            <button
+              type="button"
+              role="tab"
+              className={`layout-tab${workspaceMode === 'MODEL_SPACE' && doc.activeLayoutId == null ? ' active' : ''}`}
+              aria-selected={doc.activeLayoutId == null}
+              onClick={() => switchToModelTab()}
+            >
+              MODEL
+            </button>
+            {(doc.layouts ?? []).map((layout) => (
+              <button
+                key={layout.id}
+                type="button"
+                role="tab"
+                className={`layout-tab${doc.activeLayoutId === layout.id ? ' active' : ''}`}
+                aria-selected={doc.activeLayoutId === layout.id}
+                onClick={() => switchToLayoutTab(layout.id)}
+              >
+                {layout.name}
+              </button>
+            ))}
+            <button
+              type="button"
+              className="layout-tab layout-tab-add"
+              title="New layout"
+              aria-label="Create new layout"
+              onClick={() => createNewLayoutTab()}
+            >
+              +
+            </button>
+          </div>
           {/* Dynamic Input near cursor */}
           {(engineUi?.commandName ||
             (engineUi?.suggestionRows?.length ?? 0) > 0 ||
@@ -2725,8 +2948,28 @@ export function App() {
 
       <footer className="status-bar">
         <div className="status-left">
-          {session.statusMessage}
-          {statusExtra ? ` · ${statusExtra}` : ''}
+          <span className="workspace-mode-badge" data-mode={workspaceMode}>
+            {(() => {
+              if (workspaceMode === 'MODEL_SPACE') return 'MODEL SPACE';
+              const layout = doc.layouts.find((l) => l.id === doc.activeLayoutId);
+              if (workspaceMode === 'PAPER_SPACE') {
+                return layout ? `PAPER SPACE · ${layout.name}` : 'PAPER SPACE';
+              }
+              const vpIndex =
+                layout && activeViewportId
+                  ? layout.viewports.findIndex((v) => v.id === activeViewportId)
+                  : -1;
+              return workspaceModeLabel(
+                'VIEWPORT_MODEL_SPACE',
+                layout?.name,
+                vpIndex >= 0 ? vpIndex : 0,
+              );
+            })()}
+          </span>
+          {session.statusMessage ? ` · ${session.statusMessage}` : ''}
+          {statusExtra && !statusExtra.includes('SPACE')
+            ? ` · ${statusExtra}`
+            : ''}
           {snapLabel ? ` · Snap: ${snapLabel}` : ''}
         </div>
         <div className="status-right">

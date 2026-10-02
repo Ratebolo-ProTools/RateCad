@@ -1,6 +1,18 @@
 import type { AppearanceProperties, CurrentAppearance } from './appearance.js';
+import type { Layout, LayoutId, WorkspaceMode } from './layout.js';
 
 export type { AppearanceProperties, CurrentAppearance } from './appearance.js';
+export type {
+  Layout,
+  LayoutId,
+  LayoutViewport,
+  PageOrientation,
+  PageSettings,
+  PageUnit,
+  PaperSizeId,
+  ViewportId,
+  WorkspaceMode,
+} from './layout.js';
 
 export type EntityId = string;
 export type LayerId = string;
@@ -318,7 +330,26 @@ export interface DrawingDocument {
   layers: Layer[];
   /** Layer used for newly created entities. */
   currentLayerId: LayerId;
+  /**
+   * Model Space entities — the sole source of construction/model geometry.
+   * Layouts reference this via viewports; they never duplicate these entities.
+   */
   entities: Entity[];
+  /**
+   * Paper Space layouts (sheets). Always at least Layout1 after migration.
+   * Model tab is not a layout — it is represented by activeLayoutId === null.
+   */
+  layouts: Layout[];
+  /**
+   * Active layout tab. `null` means the MODEL tab (Model Space).
+   * Persisted so reopen restores the last layout tab when appropriate.
+   */
+  activeLayoutId: LayoutId | null;
+  /**
+   * Session workspace mode. Prefer App/session ownership; may be present
+   * when serializing session snapshots. Not required in .ratecad files.
+   */
+  workspaceMode?: WorkspaceMode;
   /** Session selection — not required in persisted files */
   selection: EntityId[];
 }
@@ -329,8 +360,8 @@ export const DOORS_LAYER_ID = 'layer-doors' as LayerId;
 export const WINDOWS_LAYER_ID = 'layer-windows' as LayerId;
 export const ROOMS_LAYER_ID = 'layer-rooms' as LayerId;
 
-export const SCHEMA_VERSION = 6;
-export const APP_VERSION = '0.7.0';
+export const SCHEMA_VERSION = 7;
+export const APP_VERSION = '0.8.0';
 
 export const DEFAULT_DIMENSION_STYLE: DimensionStyle = {
   textHeight: 0.35,

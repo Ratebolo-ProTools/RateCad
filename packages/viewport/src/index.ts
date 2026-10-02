@@ -12,7 +12,21 @@ export {
   type PreviewGeometry,
   type RenderOptions,
   renderDocument,
+  renderPaperSpace,
 } from './renderer.js';
+
+export {
+  type PaperViewTransform,
+  cameraForViewport,
+  drawPaperSheet,
+  drawViewportFrame,
+  fitPaperInCanvas,
+  isPointInSheet,
+  layoutSheetLabel,
+  paperToScreen,
+  paperViewForLayout,
+  screenToPaper,
+} from './paperSpace.js';
 
 export {
   entityBounds,

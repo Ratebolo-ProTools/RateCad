@@ -5,12 +5,16 @@ import {
   DEFAULT_LAYER_ID,
   SCHEMA_VERSION,
   createDefaultLayers,
+  createDefaultLayout,
   normalizeColorProperty,
   type CurrentAppearance,
   type DrawingDocument,
   type Entity,
+  type Layout,
   type Layer,
   type LayerId,
+  type LayoutViewport,
+  type PageSettings,
 } from '@ratecad/core';
 
 export const RATECAD_FILE_EXTENSION = '.ratecad';
@@ -522,8 +526,116 @@ function migrateDocument(
     layers: nextLayers,
     currentLayerId,
     entities: nextEntities,
+    layouts: parseLayouts(d.layouts, fileSchema),
+    activeLayoutId: parseActiveLayoutId(d.activeLayoutId, d.layouts),
     selection: [],
   };
+}
+
+function parsePageSettings(raw: unknown): PageSettings {
+  const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const paperSize =
+    r.paperSize === 'A0' ||
+    r.paperSize === 'A1' ||
+    r.paperSize === 'A2' ||
+    r.paperSize === 'A3' ||
+    r.paperSize === 'A4'
+      ? r.paperSize
+      : 'A4';
+  return {
+    paperSize,
+    orientation: r.orientation === 'portrait' ? 'portrait' : 'landscape',
+    units: r.units === 'inch' ? 'inch' : 'mm',
+    margin:
+      typeof r.margin === 'number' && Number.isFinite(r.margin) && r.margin >= 0
+        ? r.margin
+        : 10,
+  };
+}
+
+function parseViewport(raw: unknown, index: number): LayoutViewport {
+  const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const overrides =
+    r.layerVisibilityOverrides && typeof r.layerVisibilityOverrides === 'object'
+      ? (r.layerVisibilityOverrides as Record<string, boolean>)
+      : {};
+  return {
+    id: typeof r.id === 'string' ? r.id : `vp-migrated-${index}`,
+    x: typeof r.x === 'number' ? r.x : 25,
+    y: typeof r.y === 'number' ? r.y : 25,
+    width: typeof r.width === 'number' && r.width > 0 ? r.width : 200,
+    height: typeof r.height === 'number' && r.height > 0 ? r.height : 140,
+    modelCenterX: typeof r.modelCenterX === 'number' ? r.modelCenterX : 0,
+    modelCenterY: typeof r.modelCenterY === 'number' ? r.modelCenterY : 0,
+    scale:
+      typeof r.scale === 'number' && Number.isFinite(r.scale) && r.scale > 0
+        ? r.scale
+        : 0.05,
+    rotation: typeof r.rotation === 'number' ? r.rotation : 0,
+    locked: r.locked === true,
+    visible: r.visible !== false,
+    layerVisibilityOverrides: overrides,
+  };
+}
+
+function parseLayouts(raw: unknown, fileSchema: number): Layout[] {
+  if (fileSchema < 7 || !Array.isArray(raw) || raw.length === 0) {
+    return [createDefaultLayout('Layout1')];
+  }
+  const layouts: Layout[] = [];
+  for (let i = 0; i < raw.length; i += 1) {
+    const r = raw[i] as Record<string, unknown>;
+    if (!r || typeof r !== 'object') continue;
+    const pageSettings = parsePageSettings(r.pageSettings);
+    const viewportsRaw = Array.isArray(r.viewports) ? r.viewports : [];
+    let viewports = viewportsRaw.map((v, vi) => parseViewport(v, vi));
+    if (viewports.length === 0) {
+      viewports = [createDefaultLayout().viewports[0]!];
+    }
+    const paperSpaceEntities = Array.isArray(r.paperSpaceEntities)
+      ? (r.paperSpaceEntities as Entity[])
+      : [];
+    layouts.push({
+      id: typeof r.id === 'string' ? r.id : `layout-migrated-${i + 1}`,
+      name:
+        typeof r.name === 'string' && r.name.trim()
+          ? r.name.trim()
+          : `Layout${i + 1}`,
+      pageSettings,
+      paperSpaceEntities,
+      viewports,
+    });
+  }
+  if (layouts.length === 0) return [createDefaultLayout('Layout1')];
+  // Ensure unique names
+  const seen = new Set<string>();
+  for (const layout of layouts) {
+    let name = layout.name;
+    let n = 2;
+    while (seen.has(name.toLowerCase())) {
+      name = `${layout.name}_${n}`;
+      n += 1;
+    }
+    layout.name = name;
+    seen.add(name.toLowerCase());
+  }
+  return layouts;
+}
+
+function parseActiveLayoutId(
+  raw: unknown,
+  layoutsRaw: unknown,
+): string | null {
+  if (raw === null || raw === undefined) return null;
+  if (typeof raw !== 'string') return null;
+  if (!Array.isArray(layoutsRaw)) return null;
+  const ids = new Set(
+    layoutsRaw
+      .filter((l): l is { id?: string } => !!l && typeof l === 'object')
+      .map((l) => l.id)
+      .filter((id): id is string => typeof id === 'string'),
+  );
+  return ids.has(raw) ? raw : null;
 }
 
 export function serializeDocument(doc: DrawingDocument): string {
@@ -537,6 +649,8 @@ export function serializeDocument(doc: DrawingDocument): string {
       layers: doc.layers,
       currentLayerId: doc.currentLayerId,
       entities: doc.entities,
+      layouts: doc.layouts ?? [createDefaultLayout('Layout1')],
+      activeLayoutId: doc.activeLayoutId ?? null,
     },
   };
   return `${JSON.stringify(file, null, 2)}\n`;
