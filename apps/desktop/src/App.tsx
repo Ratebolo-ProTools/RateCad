@@ -3378,7 +3378,9 @@ export function App() {
           {session.statusMessage ? ` · ${session.statusMessage}` : ''}
           {statusExtra &&
           !statusExtra.includes('SPACE') &&
-          !statusExtra.startsWith('Viewport')
+          !statusExtra.startsWith('Viewport 1') &&
+          !statusExtra.startsWith('Viewport 2') &&
+          !/^Viewport \d+ ·/.test(statusExtra)
             ? ` · ${statusExtra}`
             : ''}
           {snapLabel ? ` · Snap: ${snapLabel}` : ''}
