@@ -182,6 +182,15 @@ export {
   commitLeaderContent,
   commitTextContent,
 } from './annotationTools.js';
+export {
+  commitPaperLeaderContent,
+  commitPaperTextContent,
+  handlePaperDimensionPointerDown,
+  handlePaperDimensionPointerMove,
+  handlePaperLeaderPointerDown,
+  handlePaperTextPointerDown,
+  isPaperAnnotationTool,
+} from './paperAnnotationTools.js';
 export { commitWallThickness } from './constructionTools.js';
 
 function snapPoint(

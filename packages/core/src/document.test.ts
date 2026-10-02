@@ -17,7 +17,7 @@ describe('DrawingDocument', () => {
 
   it('creates an empty document with default layers and units', () => {
     const doc = createEmptyDocument('Test');
-    expect(doc.schemaVersion).toBe(7);
+    expect(doc.schemaVersion).toBe(8);
     expect(doc.meta.name).toBe('Test');
     expect(doc.entities).toEqual([]);
     expect(doc.layouts.length).toBeGreaterThanOrEqual(1);
@@ -35,6 +35,7 @@ describe('DrawingDocument', () => {
         'Text',
         'Construction',
         'Annotations',
+        'TitleBlock',
       ]),
     );
     expect(doc.settings.units).toBe('ft-in');

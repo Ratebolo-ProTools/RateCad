@@ -42,7 +42,9 @@ import {
   drawViewportFrame,
   fitPaperInCanvas,
   layoutSheetLabel,
+  paperViewForLayout,
 } from './paperSpace.js';
+import { drawPaperSpaceEntities } from './paperEntities.js';
 
 export interface PreviewGeometry {
   kind: 'line' | 'rectangle' | 'circle' | 'polyline' | 'area';
@@ -90,6 +92,8 @@ export interface RenderOptions {
   paperPreviewRect?: { a: Vec2; b: Vec2 } | null;
   /** Override viewport geometry while dragging (preview only). */
   viewportPreviewOverride?: LayoutViewport | null;
+  /** Selected paper-space entity ids (layout.paperSpaceEntities). */
+  selectedPaperEntityIds?: string[];
   theme?: {
     background: string;
     gridMajor: string;
@@ -931,7 +935,7 @@ export function renderPaperSpace(
   ctx.fillStyle = '#12141a';
   ctx.fillRect(0, 0, width, height);
 
-  const view = fitPaperInCanvas(layout.pageSettings, width, height);
+  const view = paperViewForLayout(layout, width, height);
   drawPaperSheet(ctx, view);
 
   // Sheet label
@@ -1006,6 +1010,12 @@ export function renderPaperSpace(
       options.paperPreviewRect.b,
     );
   }
+
+  // Paper-space annotations / title block (never Model entities)
+  drawPaperSpaceEntities(ctx, doc, layout, view, {
+    selectedIds: new Set(options.selectedPaperEntityIds ?? []),
+    hoveredId: options.hoveredEntityId ?? null,
+  });
 }
 
 /**

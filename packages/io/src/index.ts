@@ -326,6 +326,16 @@ function migrateDocument(
     }
   }
 
+  // v7 → v8: TitleBlock paper-space layer
+  if (fileSchema < 8) {
+    const defaults = createDefaultLayers();
+    for (const def of defaults) {
+      if (!nextLayers.some((l) => l.id === def.id || l.name === def.name)) {
+        nextLayers = [...nextLayers, def];
+      }
+    }
+  }
+
   // v4 → v5: worldUnit + fractionDenominator; legacy 'ft' display → 'ft-in'
   // (geometry stays in previous world units — no scaling on migration)
 
@@ -574,7 +584,55 @@ function parseViewport(raw: unknown, index: number): LayoutViewport {
     rotation: typeof r.rotation === 'number' ? r.rotation : 0,
     locked: r.locked === true,
     visible: r.visible !== false,
+    label: typeof r.label === 'string' ? r.label : undefined,
+    scaleLabel: typeof r.scaleLabel === 'string' ? r.scaleLabel : undefined,
+    showLabel: r.showLabel === true,
     layerVisibilityOverrides: overrides,
+  };
+}
+
+function parseSheetInfo(raw: unknown): import('@ratecad/core').SheetInfo | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const r = raw as Record<string, unknown>;
+  return {
+    project: typeof r.project === 'string' ? r.project : 'PROJECT',
+    drawingTitle:
+      typeof r.drawingTitle === 'string' ? r.drawingTitle : 'DRAWING TITLE',
+    drawingNo: typeof r.drawingNo === 'string' ? r.drawingNo : 'A-101',
+    scale: typeof r.scale === 'string' ? r.scale : '1:50',
+    date: typeof r.date === 'string' ? r.date : '',
+    drawnBy: typeof r.drawnBy === 'string' ? r.drawnBy : '',
+    checkedBy: typeof r.checkedBy === 'string' ? r.checkedBy : '',
+    revision: typeof r.revision === 'string' ? r.revision : '0',
+  };
+}
+
+function parseTitleBlock(
+  raw: unknown,
+): import('@ratecad/core').TitleBlock | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const r = raw as Record<string, unknown>;
+  return {
+    templateId:
+      typeof r.templateId === 'string' ? r.templateId : 'default-professional',
+    enabled: r.enabled === true,
+    x: typeof r.x === 'number' ? r.x : 0,
+    y: typeof r.y === 'number' ? r.y : 0,
+    width: typeof r.width === 'number' ? r.width : 100,
+    height: typeof r.height === 'number' ? r.height : 40,
+  };
+}
+
+function parsePaperCamera(
+  raw: unknown,
+): import('@ratecad/core').PaperCameraState | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const r = raw as Record<string, unknown>;
+  return {
+    offsetX: typeof r.offsetX === 'number' ? r.offsetX : 0,
+    offsetY: typeof r.offsetY === 'number' ? r.offsetY : 0,
+    zoom:
+      typeof r.zoom === 'number' && r.zoom > 0 ? r.zoom : 1,
   };
 }
 
@@ -592,9 +650,17 @@ function parseLayouts(raw: unknown, fileSchema: number): Layout[] {
     if (viewports.length === 0) {
       viewports = [createDefaultLayout().viewports[0]!];
     }
-    const paperSpaceEntities = Array.isArray(r.paperSpaceEntities)
-      ? (r.paperSpaceEntities as Entity[])
+    const paperRaw = Array.isArray(r.paperSpaceEntities)
+      ? r.paperSpaceEntities
       : [];
+    const paperSpaceEntities: Entity[] = [];
+    for (let pi = 0; pi < paperRaw.length; pi += 1) {
+      try {
+        paperSpaceEntities.push(assertEntity(paperRaw[pi], pi));
+      } catch {
+        // Skip invalid paper entities on migration
+      }
+    }
     layouts.push({
       id: typeof r.id === 'string' ? r.id : `layout-migrated-${i + 1}`,
       name:
@@ -604,6 +670,9 @@ function parseLayouts(raw: unknown, fileSchema: number): Layout[] {
       pageSettings,
       paperSpaceEntities,
       viewports,
+      sheetInfo: parseSheetInfo(r.sheetInfo),
+      titleBlock: parseTitleBlock(r.titleBlock),
+      paperCamera: parsePaperCamera(r.paperCamera),
     });
   }
   if (layouts.length === 0) return [createDefaultLayout('Layout1')];

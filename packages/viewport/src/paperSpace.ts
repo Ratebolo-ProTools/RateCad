@@ -238,11 +238,22 @@ export function layoutSheetLabel(layout: Layout): string {
   return `${layout.name} · ${layout.pageSettings.paperSize} ${layout.pageSettings.orientation} (${sheet.width.toFixed(0)}×${sheet.height.toFixed(0)} ${layout.pageSettings.units})`;
 }
 
-/** Convenience: paper view for a layout on a canvas. */
+/** Convenience: paper view for a layout on a canvas (applies paperCamera). */
 export function paperViewForLayout(
   layout: Layout,
   canvasWidth: number,
   canvasHeight: number,
 ): PaperViewTransform {
-  return fitPaperInCanvas(layout.pageSettings, canvasWidth, canvasHeight);
+  const base = fitPaperInCanvas(layout.pageSettings, canvasWidth, canvasHeight);
+  const cam = layout.paperCamera ?? { offsetX: 0, offsetY: 0, zoom: 1 };
+  const zoom = Math.max(0.2, Math.min(8, cam.zoom || 1));
+  const pxPerMm = base.pxPerMm * zoom;
+  const paperUnitMm = base.page.units === 'inch' ? 25.4 : 1;
+  return {
+    ...base,
+    pxPerMm,
+    // offsetX/Y are page units — convert to screen
+    originX: base.originX + cam.offsetX * paperUnitMm * pxPerMm,
+    originY: base.originY - cam.offsetY * paperUnitMm * pxPerMm,
+  };
 }

@@ -30,6 +30,7 @@ import {
   type Layout,
   type LayoutId,
   type LayoutViewport,
+  type PageSettings,
   type ViewportId,
 } from './layout.js';
 
@@ -119,6 +120,12 @@ export function createDefaultLayers(): Layer[] {
       name: 'Annotations',
       color: '#d2a8ff',
       lineweight: 0.18,
+    }),
+    withLayerDefaults({
+      id: 'layer-titleblock' as LayerId,
+      name: 'TitleBlock',
+      color: '#9aa4b2',
+      lineweight: 0.25,
     }),
   ];
 }
@@ -282,6 +289,129 @@ export function removeViewport(
   return touchDocument({ ...doc, layouts: nextLayouts });
 }
 
+/** Replace an entire layout (immutable). */
+export function replaceLayout(
+  doc: DrawingDocument,
+  layout: Layout,
+): DrawingDocument {
+  const layouts = doc.layouts ?? [];
+  const li = layouts.findIndex((l) => l.id === layout.id);
+  if (li < 0) return doc;
+  const nextLayouts = layouts.slice();
+  nextLayouts[li] = structuredClone(layout);
+  return touchDocument({ ...doc, layouts: nextLayouts });
+}
+
+export function updateLayoutPageSettings(
+  doc: DrawingDocument,
+  layoutId: LayoutId,
+  pageSettings: PageSettings,
+): DrawingDocument {
+  const layout = getLayout(doc.layouts ?? [], layoutId);
+  if (!layout) return doc;
+  return replaceLayout(doc, { ...layout, pageSettings: structuredClone(pageSettings) });
+}
+
+export function addPaperSpaceEntity(
+  doc: DrawingDocument,
+  layoutId: LayoutId,
+  entity: Entity,
+): DrawingDocument {
+  const layout = getLayout(doc.layouts ?? [], layoutId);
+  if (!layout) return doc;
+  if (doc.entities.some((e) => e.id === entity.id)) {
+    throw new Error(`Paper entity id collides with Model Space: ${entity.id}`);
+  }
+  if (layout.paperSpaceEntities.some((e) => e.id === entity.id)) {
+    throw new Error(`Duplicate paper entity id: ${entity.id}`);
+  }
+  const stamped: Entity = {
+    ...structuredClone(entity),
+    metadata: { ...(entity.metadata ?? {}), paperSpace: true },
+  };
+  return replaceLayout(doc, {
+    ...layout,
+    paperSpaceEntities: [...layout.paperSpaceEntities, stamped],
+  });
+}
+
+export function replacePaperSpaceEntity(
+  doc: DrawingDocument,
+  layoutId: LayoutId,
+  entity: Entity,
+): DrawingDocument {
+  const layout = getLayout(doc.layouts ?? [], layoutId);
+  if (!layout) return doc;
+  const idx = layout.paperSpaceEntities.findIndex((e) => e.id === entity.id);
+  if (idx < 0) return doc;
+  const next = layout.paperSpaceEntities.slice();
+  next[idx] = {
+    ...structuredClone(entity),
+    metadata: { ...(entity.metadata ?? {}), paperSpace: true },
+  };
+  return replaceLayout(doc, { ...layout, paperSpaceEntities: next });
+}
+
+export function removePaperSpaceEntities(
+  doc: DrawingDocument,
+  layoutId: LayoutId,
+  ids: EntityId[],
+): DrawingDocument {
+  const layout = getLayout(doc.layouts ?? [], layoutId);
+  if (!layout) return doc;
+  const remove = new Set(ids);
+  return replaceLayout(doc, {
+    ...layout,
+    paperSpaceEntities: layout.paperSpaceEntities.filter((e) => !remove.has(e.id)),
+  });
+}
+
+export function setLayoutPaperEntities(
+  doc: DrawingDocument,
+  layoutId: LayoutId,
+  entities: Entity[],
+): DrawingDocument {
+  const layout = getLayout(doc.layouts ?? [], layoutId);
+  if (!layout) return doc;
+  return replaceLayout(doc, {
+    ...layout,
+    paperSpaceEntities: structuredClone(entities),
+  });
+}
+
+export function getPaperSpaceEntity(
+  doc: DrawingDocument,
+  layoutId: LayoutId,
+  id: EntityId,
+): Entity | undefined {
+  return getLayout(doc.layouts ?? [], layoutId)?.paperSpaceEntities.find(
+    (e) => e.id === id,
+  );
+}
+
+export function updateLayoutSheetMeta(
+  doc: DrawingDocument,
+  layoutId: LayoutId,
+  patch: {
+    sheetInfo?: import('./sheet.js').SheetInfo;
+    titleBlock?: import('./sheet.js').TitleBlock;
+    paperCamera?: import('./sheet.js').PaperCameraState;
+  },
+): DrawingDocument {
+  const layout = getLayout(doc.layouts ?? [], layoutId);
+  if (!layout) return doc;
+  return replaceLayout(doc, {
+    ...layout,
+    ...(patch.sheetInfo ? { sheetInfo: structuredClone(patch.sheetInfo) } : {}),
+    ...(patch.titleBlock
+      ? { titleBlock: structuredClone(patch.titleBlock) }
+      : {}),
+    ...(patch.paperCamera
+      ? { paperCamera: structuredClone(patch.paperCamera) }
+      : {}),
+  });
+}
+
 
 export function cloneDocument(doc: DrawingDocument): DrawingDocument {
   return structuredClone(doc);
@@ -417,8 +547,11 @@ export function removeLayer(
   if (layerId === DEFAULT_LAYER_ID) {
     throw new Error('Cannot delete the default layer "0"');
   }
-  const hasEntities = doc.entities.some((e) => e.layerId === layerId);
-  if (hasEntities) {
+  const hasModel = doc.entities.some((e) => e.layerId === layerId);
+  const hasPaper = (doc.layouts ?? []).some((l) =>
+    l.paperSpaceEntities.some((e) => e.layerId === layerId),
+  );
+  if (hasModel || hasPaper) {
     if (!moveToLayerId || !getLayer(doc, moveToLayerId)) {
       throw new Error('Move entities to another layer before deleting');
     }
@@ -427,6 +560,12 @@ export function removeLayer(
   const entities = doc.entities.map((e) =>
     e.layerId === layerId ? { ...e, layerId: target } : e,
   );
+  const layouts = (doc.layouts ?? []).map((layout) => ({
+    ...layout,
+    paperSpaceEntities: layout.paperSpaceEntities.map((e) =>
+      e.layerId === layerId ? { ...e, layerId: target } : e,
+    ),
+  }));
   const layers = doc.layers.filter((l) => l.id !== layerId);
   const currentLayerId =
     doc.currentLayerId === layerId ? target : doc.currentLayerId;
@@ -434,6 +573,7 @@ export function removeLayer(
     ...doc,
     layers,
     entities,
+    layouts,
     currentLayerId,
   });
 }

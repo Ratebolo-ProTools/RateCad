@@ -108,9 +108,13 @@ export function createDefaultEngineRegistry(): CadEngineRegistry {
       category: 'Annotate',
       keywords: ['dimension', 'measure', 'distance', 'length'],
     }),
-    toolBridge('text', 'TEXT', ['DT'], 'text', 'Place text', {
+    toolBridge('text', 'TEXT', ['DT', 'MTEXT'], 'text', 'Place text', {
       category: 'Annotate',
-      keywords: ['text', 'label', 'annotation'],
+      keywords: ['text', 'label', 'annotation', 'mtext'],
+    }),
+    toolBridge('leader', 'LEADER', ['LE'], 'leader', 'Create a leader', {
+      category: 'Annotate',
+      keywords: ['leader', 'callout', 'arrow'],
     }),
     toolBridge('wall', 'WALL', ['WA'], 'wall', 'Draw a wall', {
       category: 'Construction',

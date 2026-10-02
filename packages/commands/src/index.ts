@@ -72,3 +72,17 @@ export {
   SetViewportScaleCommand,
   UpdateViewportViewCommand,
 } from './layoutCommands.js';
+export {
+  ApplyTitleBlockCommand,
+  CreatePaperDimensionCommand,
+  CreatePaperLeaderCommand,
+  CreatePaperLineCommand,
+  CreatePaperTextCommand,
+  DeletePaperEntitiesCommand,
+  ReplacePaperEntityCommand,
+  SetViewportLabelCommand,
+  SyncViewportLabelsCommand,
+  UpdateLayoutPageSettingsCommand,
+  UpdateSheetInfoCommand,
+  getActiveLayoutIdOrThrow,
+} from './paperCommands.js';

@@ -40,6 +40,32 @@ export type {
   WorkspaceMode,
 } from './types.js';
 
+export type {
+  PaperCameraState,
+  SheetInfo,
+  TextAlignment,
+  TitleBlock,
+} from './sheet.js';
+
+export {
+  ANNOTATIONS_LAYER_ID,
+  DIMENSIONS_LAYER_ID,
+  PAPER_ANNOTATION_DEFAULTS,
+  TEXT_LAYER_ID,
+  TITLE_BLOCK_LAYER_ID,
+  assertNoEntityIdCollision,
+  buildTitleBlockEntities,
+  buildViewportLabelEntity,
+  createA3LandscapeTemplate,
+  defaultPaperCamera,
+  defaultSheetInfo,
+  defaultTitleBlock,
+  isPaperSpaceEntity,
+  syncViewportLabelPositions,
+  withoutTitleBlockEntities,
+  withoutViewportLabelEntities,
+} from './sheet.js';
+
 export {
   PAPER_SIZE_MM,
   DEFAULT_LAYOUT_ID,
@@ -122,6 +148,7 @@ export {
   addEntity,
   addLayer,
   addLayout,
+  addPaperSpaceEntity,
   addViewport,
   clearSelection,
   cloneDocument,
@@ -132,6 +159,7 @@ export {
   createLayerId,
   ensureLayouts,
   getActiveLayout,
+  getPaperSpaceEntity,
   setActiveLayout,
   expandDeleteIds,
   findInvalidRooms,
@@ -150,13 +178,19 @@ export {
   isEntitySelectable,
   removeEntities,
   removeLayer,
+  removePaperSpaceEntities,
   removeViewport,
   replaceEntity,
+  replaceLayout,
+  replacePaperSpaceEntity,
   replaceViewport,
   resetIdCounter,
   setCurrentLayer,
+  setLayoutPaperEntities,
   setSelection,
   toggleSelectionId,
   touchDocument,
   updateLayer,
+  updateLayoutPageSettings,
+  updateLayoutSheetMeta,
 } from './document.js';

@@ -41,6 +41,11 @@ export {
 } from './viewportGrips.js';
 
 export {
+  drawPaperSpaceEntities,
+  hitTestPaperSpaceEntities,
+} from './paperEntities.js';
+
+export {
   entityBounds,
   hitTestDocument,
   hitTestEntity,

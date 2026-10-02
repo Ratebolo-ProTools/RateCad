@@ -132,6 +132,8 @@ export interface TextEntity extends EntityBase {
     content: string;
     height: number;
     rotation: number;
+    /** Horizontal alignment foundation (Paper Space / Model). */
+    alignment?: 'left' | 'center' | 'right';
   };
   properties: AppearanceProperties;
 }
@@ -360,8 +362,8 @@ export const DOORS_LAYER_ID = 'layer-doors' as LayerId;
 export const WINDOWS_LAYER_ID = 'layer-windows' as LayerId;
 export const ROOMS_LAYER_ID = 'layer-rooms' as LayerId;
 
-export const SCHEMA_VERSION = 7;
-export const APP_VERSION = '0.8.0';
+export const SCHEMA_VERSION = 8;
+export const APP_VERSION = '0.9.0';
 
 export const DEFAULT_DIMENSION_STYLE: DimensionStyle = {
   textHeight: 0.35,

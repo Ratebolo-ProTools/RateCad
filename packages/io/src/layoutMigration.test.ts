@@ -47,7 +47,7 @@ describe('layout schema migration', () => {
       },
     };
     const opened = parseDocument(JSON.stringify(legacy));
-    expect(opened.schemaVersion).toBe(7);
+    expect(opened.schemaVersion).toBe(8);
     expect(opened.entities).toHaveLength(1);
     expect(opened.entities[0]!.id).toBe('line-1');
     expect(opened.layouts.length).toBeGreaterThanOrEqual(1);
@@ -93,5 +93,128 @@ describe('layout schema migration', () => {
     expect(ov.rotation).toBe(0.25);
     expect(ov.locked).toBe(true);
     expect(ov.visible).toBe(true);
+  });
+
+  it('persists paper entities, title block, sheet info, viewport labels (schema 8)', () => {
+    const doc = createEmptyDocument('PaperPersist');
+    const layout = doc.layouts[0]!;
+    layout.sheetInfo = {
+      project: 'Tower',
+      drawingTitle: 'GF Plan',
+      drawingNo: 'A-101',
+      scale: '1:100',
+      date: '2026-10-02',
+      drawnBy: 'RB',
+      checkedBy: 'QA',
+      revision: 'A',
+    };
+    layout.titleBlock = {
+      templateId: 'a3-landscape-default',
+      enabled: true,
+      x: 100,
+      y: 10,
+      width: 160,
+      height: 45,
+    };
+    layout.paperCamera = { offsetX: 2, offsetY: -1, zoom: 1.25 };
+    layout.viewports[0]!.label = 'GROUND FLOOR PLAN';
+    layout.viewports[0]!.scaleLabel = 'Scale 1:100';
+    layout.viewports[0]!.showLabel = true;
+    layout.paperSpaceEntities = [
+      {
+        id: 'ps-text-1',
+        type: 'text',
+        layerId: 'layer-text',
+        visible: true,
+        locked: false,
+        metadata: { paperSpace: true },
+        geometry: {
+          position: { x: 20, y: 30 },
+          content: 'PROJECT NAME',
+          height: 3.5,
+          rotation: 0,
+          alignment: 'left',
+        },
+        properties: {},
+      },
+    ];
+    const opened = parseDocument(serializeDocument(doc));
+    expect(opened.schemaVersion).toBe(8);
+    expect(opened.layouts[0]!.sheetInfo?.project).toBe('Tower');
+    expect(opened.layouts[0]!.titleBlock?.enabled).toBe(true);
+    expect(opened.layouts[0]!.paperCamera?.zoom).toBe(1.25);
+    expect(opened.layouts[0]!.viewports[0]!.label).toBe('GROUND FLOOR PLAN');
+    expect(opened.layouts[0]!.paperSpaceEntities).toHaveLength(1);
+    expect(opened.layouts[0]!.paperSpaceEntities[0]!.type).toBe('text');
+    expect(opened.entities).toHaveLength(0);
+    expect(opened.layers.some((l) => l.name === 'TitleBlock')).toBe(true);
+  });
+
+  it('migrates pre-v8 files and adds TitleBlock layer', () => {
+    const legacy = {
+      format: 'ratecad',
+      schemaVersion: 7,
+      document: {
+        schemaVersion: 7,
+        meta: {
+          name: 'V7',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          appVersion: '0.8.0',
+        },
+        settings: {
+          worldUnit: 'ft',
+          units: 'ft-in',
+          precision: 2,
+          fractionDenominator: 16,
+          gridSize: 1,
+          snapToGrid: true,
+        },
+        layers: [
+          {
+            id: 'layer-0',
+            name: '0',
+            color: '#d4d4d4',
+            visible: true,
+            locked: false,
+          },
+        ],
+        currentLayerId: 'layer-0',
+        entities: [],
+        layouts: [
+          {
+            id: 'layout-1',
+            name: 'Layout1',
+            pageSettings: {
+              paperSize: 'A4',
+              orientation: 'landscape',
+              units: 'mm',
+              margin: 10,
+            },
+            paperSpaceEntities: [],
+            viewports: [
+              {
+                id: 'vp1',
+                x: 25,
+                y: 25,
+                width: 200,
+                height: 140,
+                modelCenterX: 0,
+                modelCenterY: 0,
+                scale: 0.05,
+                rotation: 0,
+                locked: false,
+                visible: true,
+                layerVisibilityOverrides: {},
+              },
+            ],
+          },
+        ],
+        activeLayoutId: null,
+      },
+    };
+    const opened = parseDocument(JSON.stringify(legacy));
+    expect(opened.schemaVersion).toBe(8);
+    expect(opened.layers.some((l) => l.id === 'layer-titleblock')).toBe(true);
   });
 });

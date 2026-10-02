@@ -13,10 +13,12 @@ import {
   CreateLayerCommand,
   DeleteEntitiesCommand,
   DeleteLayerCommand,
+  DeletePaperEntitiesCommand,
   MoveViewportCommand,
   ResizeViewportCommand,
   SetCurrentLayerCommand,
   SetDrawingUnitsCommand,
+  SyncViewportLabelsCommand,
   UpdateDoorCommand,
   UpdateLayerCommand,
   UpdateRoomCommand,
@@ -28,6 +30,7 @@ import {
   addLayout,
   clearSelection,
   createEmptyDocument,
+  defaultPaperCamera,
   ensureLayouts,
   formatViewportScale,
   getEntity,
@@ -40,6 +43,7 @@ import {
   isEntityModifiable,
   replaceViewport,
   setActiveLayout,
+  updateLayoutSheetMeta,
   workspaceModeLabel,
   type DimensionKind,
   type DoorEntity,
@@ -80,6 +84,7 @@ import {
   ViewportPropertiesPanel,
   viewportStatusLine,
 } from './ViewportPropertiesPanel';
+import { LayoutPropertiesPanel } from './LayoutPropertiesPanel';
 import { serializeDocument, tryParseDocument } from '@ratecad/io';
 import {
   appendInputBuffer,
@@ -88,6 +93,8 @@ import {
   closeAreaTemporarily,
   commitLeaderContent,
   commitNumericInput,
+  commitPaperLeaderContent,
+  commitPaperTextContent,
   commitTextContent,
   createAreaLabel,
   createBoundaryFromArea,
@@ -96,9 +103,13 @@ import {
   finishAreaPoints,
   finishPolyline,
   formatRoomAreaReport,
+  handlePaperDimensionPointerDown,
+  handlePaperLeaderPointerDown,
+  handlePaperTextPointerDown,
   handleToolPointerDown,
   handleToolPointerMove,
   handleToolPointerUp,
+  isPaperAnnotationTool,
   resolveKeyboardContextFromTarget,
   SelectionManager,
   setActiveTool,
@@ -119,9 +130,11 @@ import {
   createCamera,
   fitPaperInCanvas,
   getViewportGrips,
+  hitTestPaperSpaceEntities,
   hitTestViewportGrip,
   panCamera,
   panViewportModel,
+  paperViewForLayout,
   renderDocument,
   screenToPaper,
   screenToWorld,
@@ -478,6 +491,9 @@ export function App() {
   );
   const [selectedViewportId, setSelectedViewportId] =
     useState<ViewportId | null>(null);
+  const [selectedPaperEntityIds, setSelectedPaperEntityIds] = useState<
+    string[]
+  >([]);
   /** Live paper-space viewport drag (move/resize) — preview only until pointer up. */
   type VpDragSession =
     | {
@@ -628,6 +644,7 @@ export function App() {
       selectedViewportId,
       paperPreviewRect: paperPreviewFromEngine,
       viewportPreviewOverride: drag?.preview ?? null,
+      selectedPaperEntityIds,
     });
   }, [
     doc,
@@ -640,6 +657,7 @@ export function App() {
     workspaceMode,
     activeViewportId,
     selectedViewportId,
+    selectedPaperEntityIds,
     vpDragTick,
   ]);
 
@@ -653,6 +671,7 @@ export function App() {
     setActiveViewportId(null);
     activeViewportIdRef.current = null;
     setSelectedViewportId(null);
+    setSelectedPaperEntityIds([]);
     busRef.current.updateWithoutHistory((d) =>
       setActiveLayout(ensureLayouts(d), null),
     );
@@ -668,6 +687,7 @@ export function App() {
     setActiveViewportId(null);
     activeViewportIdRef.current = null;
     setSelectedViewportId(null);
+    setSelectedPaperEntityIds([]);
     busRef.current.updateWithoutHistory((d) =>
       setActiveLayout(ensureLayouts(d), layoutId),
     );
@@ -692,6 +712,7 @@ export function App() {
     setActiveViewportId(null);
     activeViewportIdRef.current = null;
     setSelectedViewportId(null);
+    setSelectedPaperEntityIds([]);
     const layout = next.layouts.find((l) => l.id === layoutId);
     setStatusExtra(layout ? `PAPER SPACE · ${layout.name}` : 'PAPER SPACE');
     setDirty(true);
@@ -721,11 +742,7 @@ export function App() {
       const d = busRef.current.getDocument();
       const layout = d.layouts.find((l) => l.id === d.activeLayoutId);
       if (!layout) return { x: 0, y: 0 };
-      const view = fitPaperInCanvas(
-        layout.pageSettings,
-        size.width,
-        size.height,
-      );
+      const view = paperViewForLayout(layout, size.width, size.height);
       return screenToPaper(getScreenFromEvent(event), view);
     },
     [getScreenFromEvent, size.height, size.width],
@@ -936,6 +953,7 @@ export function App() {
     setWorkspaceMode('MODEL_SPACE');
     setActiveViewportId(null);
     setSelectedViewportId(null);
+    setSelectedPaperEntityIds([]);
     markDirty(false);
     suppressDirtyRef.current = false;
     setProjectPath(null);
@@ -1055,6 +1073,7 @@ export function App() {
       setWorkspaceMode(workspaceModeRef.current);
       setActiveViewportId(null);
       setSelectedViewportId(null);
+      setSelectedPaperEntityIds([]);
       setStatusExtra(path ? `Opened ${basename(path)}` : 'Opened drawing');
     };
 
@@ -1121,6 +1140,20 @@ export function App() {
 
   const deleteSelection = useCallback(() => {
     const doc = busRef.current.getDocument();
+    if (
+      workspaceModeRef.current === 'PAPER_SPACE' &&
+      selectedPaperEntityIds.length > 0 &&
+      doc.activeLayoutId
+    ) {
+      busRef.current.execute(
+        new DeletePaperEntitiesCommand(
+          doc.activeLayoutId,
+          selectedPaperEntityIds,
+        ),
+      );
+      setSelectedPaperEntityIds([]);
+      return;
+    }
     const selected = getSelectedEntities(doc).filter((e) =>
       isEntityModifiable(doc, e),
     );
@@ -1142,7 +1175,7 @@ export function App() {
     busRef.current.execute(
       new DeleteEntitiesCommand(selected.map((e) => e.id)),
     );
-  }, []);
+  }, [selectedPaperEntityIds]);
 
   const undo = useCallback(() => busRef.current.undo(), []);
   const redo = useCallback(() => busRef.current.redo(), []);
@@ -1267,6 +1300,24 @@ export function App() {
 
   const confirmTextPrompt = useCallback(() => {
     const s = sessionRef.current;
+    const layoutId = busRef.current.getDocument().activeLayoutId;
+    if (
+      workspaceModeRef.current === 'PAPER_SPACE' &&
+      layoutId &&
+      (s.activeTool === 'text' || s.activeTool === 'leader')
+    ) {
+      if (s.activeTool === 'text') {
+        syncSession(
+          commitPaperTextContent(s, busRef.current, layoutId, textPrompt),
+        );
+      } else {
+        syncSession(
+          commitPaperLeaderContent(s, busRef.current, layoutId, textPrompt),
+        );
+      }
+      setTextPrompt('');
+      return;
+    }
     if (s.activeTool === 'text') {
       syncSession(commitTextContent(s, busRef.current, textPrompt));
     } else if (s.activeTool === 'leader') {
@@ -1739,8 +1790,25 @@ export function App() {
       return;
     }
 
-    // PAPER_SPACE: do not pan the global model camera (sheet is fitted).
+    // PAPER_SPACE: pan the paper camera (independent of model / viewport cameras).
     if (workspaceModeRef.current === 'PAPER_SPACE') {
+      const d = busRef.current.getDocument();
+      const layoutId = d.activeLayoutId;
+      if (!layoutId) return;
+      const layout = d.layouts.find((l) => l.id === layoutId);
+      if (!layout) return;
+      const cam = layout.paperCamera ?? defaultPaperCamera();
+      const view = paperViewForLayout(layout, size.width, size.height);
+      const paperUnitMm = layout.pageSettings.units === 'inch' ? 25.4 : 1;
+      const px = view.pxPerMm * paperUnitMm;
+      const next = {
+        ...cam,
+        offsetX: cam.offsetX + pending.dx / Math.max(1e-6, px),
+        offsetY: cam.offsetY - pending.dy / Math.max(1e-6, px),
+      };
+      busRef.current.updateWithoutHistory((doc) =>
+        updateLayoutSheetMeta(doc, layoutId, { paperCamera: next }),
+      );
       return;
     }
 
@@ -1811,10 +1879,6 @@ export function App() {
           return;
         }
       }
-      if (workspaceModeRef.current === 'PAPER_SPACE') {
-        // Paper sheet is fitted — no free pan of the desk (viewport move is separate).
-        return;
-      }
       canvas.setPointerCapture(event.pointerId);
       isPanningRef.current = true;
       lastPointerRef.current = { x: event.clientX, y: event.clientY };
@@ -1823,21 +1887,17 @@ export function App() {
 
     if (event.button !== 0) return;
 
-    // Paper Space: viewport select / move / resize, or MVIEW points.
+    // Paper Space: paper entities, viewport select/move/resize, or MVIEW points.
     if (workspaceModeRef.current === 'PAPER_SPACE') {
       const d = busRef.current.getDocument();
       const layout = d.layouts.find((l) => l.id === d.activeLayoutId);
       if (!layout) return;
       const screen = getScreenFromEvent(event);
-      const view = fitPaperInCanvas(
-        layout.pageSettings,
-        size.width,
-        size.height,
-      );
+      const view = paperViewForLayout(layout, size.width, size.height);
       const paper = screenToPaper(screen, view);
       const eng = engineRef.current;
+      const tool = sessionRef.current.activeTool;
 
-      // MVIEW (and any running paper command) — feed paper coordinates.
       if (eng?.isRunning()) {
         eng.submitPoint(paper, { shiftKey: event.shiftKey });
         refreshEngineUi();
@@ -1845,13 +1905,41 @@ export function App() {
         return;
       }
 
-      // Resize grips on selected viewport
-      if (selectedViewportId) {
+      if (isPaperAnnotationTool(tool)) {
+        setSelectedViewportId(null);
+        setSelectedPaperEntityIds([]);
+        busRef.current.updateWithoutHistory((doc) => clearSelection(doc));
+        if (tool === 'text') {
+          syncSession(handlePaperTextPointerDown(sessionRef.current, paper));
+          setTextPrompt('');
+          return;
+        }
+        if (tool === 'dimension') {
+          syncSession(
+            handlePaperDimensionPointerDown(
+              sessionRef.current,
+              busRef.current,
+              layout.id,
+              paper,
+            ),
+          );
+          return;
+        }
+        if (tool === 'leader') {
+          const next = handlePaperLeaderPointerDown(sessionRef.current, paper);
+          syncSession(next);
+          if (next.mode === 'text-input') setTextPrompt('');
+          return;
+        }
+      }
+
+      if (selectedViewportId && tool === 'select') {
         const selected = layout.viewports.find((v) => v.id === selectedViewportId);
         if (selected) {
           const grips = getViewportGrips(selected, view);
           const grip = hitTestViewportGrip(grips, screen, 8);
           if (grip) {
+            setSelectedPaperEntityIds([]);
             vpDragRef.current = {
               kind: 'resize',
               layoutId: layout.id,
@@ -1868,24 +1956,41 @@ export function App() {
         }
       }
 
-      // Prefer boundary hit, then interior (paper space never selects model ents).
-      const boundaryTol =
+      const paperTol =
         (8 / Math.max(1e-6, view.pxPerMm)) /
         (layout.pageSettings.units === 'inch' ? 25.4 : 1);
+
+      if (tool === 'select') {
+        const paperHit = hitTestPaperSpaceEntities(
+          layout,
+          paper,
+          Math.max(1.5, paperTol),
+        );
+        if (paperHit) {
+          setSelectedViewportId(null);
+          setSelectedPaperEntityIds([paperHit.id]);
+          busRef.current.updateWithoutHistory((doc) => clearSelection(doc));
+          setStatusExtra(`Paper ${paperHit.type} selected`);
+          return;
+        }
+      }
+
       const boundary = hitTestViewportBoundary(
         layout,
         paper.x,
         paper.y,
-        Math.max(2, boundaryTol),
+        Math.max(2, paperTol),
       );
-      const hit = boundary ?? hitTestViewport(layout, paper.x, paper.y);
+      const hit =
+        tool === 'select'
+          ? boundary ?? hitTestViewport(layout, paper.x, paper.y)
+          : null;
       setSelectedViewportId(hit?.id ?? null);
       if (hit) {
-        // Clear model selection so properties show viewport
+        setSelectedPaperEntityIds([]);
         busRef.current.updateWithoutHistory((doc) => clearSelection(doc));
         const idx = layout.viewports.findIndex((v) => v.id === hit.id);
         setStatusExtra(viewportStatusLine(hit, idx >= 0 ? idx : 0));
-        // Start move drag from interior / boundary
         vpDragRef.current = {
           kind: 'move',
           layoutId: layout.id,
@@ -1896,7 +2001,8 @@ export function App() {
         };
         canvas.setPointerCapture(event.pointerId);
         bumpVpDrag();
-      } else {
+      } else if (tool === 'select') {
+        setSelectedPaperEntityIds([]);
         setStatusExtra(`PAPER SPACE · ${layout.name}`);
       }
       return;
@@ -2122,6 +2228,7 @@ export function App() {
               y: drag.preview.y - drag.original.y,
             }),
           );
+          busRef.current.execute(new SyncViewportLabelsCommand(drag.layoutId));
         } else {
           busRef.current.execute(
             new ResizeViewportCommand(drag.layoutId, drag.original, {
@@ -2131,6 +2238,7 @@ export function App() {
               height: drag.preview.height,
             }),
           );
+          busRef.current.execute(new SyncViewportLabelsCommand(drag.layoutId));
         }
         const d = busRef.current.getDocument();
         const layout = d.layouts.find((l) => l.id === drag.layoutId);
@@ -2186,7 +2294,19 @@ export function App() {
     const factor = event.deltaY < 0 ? 1.1 : 1 / 1.1;
 
     if (workspaceModeRef.current === 'PAPER_SPACE') {
-      // Sheet is fitted — wheel does not zoom paper (viewport scale is explicit).
+      const d = busRef.current.getDocument();
+      const layoutId = d.activeLayoutId;
+      if (!layoutId) return;
+      const layout = d.layouts.find((l) => l.id === layoutId);
+      if (!layout) return;
+      const cam = layout.paperCamera ?? defaultPaperCamera();
+      const next = {
+        ...cam,
+        zoom: Math.max(0.25, Math.min(8, cam.zoom * factor)),
+      };
+      busRef.current.updateWithoutHistory((doc) =>
+        updateLayoutSheetMeta(doc, layoutId, { paperCamera: next }),
+      );
       return;
     }
 
@@ -2202,11 +2322,7 @@ export function App() {
         setStatusExtra('Viewport locked — unlock to pan/zoom');
         return;
       }
-      const view = fitPaperInCanvas(
-        layout.pageSettings,
-        size.width,
-        size.height,
-      );
+      const view = paperViewForLayout(layout, size.width, size.height);
       const { screenRect } = cameraForViewport(vp, view);
       const inside =
         screen.x >= screenRect.x &&
@@ -3088,10 +3204,19 @@ export function App() {
             </ul>
           </section>
 
+          {doc.activeLayoutId && workspaceMode !== 'MODEL_SPACE' ? (
+            <LayoutPropertiesPanel
+              doc={doc}
+              bus={busRef.current}
+              layoutId={doc.activeLayoutId}
+              selectedViewportId={selectedViewportId}
+            />
+          ) : null}
           {selectedViewportId &&
           doc.activeLayoutId &&
           workspaceMode !== 'MODEL_SPACE' &&
-          selected.length === 0 ? (
+          selected.length === 0 &&
+          selectedPaperEntityIds.length === 0 ? (
             <ViewportPropertiesPanel
               doc={doc}
               bus={busRef.current}
@@ -3105,6 +3230,50 @@ export function App() {
                   0),
               )}
             />
+          ) : selectedPaperEntityIds.length > 0 &&
+            doc.activeLayoutId &&
+            workspaceMode === 'PAPER_SPACE' ? (
+            <section className="panel-section properties-engine">
+              <h2 className="panel-title">Properties</h2>
+              {(() => {
+                const layout = doc.layouts.find(
+                  (l) => l.id === doc.activeLayoutId,
+                );
+                const ent = layout?.paperSpaceEntities.find(
+                  (e) => e.id === selectedPaperEntityIds[0],
+                );
+                if (!ent) return <p className="empty-props">Not found</p>;
+                return (
+                  <>
+                    <div className="prop-row">
+                      <label>Type</label>
+                      <span className="value">Paper {ent.type}</span>
+                    </div>
+                    <div className="prop-row">
+                      <label>Space</label>
+                      <span className="value">Paper Space</span>
+                    </div>
+                    <div className="prop-row">
+                      <label>Layout</label>
+                      <span className="value">{layout?.name}</span>
+                    </div>
+                    <div className="prop-row">
+                      <label>Layer</label>
+                      <span className="value">
+                        {doc.layers.find((l) => l.id === ent.layerId)?.name ??
+                          ent.layerId}
+                      </span>
+                    </div>
+                    {ent.type === 'text' ? (
+                      <div className="prop-row">
+                        <label>Content</label>
+                        <span className="value">{ent.geometry.content}</span>
+                      </div>
+                    ) : null}
+                  </>
+                );
+              })()}
+            </section>
           ) : (
             <PropertiesPanel
               doc={doc}

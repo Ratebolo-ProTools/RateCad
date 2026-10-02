@@ -64,6 +64,12 @@ export interface LayoutViewport {
   rotation: number;
   locked: boolean;
   visible: boolean;
+  /** Optional paper-space title for this viewport. */
+  label?: string;
+  /** Optional scale caption shown with the label (e.g. "Scale 1:100"). */
+  scaleLabel?: string;
+  /** When true, a Paper Space label entity is shown under the viewport. */
+  showLabel?: boolean;
   /** Layer visibility overrides inside this viewport (foundation). */
   layerVisibilityOverrides: Record<string, boolean>;
 }
@@ -75,6 +81,12 @@ export interface Layout {
   /** Entities that live only in this layout's paper space (not model). */
   paperSpaceEntities: Entity[];
   viewports: LayoutViewport[];
+  /** Structured sheet information for title block / sheet UI. */
+  sheetInfo?: import('./sheet.js').SheetInfo;
+  /** Title block placement / template (entities generated into paperSpaceEntities). */
+  titleBlock?: import('./sheet.js').TitleBlock;
+  /** Independent Paper Space camera for this layout. */
+  paperCamera?: import('./sheet.js').PaperCameraState;
 }
 
 export const DEFAULT_LAYOUT_ID = 'layout-1' as LayoutId;
@@ -147,6 +159,9 @@ export function createDefaultViewport(
     rotation: 0,
     locked: false,
     visible: true,
+    label: undefined,
+    scaleLabel: undefined,
+    showLabel: false,
     layerVisibilityOverrides: {},
   };
 }
@@ -162,6 +177,9 @@ export function createDefaultLayout(
     pageSettings,
     paperSpaceEntities: [],
     viewports: [createDefaultViewport(pageSettings, `${id}-vp1` as ViewportId)],
+    sheetInfo: undefined,
+    titleBlock: undefined,
+    paperCamera: undefined,
   };
 }
 
@@ -184,6 +202,9 @@ export function createLayout(existing: Layout[], name?: string): Layout {
     pageSettings,
     paperSpaceEntities: [],
     viewports: [createDefaultViewport(pageSettings)],
+    sheetInfo: undefined,
+    titleBlock: undefined,
+    paperCamera: undefined,
   };
 }
 
