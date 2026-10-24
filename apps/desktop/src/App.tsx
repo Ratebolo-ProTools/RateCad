@@ -97,6 +97,8 @@ import {
 import { LayoutPropertiesPanel } from './LayoutPropertiesPanel';
 import { UnitsDialog } from './UnitsDialog';
 import { DimStyleManager } from './DimStyleManager';
+import { AreaModeStrip, Ribbon } from './Ribbon';
+import type { RecentDrawing } from './ApplicationMenu';
 import { serializeDocument, tryParseDocument } from '@ratecad/io';
 import {
   appendInputBuffer,
@@ -161,42 +163,6 @@ import {
 } from '@ratecad/viewport';
 import './styles/app.css';
 
-const DRAW_TOOLS: Array<{
-  id: ToolId;
-  label: string;
-  glyph: string;
-  dimKind?: DimensionKind;
-}> = [
-  { id: 'select', label: 'Select', glyph: '⌖' },
-  { id: 'line', label: 'Line', glyph: '/' },
-  { id: 'rectangle', label: 'Rect', glyph: '▭' },
-  { id: 'circle', label: 'Circle', glyph: '○' },
-  { id: 'polyline', label: 'PLine', glyph: '⌇' },
-  { id: 'dimension', label: 'DimH', glyph: '↔', dimKind: 'horizontal' },
-  { id: 'dimension', label: 'DimV', glyph: '↕', dimKind: 'vertical' },
-  { id: 'dimension', label: 'DimA', glyph: '⤡', dimKind: 'aligned' },
-  { id: 'dimension', label: 'DimR', glyph: '⌒', dimKind: 'radius' },
-  { id: 'dimension', label: 'DimØ', glyph: '⌀', dimKind: 'diameter' },
-  { id: 'dimension', label: 'Dim∠', glyph: '∠', dimKind: 'angular' },
-  { id: 'text', label: 'Text', glyph: 'T' },
-  { id: 'leader', label: 'Leader', glyph: '⤷' },
-  { id: 'wall', label: 'Wall', glyph: '▮' },
-  { id: 'door', label: 'Door', glyph: '⊓' },
-  { id: 'window', label: 'Window', glyph: '▤' },
-  { id: 'room', label: 'Room', glyph: '⌂' },
-  { id: 'area', label: 'Area', glyph: '◻' },
-  { id: 'move', label: 'Move', glyph: '↔' },
-  { id: 'copy', label: 'Copy', glyph: '⧉' },
-  { id: 'trim', label: 'Trim', glyph: '✂' },
-  { id: 'fillet', label: 'Fillet', glyph: '◠' },
-  { id: 'extend', label: 'Extend', glyph: '⟶' },
-  { id: 'offset', label: 'Offset', glyph: '∥' },
-  { id: 'mirror', label: 'Mirror', glyph: '⊳⊲' },
-  { id: 'rotate', label: 'Rotate', glyph: '↻' },
-  { id: 'scale', label: 'Scale', glyph: '⤢' },
-  { id: 'pan', label: 'Pan', glyph: '✥' },
-];
-
 const UNIT_OPTIONS: LengthUnit[] = [...SUPPORTED_LENGTH_UNITS];
 
 function fmtLen(doc: DrawingDocument, value: number, precision?: number): string {
@@ -218,6 +184,39 @@ function createBus(): CommandBus {
 function basename(filePath: string): string {
   const parts = filePath.replace(/\\/g, '/').split('/');
   return parts[parts.length - 1] || filePath;
+}
+
+const RECENT_DRAWINGS_KEY = 'ratecad.recentDrawings';
+const MAX_RECENT_DRAWINGS = 10;
+const MAX_RECENT_CONTENTS_CHARS = 750_000;
+
+function loadRecentDrawings(): RecentDrawing[] {
+  try {
+    const raw = localStorage.getItem(RECENT_DRAWINGS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter(
+        (entry): entry is RecentDrawing =>
+          !!entry &&
+          typeof entry === 'object' &&
+          typeof (entry as RecentDrawing).path === 'string' &&
+          typeof (entry as RecentDrawing).name === 'string' &&
+          typeof (entry as RecentDrawing).at === 'number',
+      )
+      .slice(0, MAX_RECENT_DRAWINGS);
+  } catch {
+    return [];
+  }
+}
+
+function persistRecentDrawings(entries: RecentDrawing[]): void {
+  try {
+    localStorage.setItem(RECENT_DRAWINGS_KEY, JSON.stringify(entries));
+  } catch {
+    // Quota / private mode — keep in-memory only.
+  }
 }
 
 function layerName(doc: DrawingDocument, layerId: string): string {
@@ -592,6 +591,15 @@ export function App() {
   const showDimStyleDialogRef = useRef(false);
   const [polarOn, setPolarOn] = useState(false);
   const [polarIncrement, setPolarIncrement] = useState(90);
+  const [appMenuOpen, setAppMenuOpen] = useState(false);
+  const appMenuOpenRef = useRef(false);
+  const [recentDrawings, setRecentDrawings] = useState<RecentDrawing[]>(() =>
+    loadRecentDrawings(),
+  );
+
+  useEffect(() => {
+    appMenuOpenRef.current = appMenuOpen;
+  }, [appMenuOpen]);
 
   const syncSession = useCallback((next: ToolSession) => {
     sessionRef.current = next;
@@ -623,6 +631,30 @@ export function App() {
     filePathRef.current = path;
     setFilePath(path);
   }, []);
+
+  const rememberRecentDrawing = useCallback(
+    (path: string, contents?: string) => {
+      if (!path.trim()) return;
+      const name = basename(path);
+      setRecentDrawings((prev) => {
+        const prior = prev.find((entry) => entry.path === path);
+        const cached =
+          contents && contents.length <= MAX_RECENT_CONTENTS_CHARS
+            ? contents
+            : prior?.contents &&
+                prior.contents.length <= MAX_RECENT_CONTENTS_CHARS
+              ? prior.contents
+              : undefined;
+        const next: RecentDrawing[] = [
+          { path, name, at: Date.now(), ...(cached ? { contents: cached } : {}) },
+          ...prev.filter((entry) => entry.path !== path),
+        ].slice(0, MAX_RECENT_DRAWINGS);
+        persistRecentDrawings(next);
+        return next;
+      });
+    },
+    [],
+  );
 
   useEffect(() => {
     return busRef.current.subscribe((next) => {
@@ -1031,6 +1063,21 @@ export function App() {
     [refreshEngineUi, syncSession],
   );
 
+  /** Ribbon / UI entry into the same command-engine path as the command line. */
+  const runEngineCommand = useCallback(
+    (alias: string) => {
+      const eng = engineRef.current;
+      if (!eng) return;
+      const result = eng.start(alias);
+      refreshEngineUi();
+      const ui = eng.getUiState();
+      if (ui.message) setCommandFeedback(ui.message);
+      else if (ui.commandName) setCommandFeedback(ui.commandName);
+      else if (!result.ok) setCommandFeedback(`Unknown command: ${alias}`);
+    },
+    [refreshEngineUi],
+  );
+
   const clearCommandLine = useCallback(() => {
     commandLineRef.current = '';
     setCommandLine('');
@@ -1118,6 +1165,7 @@ export function App() {
         }));
         markDirty(false);
         suppressDirtyRef.current = false;
+        rememberRecentDrawing(savedPath, contents);
         setStatusExtra(`Saved ${basename(savedPath)}`);
       };
 
@@ -1185,7 +1233,7 @@ export function App() {
         );
       }
     },
-    [markDirty, setProjectPath],
+    [markDirty, rememberRecentDrawing, setProjectPath],
   );
 
   const openDrawing = useCallback(async () => {
@@ -1213,6 +1261,7 @@ export function App() {
       setActiveViewportId(null);
       setSelectedViewportId(null);
       setSelectedPaperEntityIds([]);
+      if (path) rememberRecentDrawing(path, contents);
       setStatusExtra(path ? `Opened ${basename(path)}` : 'Opened drawing');
     };
 
@@ -1272,6 +1321,118 @@ export function App() {
   }, [
     confirmDiscardIfNeeded,
     markDirty,
+    rememberRecentDrawing,
+    setProjectPath,
+    syncCamera,
+    syncSession,
+  ]);
+
+  const openRecentDrawing = useCallback(
+    async (entry: RecentDrawing) => {
+      if (!(await confirmDiscardIfNeeded())) return;
+      const applyOpened = (contents: string, path?: string) => {
+        const parsed = tryParseDocument(contents);
+        if (!parsed.ok) {
+          setStatusExtra(`Invalid file: ${parsed.error}`);
+          return;
+        }
+        suppressDirtyRef.current = true;
+        const opened = ensureLayouts(parsed.document);
+        busRef.current.reset(opened);
+        setProjectPath(path ?? null);
+        markDirty(false);
+        suppressDirtyRef.current = false;
+        syncSession(createToolSession('select'));
+        syncCamera(createCamera());
+        modelCameraRef.current = createCamera();
+        workspaceModeRef.current =
+          opened.activeLayoutId == null ? 'MODEL_SPACE' : 'PAPER_SPACE';
+        setWorkspaceMode(workspaceModeRef.current);
+        setActiveViewportId(null);
+        setSelectedViewportId(null);
+        setSelectedPaperEntityIds([]);
+        rememberRecentDrawing(path ?? entry.path, contents);
+        setStatusExtra(`Opened ${basename(path ?? entry.path)}`);
+      };
+
+      const api = window.ratecadDesktop;
+      if (api?.openDrawingPath) {
+        try {
+          const result = await api.openDrawingPath(entry.path);
+          if (result.error) {
+            if (entry.contents) {
+              applyOpened(entry.contents, entry.path);
+              return;
+            }
+            setStatusExtra(`Open failed: ${result.error}`);
+            return;
+          }
+          if (result.contents) {
+            applyOpened(result.contents, result.filePath ?? entry.path);
+            return;
+          }
+        } catch (err) {
+          if (entry.contents) {
+            applyOpened(entry.contents, entry.path);
+            return;
+          }
+          setStatusExtra(
+            `Open failed: ${err instanceof Error ? err.message : 'unknown'}`,
+          );
+          return;
+        }
+      }
+
+      if (entry.contents) {
+        applyOpened(entry.contents, entry.path);
+        return;
+      }
+
+      setStatusExtra(
+        `Recent file unavailable — use Open to select ${entry.name}`,
+      );
+    },
+    [
+      confirmDiscardIfNeeded,
+      markDirty,
+      rememberRecentDrawing,
+      setProjectPath,
+      syncCamera,
+      syncSession,
+    ],
+  );
+
+  const exitApp = useCallback(async () => {
+    if (!(await confirmDiscardIfNeeded())) return;
+    const api = window.ratecadDesktop;
+    if (api?.quitApp) {
+      try {
+        await api.quitApp();
+        return;
+      } catch {
+        // Fall through to window.close / soft exit.
+      }
+    }
+    window.close();
+    // Browser / blocked close: soft-exit to a clean untitled drawing.
+    suppressDirtyRef.current = true;
+    busRef.current.reset(
+      ensureLayouts(createEmptyDocument('Untitled Drawing')),
+    );
+    workspaceModeRef.current = 'MODEL_SPACE';
+    setWorkspaceMode('MODEL_SPACE');
+    setActiveViewportId(null);
+    setSelectedViewportId(null);
+    setSelectedPaperEntityIds([]);
+    markDirty(false);
+    suppressDirtyRef.current = false;
+    setProjectPath(null);
+    syncSession(createToolSession('select'));
+    syncCamera(createCamera());
+    setStatusExtra('Session closed');
+  }, [
+    confirmDiscardIfNeeded,
+    markDirty,
     setProjectPath,
     syncCamera,
     syncSession,
@@ -1323,6 +1484,16 @@ export function App() {
     busRef.current.updateWithoutHistory((d) => ({
       ...d,
       settings: { ...d.settings, snapToGrid: !d.settings.snapToGrid },
+    }));
+  }, []);
+
+  const toggleGrid = useCallback(() => {
+    busRef.current.updateWithoutHistory((d) => ({
+      ...d,
+      settings: {
+        ...d.settings,
+        showGrid: !(d.settings.showGrid !== false),
+      },
     }));
   }, []);
 
@@ -1589,6 +1760,10 @@ export function App() {
 
       if (event.key === 'Escape') {
         event.preventDefault();
+        if (appMenuOpenRef.current) {
+          setAppMenuOpen(false);
+          return;
+        }
         if (vpDragRef.current) {
           cancelViewportDrag();
           setCommandFeedback('Viewport edit cancelled');
@@ -1818,6 +1993,11 @@ export function App() {
           toggleSnap();
           return;
         }
+        if (event.key === 'F7') {
+          event.preventDefault();
+          toggleGrid();
+          return;
+        }
         if (event.key === 'F8') {
           event.preventDefault();
           toggleOrtho();
@@ -1916,6 +2096,7 @@ export function App() {
     submitCommandLine,
     syncSession,
     toggleSnap,
+    toggleGrid,
     toggleOrtho,
     togglePolar,
     undo,
@@ -2559,14 +2740,6 @@ export function App() {
   const currentLayer = getLayer(doc, doc.currentLayerId) ?? doc.layers[0];
   const showTextDialog = session.mode === 'text-input';
 
-  const isToolActive = (tool: (typeof DRAW_TOOLS)[number]) => {
-    if (tool.id !== session.activeTool) return false;
-    if (tool.id === 'dimension' && tool.dimKind) {
-      return session.dimKind === tool.dimKind;
-    }
-    return true;
-  };
-
   const canvasClass = [
     'viewport-canvas',
     session.activeTool === 'pan' || spaceDownRef.current ? 'pan-ready' : '',
@@ -2712,162 +2885,75 @@ export function App() {
           </div>
         </div>
       ) : null}
-      <header className="menu-bar">
-        <div className="brand">
-          <span className="brand-name">RateCAD</span>
-          <span className="brand-tag">2D Drafting</span>
-        </div>
-        <div className="doc-title" title={filePath ?? undefined}>
-          {displayName}
-        </div>
-        <div className="menu-actions">
-          <button type="button" data-testid="btn-new" onClick={() => void newDrawing()}>
-            New
-          </button>
-          <button type="button" data-testid="btn-open" onClick={() => void openDrawing()}>
-            Open
-          </button>
-          <button type="button" data-testid="btn-save" onClick={() => void saveDrawing(false)}>
-            Save
-          </button>
-          <button type="button" data-testid="btn-save-as" onClick={() => void saveDrawing(true)}>
-            Save As
-          </button>
-          <button type="button" onClick={undo} disabled={!canUndo}>
-            Undo
-          </button>
-          <button type="button" onClick={redo} disabled={!canRedo}>
-            Redo
-          </button>
-          <button
-            type="button"
-            onClick={deleteSelection}
-            disabled={doc.selection.length === 0}
-          >
-            Delete
-          </button>
-          <button
-            type="button"
-            className={doc.settings.snapToGrid ? 'active-toggle' : ''}
-            onClick={toggleSnap}
-            title="Toggle snap (F3)"
-          >
-            Snap
-          </button>
-          <button
-            type="button"
-            className={orthoOn ? 'active-toggle' : ''}
-            onClick={toggleOrtho}
-            title="Toggle Ortho (F8)"
-          >
-            Ortho
-          </button>
-          <button
-            type="button"
-            className={polarOn ? 'active-toggle' : ''}
-            onClick={togglePolar}
-            onContextMenu={(e) => {
-              e.preventDefault();
-              cyclePolarIncrement();
-            }}
-            title={`Toggle Polar (F10) · increment ${polarIncrement}° (right-click to cycle)`}
-          >
-            Polar {polarIncrement}°
-          </button>
-        </div>
-      </header>
+      <Ribbon
+        displayName={displayName}
+        activeTool={session.activeTool}
+        dimKind={session.dimKind}
+        canUndo={canUndo}
+        canRedo={canRedo}
+        selectionCount={doc.selection.length}
+        layers={doc.layers}
+        currentLayerId={doc.currentLayerId}
+        snapOn={doc.settings.snapToGrid}
+        orthoOn={orthoOn}
+        polarOn={polarOn}
+        polarIncrement={polarIncrement}
+        areaMode={session.areaMode}
+        onNew={() => void newDrawing()}
+        onOpen={() => void openDrawing()}
+        onSave={() => void saveDrawing(false)}
+        onSaveAs={() => void saveDrawing(true)}
+        onUndo={undo}
+        onRedo={redo}
+        onDeleteSelection={deleteSelection}
+        onActivateTool={activateTool}
+        onRunCommand={runEngineCommand}
+        onOpenUnits={() => setShowUnitsDialog(true)}
+        onOpenDimStyle={() => setShowDimStyleDialog(true)}
+        onSetCurrentLayer={setCurrentLayer}
+        onAddLayer={addLayer}
+        onToggleLayerVisible={toggleLayerVisible}
+        onToggleLayerLocked={toggleLayerLocked}
+        onToggleSnap={toggleSnap}
+        onToggleOrtho={toggleOrtho}
+        onTogglePolar={togglePolar}
+        onActivateAreaMode={activateAreaMode}
+        onScrollToLayers={() => {
+          const el = document.querySelector('.layers-section');
+          el?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }}
+        onScrollToProperties={() => {
+          const el =
+            document.querySelector('.properties-engine') ??
+            document.querySelector('.right-panel');
+          el?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }}
+        appMenuOpen={appMenuOpen}
+        onAppMenuOpenChange={setAppMenuOpen}
+        recentDrawings={recentDrawings}
+        onOpenRecent={(entry) => void openRecentDrawing(entry)}
+        onExit={() => void exitApp()}
+      />
 
-      <div className="tool-ribbon">
-        <div className="tool-group">
-          {DRAW_TOOLS.map((tool) => (
-            <button
-              key={`${tool.id}-${tool.dimKind ?? tool.label}`}
-              type="button"
-              data-testid={`tool-${tool.id}${tool.dimKind ? `-${tool.dimKind}` : ''}`}
-              className={`tool-btn${isToolActive(tool) ? ' active' : ''}`}
-              onClick={(event) => {
-                event.stopPropagation();
-                activateTool(tool.id, tool.dimKind);
-              }}
-            >
-              {tool.label}
-            </button>
-          ))}
-        </div>
-        <div className="tool-group measure-group" aria-label="Measure">
-          <span className="tool-group-label">Measure</span>
-          <button
-            type="button"
-            data-testid="measure-area"
-            className={`tool-btn${session.activeTool === 'area' ? ' active' : ''}`}
-            onClick={() => activateAreaMode('object')}
-            title="AREA"
-          >
-            Area
-          </button>
-          {session.activeTool === 'area' ? (
-            <>
-              {(
-                [
-                  ['object', 'Object'],
-                  ['points', 'Points'],
-                  ['pick-inside', 'Pick Inside'],
-                  ['add', 'Add'],
-                  ['subtract', 'Subtract'],
-                  ['room', 'Room'],
-                ] as Array<[AreaToolMode, string]>
-              ).map(([mode, label]) => (
-                <button
-                  key={mode}
-                  type="button"
-                  data-testid={`area-mode-${mode}`}
-                  className={`tool-btn${session.areaMode === mode ? ' active' : ''}`}
-                  onClick={() => activateAreaMode(mode)}
-                >
-                  {label}
-                </button>
-              ))}
-              {session.areaLastResult ? (
-                <>
-                  <button
-                    type="button"
-                    className="tool-btn"
-                    onClick={() =>
-                      syncSession(
-                        createBoundaryFromArea(sessionRef.current, busRef.current),
-                      )
-                    }
-                  >
-                    Create Boundary
-                  </button>
-                  <button
-                    type="button"
-                    className="tool-btn"
-                    onClick={() =>
-                      syncSession(
-                        createAreaLabel(sessionRef.current, busRef.current),
-                      )
-                    }
-                  >
-                    Area Label
-                  </button>
-                </>
-              ) : null}
-              <button
-                type="button"
-                className="tool-btn"
-                onClick={() => {
-                  const lines = formatRoomAreaReport(busRef.current.getDocument());
-                  setCommandFeedback(lines.join(' · '));
-                }}
-                title="Report all room areas"
-              >
-                All Rooms
-              </button>
-            </>
-          ) : null}
-        </div>
-      </div>
+      {session.activeTool === 'area' ? (
+        <AreaModeStrip
+          areaMode={session.areaMode}
+          hasResult={!!session.areaLastResult}
+          onActivateAreaMode={activateAreaMode}
+          onCreateBoundary={() =>
+            syncSession(
+              createBoundaryFromArea(sessionRef.current, busRef.current),
+            )
+          }
+          onAreaLabel={() =>
+            syncSession(createAreaLabel(sessionRef.current, busRef.current))
+          }
+          onAllRooms={() => {
+            const lines = formatRoomAreaReport(busRef.current.getDocument());
+            setCommandFeedback(lines.join(' · '));
+          }}
+        />
+      ) : null}
 
       {session.areaLastResult ? (
         <div className="area-result-panel" data-testid="area-result-panel" role="status">
@@ -2896,24 +2982,6 @@ export function App() {
       ) : null}
 
       <div className="workspace">
-        <aside className="left-rail" aria-label="Tools">
-          {DRAW_TOOLS.map((tool) => (
-            <button
-              key={`rail-${tool.id}-${tool.dimKind ?? tool.label}`}
-              type="button"
-              className={`rail-btn${isToolActive(tool) ? ' active' : ''}`}
-              onClick={(event) => {
-                event.stopPropagation();
-                activateTool(tool.id, tool.dimKind);
-              }}
-              title={tool.label}
-            >
-              <span className="glyph">{tool.glyph}</span>
-              <span>{tool.label}</span>
-            </button>
-          ))}
-        </aside>
-
         <main className="viewport-wrap" ref={wrapRef}>
           <canvas
             ref={canvasRef}
@@ -3780,6 +3848,52 @@ export function App() {
             : ''}
           {snapLabel ? ` · Snap: ${snapLabel}` : ''}
         </div>
+        <div className="status-toggles" role="toolbar" aria-label="Drafting aids">
+          <button
+            type="button"
+            className={`status-toggle${doc.settings.showGrid !== false ? ' active' : ''}`}
+            data-testid="status-grid"
+            aria-pressed={doc.settings.showGrid !== false}
+            title="Grid display (F7) — show or hide the drafting grid"
+            onClick={toggleGrid}
+          >
+            Grid
+          </button>
+          <button
+            type="button"
+            className={`status-toggle${doc.settings.snapToGrid ? ' active' : ''}`}
+            data-testid="status-snap"
+            aria-pressed={doc.settings.snapToGrid}
+            title="Grid Snap (F3) — snap cursor to grid points (not object snap)"
+            onClick={toggleSnap}
+          >
+            Snap
+          </button>
+          <button
+            type="button"
+            className={`status-toggle${orthoOn ? ' active' : ''}`}
+            data-testid="status-ortho"
+            aria-pressed={orthoOn}
+            title="Ortho (F8) — constrain drawing to horizontal/vertical"
+            onClick={toggleOrtho}
+          >
+            Ortho
+          </button>
+          <button
+            type="button"
+            className={`status-toggle${polarOn ? ' active' : ''}`}
+            data-testid="status-polar"
+            aria-pressed={polarOn}
+            title={`Polar Tracking (F10) — ${polarIncrement}° increments (right-click cycles)`}
+            onClick={togglePolar}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              cyclePolarIncrement();
+            }}
+          >
+            Polar
+          </button>
+        </div>
         <div className="status-right">
           <span>
             X: <strong>{fmtLen(doc, cursorWorld.x)}</strong>
@@ -3795,9 +3909,6 @@ export function App() {
           </span>
           <span>
             Layer: <strong>{currentLayer?.name ?? '—'}</strong>
-          </span>
-          <span>
-            Snap: <strong>{doc.settings.snapToGrid ? 'ON' : 'OFF'}</strong>
           </span>
         </div>
       </footer>

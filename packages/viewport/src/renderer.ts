@@ -1120,14 +1120,16 @@ export function renderPaperSpace(
     // Viewport interior background
     ctx.fillStyle = theme.background;
     ctx.fillRect(screenRect.x, screenRect.y, screenRect.w, screenRect.h);
-    drawGrid(
-      ctx,
-      camera,
-      screenRect.w,
-      screenRect.h,
-      doc.settings.gridSize,
-      theme,
-    );
+    if (doc.settings.showGrid !== false) {
+      drawGrid(
+        ctx,
+        camera,
+        screenRect.w,
+        screenRect.h,
+        doc.settings.gridSize,
+        theme,
+      );
+    }
     // Temporarily offset world→screen by translating context so worldToScreen
     // (which assumes full canvas) still works: shift origin to viewport top-left
     // by adjusting via a nested camera trick — use translated canvas + local size.
@@ -1206,7 +1208,9 @@ export function renderDocument(
   ctx.fillStyle = theme.background;
   ctx.fillRect(0, 0, width, height);
 
-  drawGrid(ctx, camera, width, height, doc.settings.gridSize, theme);
+  if (doc.settings.showGrid !== false) {
+    drawGrid(ctx, camera, width, height, doc.settings.gridSize, theme);
+  }
 
   const selected = new Set(doc.selection);
   const autoGrips = drawModelEntities(ctx, doc, camera, width, height, theme, {

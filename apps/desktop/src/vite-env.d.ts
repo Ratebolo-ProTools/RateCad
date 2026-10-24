@@ -11,6 +11,12 @@ declare global {
         contents?: string;
         error?: string;
       }>;
+      openDrawingPath?: (filePath: string) => Promise<{
+        canceled?: boolean;
+        filePath?: string;
+        contents?: string;
+        error?: string;
+      }>;
       saveDrawing: (payload: {
         contents: string;
         filePath?: string | null;
@@ -29,6 +35,7 @@ declare global {
         filePath?: string;
         error?: string;
       }>;
+      quitApp?: () => Promise<{ ok?: boolean; error?: string }>;
     };
   }
 }

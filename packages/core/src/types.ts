@@ -324,7 +324,9 @@ export interface DrawingSettings {
    */
   fractionDenominator: number;
   gridSize: number;
-  /** Master snap toggle (grid + object snaps). */
+  /** When false, the drafting grid is hidden (display only). */
+  showGrid: boolean;
+  /** Master snap toggle (grid snap). Distinct from object snap when added later. */
   snapToGrid: boolean;
   /** Named dimension styles (DIMSTYLE). */
   dimensionStyles: DimensionStyleDefinition[];

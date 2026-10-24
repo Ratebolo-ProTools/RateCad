@@ -441,6 +441,8 @@ function migrateDocument(
           : 16,
       gridSize:
         typeof settingsRaw.gridSize === 'number' ? settingsRaw.gridSize : 1,
+      showGrid:
+        typeof settingsRaw.showGrid === 'boolean' ? settingsRaw.showGrid : true,
       snapToGrid:
         typeof settingsRaw.snapToGrid === 'boolean'
           ? settingsRaw.snapToGrid

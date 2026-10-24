@@ -195,6 +195,7 @@ export function createEmptyDocument(
       fractionDenominator:
         settings?.fractionDenominator ?? legacyDisplay.fractionDenominator,
       gridSize: settings?.gridSize ?? 1,
+      showGrid: settings?.showGrid ?? true,
       snapToGrid: settings?.snapToGrid ?? true,
       trimMode: settings?.trimMode ?? 'quick',
       edgeMode: settings?.edgeMode ?? 'no-extend',

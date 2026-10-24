@@ -225,6 +225,26 @@ ipcMain.handle('fs:quickSaveRatecad', async (_event, payload) => {
   }
 });
 
+ipcMain.handle('fs:openRatecadPath', async (_event, filePath) => {
+  if (typeof filePath !== 'string' || !filePath.trim()) {
+    return { canceled: false, error: 'Missing file path' };
+  }
+  try {
+    const contents = await fs.readFile(filePath, 'utf8');
+    return { canceled: false, filePath, contents };
+  } catch (err) {
+    return {
+      canceled: false,
+      error: err instanceof Error ? err.message : 'Failed to open file',
+    };
+  }
+});
+
+ipcMain.handle('app:quit', () => {
+  app.quit();
+  return { ok: true };
+});
+
 app.whenReady().then(() => {
   buildMenu();
   createWindow();
