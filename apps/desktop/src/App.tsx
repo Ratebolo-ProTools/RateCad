@@ -3316,9 +3316,16 @@ export function App() {
         orthoOn={orthoOn}
         polarOn={polarOn}
         polarIncrement={polarIncrement}
+        gridOn={doc.settings.showGrid !== false}
         areaMode={session.areaMode}
         crosshairSize={draftingPrefs.crosshairSize}
         pickboxSize={draftingPrefs.pickboxSize}
+        workspaceMode={workspaceMode}
+        activeLayoutId={doc.activeLayoutId}
+        layouts={doc.layouts.map((l) => ({ id: l.id, name: l.name }))}
+        annotationScaleLabel={formatAnnotationScale(
+          doc.settings.annotationScale?.ratio ?? 50,
+        )}
         onCrosshairSizeChange={(size: CrosshairSize) => {
           setDraftingPrefs(updateDraftingPrefs({ crosshairSize: size }));
         }}
@@ -3343,6 +3350,7 @@ export function App() {
         onToggleSnap={toggleSnap}
         onToggleOrtho={toggleOrtho}
         onTogglePolar={togglePolar}
+        onToggleGrid={toggleGrid}
         onActivateAreaMode={activateAreaMode}
         onScrollToLayers={() => {
           const el = document.querySelector('.layers-section');
@@ -3354,6 +3362,32 @@ export function App() {
             document.querySelector('.right-panel');
           el?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
         }}
+        onZoomExtents={() => {
+          void runEngineCommand('ZE');
+        }}
+        onZoomWindow={() => {
+          const eng = engineRef.current;
+          if (!eng) return;
+          eng.start('ZOOM');
+          eng.setBuffer('W');
+          eng.confirm('enter');
+          refreshEngineUi();
+          setCommandFeedback('ZOOM: Specify first corner:');
+        }}
+        onZoomPrevious={() => {
+          const eng = engineRef.current;
+          if (!eng) return;
+          eng.start('ZOOM');
+          eng.setBuffer('P');
+          eng.confirm('enter');
+          refreshEngineUi();
+          setCommandFeedback(eng.getStatusMessage() ?? 'ZOOM Previous');
+        }}
+        onPanNavigation={() => {
+          void runEngineCommand('PAN');
+        }}
+        onSwitchToModel={() => switchToModelTab()}
+        onSwitchToLayout={(layoutId) => switchToLayoutTab(layoutId)}
         appMenuOpen={appMenuOpen}
         onAppMenuOpenChange={setAppMenuOpen}
         recentDrawings={recentDrawings}

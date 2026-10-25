@@ -15,8 +15,10 @@ import {
   type DrawingDocument,
   type Entity,
   type Layer,
+  type LayoutId,
   type LinetypeProperty,
   type LineweightProperty,
+  type WorkspaceMode,
 } from '@ratecad/core';
 import {
   canEditEntityProperties,
@@ -32,35 +34,20 @@ import {
   ApplicationMenuButton,
   type RecentDrawing,
 } from './ApplicationMenu';
+import {
+  DEFAULT_RIBBON_TAB,
+  RIBBON_TAB_DEFS,
+  SUPPORTED_DIMENSION_KINDS,
+  type RibbonTabId,
+} from './ribbonTabs';
 import './styles/ribbon.css';
 
 const MIXED = 'Mixed';
 
-type RibbonTabId =
-  | 'home'
-  | 'insert'
-  | 'annotate'
-  | 'parametric'
-  | 'view'
-  | 'manage'
-  | 'output'
-  | 'addins'
-  | 'collaborate'
-  | 'express';
-
-const RIBBON_TABS: Array<{ id: RibbonTabId; label: string; enabled: boolean }> =
-  [
-    { id: 'home', label: 'Home', enabled: true },
-    { id: 'insert', label: 'Insert', enabled: false },
-    { id: 'annotate', label: 'Annotate', enabled: false },
-    { id: 'parametric', label: 'Parametric', enabled: false },
-    { id: 'view', label: 'View', enabled: false },
-    { id: 'manage', label: 'Manage', enabled: false },
-    { id: 'output', label: 'Output', enabled: false },
-    { id: 'addins', label: 'Add-ins', enabled: false },
-    { id: 'collaborate', label: 'Collaborate', enabled: false },
-    { id: 'express', label: 'Express Tools', enabled: false },
-  ];
+export type RibbonLayoutInfo = {
+  id: LayoutId;
+  name: string;
+};
 
 export type RibbonProps = {
   displayName: string;
@@ -77,9 +64,14 @@ export type RibbonProps = {
   orthoOn: boolean;
   polarOn: boolean;
   polarIncrement: number;
+  gridOn: boolean;
   areaMode: AreaToolMode;
   crosshairSize: CrosshairSize;
   pickboxSize: PickboxSize;
+  workspaceMode: WorkspaceMode;
+  activeLayoutId: LayoutId | null;
+  layouts: RibbonLayoutInfo[];
+  annotationScaleLabel: string;
   onCrosshairSizeChange: (size: CrosshairSize) => void;
   onPickboxSizeChange: (size: PickboxSize) => void;
   onNew: () => void;
@@ -100,9 +92,16 @@ export type RibbonProps = {
   onToggleSnap: () => void;
   onToggleOrtho: () => void;
   onTogglePolar: () => void;
+  onToggleGrid: () => void;
   onActivateAreaMode: (mode: AreaToolMode) => void;
   onScrollToLayers: () => void;
   onScrollToProperties: () => void;
+  onZoomExtents: () => void;
+  onZoomWindow: () => void;
+  onZoomPrevious: () => void;
+  onPanNavigation: () => void;
+  onSwitchToModel: () => void;
+  onSwitchToLayout: (layoutId: LayoutId) => void;
   appMenuOpen: boolean;
   onAppMenuOpenChange: (open: boolean) => void;
   recentDrawings: RecentDrawing[];
@@ -342,7 +341,97 @@ const Icons = {
       <path d="M6 4l4 14 3-5 5-2z" />
     </Icon>
   ),
+  zoomExtents: (
+    <Icon>
+      <rect x="4" y="4" width="16" height="16" />
+      <path d="M8 12h8M12 8v8" />
+    </Icon>
+  ),
+  zoomWindow: (
+    <Icon>
+      <rect x="5" y="5" width="10" height="10" />
+      <path d="M14 14l5 5" />
+      <circle cx="12" cy="12" r="0.5" fill="currentColor" stroke="none" />
+    </Icon>
+  ),
+  zoomPrevious: (
+    <Icon>
+      <path d="M8 12h11" />
+      <path d="M11 8l-4 4 4 4" />
+      <path d="M5 6v12" />
+    </Icon>
+  ),
 };
+
+function RibbonBodyShell({
+  testId,
+  children,
+}: {
+  testId: string;
+  children: ReactNode;
+}) {
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const [canScrollLeft, setCanScrollLeft] = useState(false);
+  const [canScrollRight, setCanScrollRight] = useState(false);
+
+  const updateScroll = () => {
+    const el = bodyRef.current;
+    if (!el) return;
+    setCanScrollLeft(el.scrollLeft > 2);
+    setCanScrollRight(el.scrollLeft + el.clientWidth < el.scrollWidth - 2);
+  };
+
+  useEffect(() => {
+    const el = bodyRef.current;
+    if (!el) return;
+    updateScroll();
+    const onScroll = () => updateScroll();
+    el.addEventListener('scroll', onScroll, { passive: true });
+    const ro = new ResizeObserver(() => updateScroll());
+    ro.observe(el);
+    return () => {
+      el.removeEventListener('scroll', onScroll);
+      ro.disconnect();
+    };
+  }, []);
+
+  const scrollByDir = (dir: -1 | 1) => {
+    const el = bodyRef.current;
+    if (!el) return;
+    el.scrollBy({
+      left: dir * Math.max(160, el.clientWidth * 0.45),
+      behavior: 'smooth',
+    });
+  };
+
+  return (
+    <div className="ribbon-body-wrap" data-testid={`${testId}-wrap`}>
+      <button
+        type="button"
+        className={`ribbon-scroll-btn left${canScrollLeft ? '' : ' hidden'}`}
+        data-testid={`${testId}-scroll-left`}
+        aria-label="Scroll ribbon left"
+        title="Scroll left"
+        onClick={() => scrollByDir(-1)}
+      >
+        ‹
+      </button>
+      <div className="ribbon-body" data-testid={testId} ref={bodyRef}>
+        {children}
+      </div>
+      <button
+        type="button"
+        className={`ribbon-scroll-btn right${canScrollRight ? '' : ' hidden'}`}
+        data-testid={`${testId}-scroll-right`}
+        aria-label="Scroll ribbon right"
+        title="Scroll right"
+        onClick={() => scrollByDir(1)}
+      >
+        ›
+      </button>
+    </div>
+  );
+}
 
 function tip(name: string, aliases?: string[], extra?: string): string {
   const alias = aliases?.length ? ` (${aliases.join(', ')})` : '';
@@ -380,14 +469,13 @@ function Flyout({
 }
 
 export function Ribbon(props: RibbonProps) {
-  const [tab, setTab] = useState<RibbonTabId>('home');
+  const [tab, setTab] = useState<RibbonTabId>(DEFAULT_RIBBON_TAB);
   const [dimOpen, setDimOpen] = useState(false);
+  const [annotateDimOpen, setAnnotateDimOpen] = useState(false);
   const [circleOpen, setCircleOpen] = useState(false);
   const [measureOpen, setMeasureOpen] = useState(false);
-  const [canScrollLeft, setCanScrollLeft] = useState(false);
-  const [canScrollRight, setCanScrollRight] = useState(false);
-  const ribbonBodyRef = useRef<HTMLDivElement>(null);
   const layerSelectId = useId();
+  const manageLayerSelectId = useId();
   const currentLayer =
     props.layers.find((l) => l.id === props.currentLayerId) ?? props.layers[0];
 
@@ -508,33 +596,6 @@ export function Ribbon(props: RibbonProps) {
     applyAppearance({ lineweight });
   };
 
-  const updateRibbonScroll = () => {
-    const el = ribbonBodyRef.current;
-    if (!el) return;
-    setCanScrollLeft(el.scrollLeft > 2);
-    setCanScrollRight(el.scrollLeft + el.clientWidth < el.scrollWidth - 2);
-  };
-
-  useEffect(() => {
-    const el = ribbonBodyRef.current;
-    if (!el) return;
-    updateRibbonScroll();
-    const onScroll = () => updateRibbonScroll();
-    el.addEventListener('scroll', onScroll, { passive: true });
-    const ro = new ResizeObserver(() => updateRibbonScroll());
-    ro.observe(el);
-    return () => {
-      el.removeEventListener('scroll', onScroll);
-      ro.disconnect();
-    };
-  }, [tab]);
-
-  const scrollRibbon = (dir: -1 | 1) => {
-    const el = ribbonBodyRef.current;
-    if (!el) return;
-    el.scrollBy({ left: dir * Math.max(160, el.clientWidth * 0.45), behavior: 'smooth' });
-  };
-
   return (
     <>
       <div className="ribbon-chrome" data-testid="ribbon-chrome">
@@ -612,18 +673,19 @@ export function Ribbon(props: RibbonProps) {
         </div>
 
         <div className="ribbon-tabs" role="tablist" aria-label="Ribbon tabs">
-          {RIBBON_TABS.map((t) => (
+          {RIBBON_TAB_DEFS.map((t) => (
             <button
               key={t.id}
               type="button"
               role="tab"
+              data-testid={`ribbon-tab-${t.id}`}
               aria-selected={tab === t.id}
               className={`ribbon-tab${tab === t.id ? ' active' : ''}`}
               disabled={!t.enabled}
               title={
                 t.enabled
                   ? t.label
-                  : `${t.label} — not yet implemented in Step 1`
+                  : `${t.label} — not yet implemented`
               }
               onClick={() => t.enabled && setTab(t.id)}
             >
@@ -633,22 +695,7 @@ export function Ribbon(props: RibbonProps) {
         </div>
 
         {tab === 'home' ? (
-          <div className="ribbon-body-wrap" data-testid="home-ribbon-wrap">
-            <button
-              type="button"
-              className={`ribbon-scroll-btn left${canScrollLeft ? '' : ' hidden'}`}
-              data-testid="ribbon-scroll-left"
-              aria-label="Scroll ribbon left"
-              title="Scroll left"
-              onClick={() => scrollRibbon(-1)}
-            >
-              ‹
-            </button>
-            <div
-              className="ribbon-body"
-              data-testid="home-ribbon"
-              ref={ribbonBodyRef}
-            >
+          <RibbonBodyShell testId="home-ribbon">
             {/* DRAW — large Line/PLine/Circle/Arc; small Rect/Polygon/Hatch */}
             <section className="ribbon-panel" aria-label="Draw">
               <div className="ribbon-panel-body">
@@ -1453,18 +1500,692 @@ export function Ribbon(props: RibbonProps) {
               </div>
               <div className="ribbon-panel-title">Select Mode</div>
             </section>
-            </div>
-            <button
-              type="button"
-              className={`ribbon-scroll-btn right${canScrollRight ? '' : ' hidden'}`}
-              data-testid="ribbon-scroll-right"
-              aria-label="Scroll ribbon right"
-              title="Scroll right"
-              onClick={() => scrollRibbon(1)}
-            >
-              ›
-            </button>
-          </div>
+          </RibbonBodyShell>
+        ) : null}
+
+        {tab === 'annotate' ? (
+          <RibbonBodyShell testId="annotate-ribbon">
+            <section className="ribbon-panel" aria-label="Text">
+              <div className="ribbon-panel-body">
+                <button
+                  type="button"
+                  className={`ribbon-large${isActive('text') ? ' active' : ''}`}
+                  data-testid="annotate-tool-text"
+                  title={tip('Text', ['TEXT', 'DT'])}
+                  onClick={() => props.onActivateTool('text')}
+                >
+                  {Icons.text}
+                  <span>Text</span>
+                </button>
+                <div className="ribbon-stack">
+                  <button
+                    type="button"
+                    className="ribbon-small"
+                    disabled
+                    title="Multiline Text (MTEXT) — not yet implemented"
+                    data-testid="annotate-tool-mtext"
+                  >
+                    Multiline Text
+                  </button>
+                  <button
+                    type="button"
+                    className="ribbon-small"
+                    title="Edit selected text — Properties panel"
+                    onClick={props.onScrollToProperties}
+                  >
+                    Edit Text…
+                  </button>
+                </div>
+              </div>
+              <div className="ribbon-panel-title">Text</div>
+            </section>
+
+            <section className="ribbon-panel" aria-label="Dimensions">
+              <div className="ribbon-panel-body">
+                <Flyout
+                  open={annotateDimOpen}
+                  onOpenChange={setAnnotateDimOpen}
+                  trigger={
+                    <button
+                      type="button"
+                      className={`ribbon-large${props.activeTool === 'dimension' ? ' active' : ''}`}
+                      data-testid="annotate-tool-dimension"
+                      title={tip('Dimension', ['DIM'])}
+                      onClick={() => {
+                        props.onActivateTool('dimension', 'aligned');
+                        setAnnotateDimOpen((v) => !v);
+                      }}
+                    >
+                      {Icons.dimension}
+                      <span>
+                        Dimension <span className="caret">▾</span>
+                      </span>
+                    </button>
+                  }
+                >
+                  {(
+                    [
+                      ['aligned', 'Aligned'],
+                      ['horizontal', 'Linear (Horizontal)'],
+                      ['vertical', 'Linear (Vertical)'],
+                      ['angular', 'Angular'],
+                      ['radius', 'Radius'],
+                      ['diameter', 'Diameter'],
+                    ] as Array<[DimensionKind, string]>
+                  )
+                    .filter(([kind]) =>
+                      (SUPPORTED_DIMENSION_KINDS as readonly string[]).includes(
+                        kind,
+                      ),
+                    )
+                    .map(([kind, label]) => (
+                      <button
+                        key={kind}
+                        type="button"
+                        data-testid={`annotate-dim-${kind}`}
+                        onClick={() => {
+                          props.onActivateTool('dimension', kind);
+                          setAnnotateDimOpen(false);
+                        }}
+                      >
+                        {Icons.dimension} {label}
+                      </button>
+                    ))}
+                </Flyout>
+                <div className="ribbon-stack">
+                  <button
+                    type="button"
+                    className={`ribbon-small${isActive('dimension', 'aligned') ? ' active' : ''}`}
+                    title={tip('Aligned Dimension', ['DIM'])}
+                    onClick={() => props.onActivateTool('dimension', 'aligned')}
+                  >
+                    Aligned
+                  </button>
+                  <button
+                    type="button"
+                    className={`ribbon-small${isActive('dimension', 'horizontal') ? ' active' : ''}`}
+                    title="Linear horizontal dimension"
+                    onClick={() =>
+                      props.onActivateTool('dimension', 'horizontal')
+                    }
+                  >
+                    Linear
+                  </button>
+                  <button
+                    type="button"
+                    className={`ribbon-small${isActive('dimension', 'angular') ? ' active' : ''}`}
+                    title="Angular dimension"
+                    onClick={() => props.onActivateTool('dimension', 'angular')}
+                  >
+                    Angular
+                  </button>
+                  <button
+                    type="button"
+                    className={`ribbon-small${isActive('dimension', 'radius') ? ' active' : ''}`}
+                    title="Radius dimension"
+                    onClick={() => props.onActivateTool('dimension', 'radius')}
+                  >
+                    Radius
+                  </button>
+                </div>
+              </div>
+              <div className="ribbon-panel-title">Dimensions</div>
+            </section>
+
+            <section className="ribbon-panel" aria-label="Leaders">
+              <div className="ribbon-panel-body">
+                <button
+                  type="button"
+                  className={`ribbon-large${isActive('leader') ? ' active' : ''}`}
+                  data-testid="annotate-tool-leader"
+                  title={tip('Leader', ['LEADER', 'LE'])}
+                  onClick={() => props.onActivateTool('leader')}
+                >
+                  {Icons.leader}
+                  <span>Leader</span>
+                </button>
+                <div className="ribbon-stack">
+                  <button
+                    type="button"
+                    className="ribbon-small"
+                    disabled
+                    title="Multileader — not yet implemented"
+                  >
+                    Multileader
+                  </button>
+                  <button
+                    type="button"
+                    className="ribbon-small"
+                    title="Edit selected leader text — Properties panel"
+                    onClick={props.onScrollToProperties}
+                  >
+                    Edit Leader…
+                  </button>
+                </div>
+              </div>
+              <div className="ribbon-panel-title">Leaders</div>
+            </section>
+
+            <section className="ribbon-panel" aria-label="Annotation Settings">
+              <div className="ribbon-panel-body">
+                <button
+                  type="button"
+                  className="ribbon-large"
+                  data-testid="annotate-dimstyle"
+                  title={tip('Dimension Style Manager', ['DIMSTYLE', 'D'])}
+                  onClick={props.onOpenDimStyle}
+                >
+                  {Icons.dimstyle}
+                  <span>Dim Style</span>
+                </button>
+                <div className="ribbon-stack">
+                  <button
+                    type="button"
+                    className="ribbon-small"
+                    data-testid="annotate-units"
+                    title={tip('Drawing Units', ['UNITS'])}
+                    onClick={props.onOpenUnits}
+                  >
+                    Units…
+                  </button>
+                  <button
+                    type="button"
+                    className="ribbon-small"
+                    disabled
+                    data-testid="annotate-scale"
+                    title={`Annotation scale (${props.annotationScaleLabel}) — UI editor not yet implemented`}
+                  >
+                    Ann. Scale
+                  </button>
+                  <button
+                    type="button"
+                    className="ribbon-small"
+                    disabled
+                    title="Table — not yet implemented"
+                  >
+                    Table
+                  </button>
+                </div>
+              </div>
+              <div className="ribbon-panel-title">Annotation Settings</div>
+            </section>
+
+            <section className="ribbon-panel" aria-label="Select Mode">
+              <div className="ribbon-panel-body">
+                <button
+                  type="button"
+                  className={`ribbon-large${isActive('select') ? ' active' : ''}`}
+                  data-testid="annotate-tool-select"
+                  title={tip('Selection Mode', ['ESC'])}
+                  onClick={() => props.onActivateTool('select')}
+                >
+                  {Icons.select}
+                  <span>Select</span>
+                </button>
+              </div>
+              <div className="ribbon-panel-title">Select Mode</div>
+            </section>
+          </RibbonBodyShell>
+        ) : null}
+
+        {tab === 'view' ? (
+          <RibbonBodyShell testId="view-ribbon">
+            <section className="ribbon-panel" aria-label="Navigation">
+              <div className="ribbon-panel-body">
+                <button
+                  type="button"
+                  className={`ribbon-large${isActive('pan') ? ' active' : ''}`}
+                  data-testid="view-tool-pan"
+                  title={tip('Pan', ['P', 'PAN'])}
+                  onClick={props.onPanNavigation}
+                >
+                  {Icons.pan}
+                  <span>Pan</span>
+                </button>
+                <div className="ribbon-row-large">
+                  <button
+                    type="button"
+                    className="ribbon-large"
+                    data-testid="view-zoom-extents"
+                    title={tip('Zoom Extents', ['ZE', 'ZOOM E'])}
+                    onClick={props.onZoomExtents}
+                  >
+                    {Icons.zoomExtents}
+                    <span>Extents</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="ribbon-large"
+                    data-testid="view-zoom-window"
+                    title={tip('Zoom Window', ['ZOOM W'])}
+                    onClick={props.onZoomWindow}
+                  >
+                    {Icons.zoomWindow}
+                    <span>Window</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="ribbon-large"
+                    data-testid="view-zoom-previous"
+                    title={tip('Previous View', ['ZOOM P'])}
+                    onClick={props.onZoomPrevious}
+                  >
+                    {Icons.zoomPrevious}
+                    <span>Previous</span>
+                  </button>
+                </div>
+              </div>
+              <div className="ribbon-panel-title">Navigation</div>
+            </section>
+
+            <section className="ribbon-panel" aria-label="Viewport">
+              <div className="ribbon-panel-body">
+                <div className="ribbon-prop-stack">
+                  <label className="ribbon-prop-label" title="View orientation (2D)">
+                    <span>Orientation</span>
+                    <select
+                      className="ribbon-select"
+                      data-testid="view-orientation"
+                      value="TOP"
+                      disabled
+                      aria-label="View orientation"
+                    >
+                      <option value="TOP">Top</option>
+                    </select>
+                  </label>
+                  <label className="ribbon-prop-label" title="Visual style (2D Wireframe)">
+                    <span>Visual Style</span>
+                    <select
+                      className="ribbon-select"
+                      data-testid="view-visual-style"
+                      value="2D"
+                      disabled
+                      aria-label="Visual style"
+                    >
+                      <option value="2D">2D Wireframe</option>
+                    </select>
+                  </label>
+                </div>
+                <div className="ribbon-stack">
+                  <button
+                    type="button"
+                    className="ribbon-small"
+                    disabled
+                    title="Orbit / 3D navigation — not implemented"
+                  >
+                    Orbit
+                  </button>
+                  <button
+                    type="button"
+                    className="ribbon-small"
+                    disabled
+                    title="ViewCube — not implemented"
+                  >
+                    ViewCube
+                  </button>
+                </div>
+              </div>
+              <div className="ribbon-panel-title">Viewport</div>
+            </section>
+
+            <section className="ribbon-panel" aria-label="Display">
+              <div className="ribbon-panel-body">
+                <div className="ribbon-stack">
+                  <button
+                    type="button"
+                    className={`ribbon-small${props.gridOn ? ' active' : ''}`}
+                    data-testid="view-toggle-grid"
+                    title="Toggle Grid display (F7)"
+                    onClick={props.onToggleGrid}
+                  >
+                    Grid
+                  </button>
+                  <button
+                    type="button"
+                    className={`ribbon-small${props.snapOn ? ' active' : ''}`}
+                    data-testid="view-toggle-snap"
+                    title="Toggle Grid Snap (F3)"
+                    onClick={props.onToggleSnap}
+                  >
+                    Snap
+                  </button>
+                  <button
+                    type="button"
+                    className={`ribbon-small${props.orthoOn ? ' active' : ''}`}
+                    data-testid="view-toggle-ortho"
+                    title="Toggle Ortho (F8)"
+                    onClick={props.onToggleOrtho}
+                  >
+                    Ortho
+                  </button>
+                  <button
+                    type="button"
+                    className={`ribbon-small${props.polarOn ? ' active' : ''}`}
+                    data-testid="view-toggle-polar"
+                    title={`Toggle Polar (F10) · ${props.polarIncrement}°`}
+                    onClick={props.onTogglePolar}
+                  >
+                    Polar {props.polarIncrement}°
+                  </button>
+                </div>
+                <div className="ribbon-prop-stack ribbon-cursor-prefs">
+                  <label className="ribbon-prop-label" title="Crosshair size">
+                    <span>Crosshair</span>
+                    <select
+                      className="ribbon-select"
+                      data-testid="view-crosshair-size"
+                      aria-label="Crosshair size"
+                      value={props.crosshairSize}
+                      onChange={(e) =>
+                        props.onCrosshairSizeChange(
+                          e.target.value as CrosshairSize,
+                        )
+                      }
+                    >
+                      <option value="small">Small</option>
+                      <option value="medium">Medium</option>
+                      <option value="large">Large</option>
+                      <option value="fullscreen">Full Screen</option>
+                    </select>
+                  </label>
+                  <label className="ribbon-prop-label" title="Pickbox size">
+                    <span>Pickbox</span>
+                    <select
+                      className="ribbon-select"
+                      data-testid="view-pickbox-size"
+                      aria-label="Pickbox size"
+                      value={props.pickboxSize}
+                      onChange={(e) =>
+                        props.onPickboxSizeChange(e.target.value as PickboxSize)
+                      }
+                    >
+                      <option value="small">Small</option>
+                      <option value="medium">Medium</option>
+                      <option value="large">Large</option>
+                    </select>
+                  </label>
+                </div>
+              </div>
+              <div className="ribbon-panel-title">Display</div>
+            </section>
+
+            <section className="ribbon-panel" aria-label="Model / Layout">
+              <div className="ribbon-panel-body">
+                <button
+                  type="button"
+                  className={`ribbon-large${props.workspaceMode === 'MODEL_SPACE' ? ' active' : ''}`}
+                  data-testid="view-switch-model"
+                  title="Switch to Model Space"
+                  onClick={props.onSwitchToModel}
+                >
+                  <span>Model</span>
+                </button>
+                <div className="ribbon-prop-stack">
+                  <label className="ribbon-prop-label" title="Active layout">
+                    <span>Layout</span>
+                    <select
+                      className="ribbon-select"
+                      data-testid="view-layout-select"
+                      aria-label="Layout"
+                      value={props.activeLayoutId ?? ''}
+                      onChange={(e) => {
+                        const id = e.target.value;
+                        if (!id) props.onSwitchToModel();
+                        else props.onSwitchToLayout(id as LayoutId);
+                      }}
+                    >
+                      <option value="">Model</option>
+                      {props.layouts.map((l) => (
+                        <option key={l.id} value={l.id}>
+                          {l.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <div className="ribbon-prop-label">
+                    <span>Mode</span>
+                    <div className="ribbon-mode-readout" data-testid="view-workspace-mode">
+                      {props.workspaceMode === 'MODEL_SPACE'
+                        ? 'Model Space'
+                        : props.workspaceMode === 'PAPER_SPACE'
+                          ? 'Paper Space'
+                          : 'Viewport Model'}
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div className="ribbon-panel-title">Model / Layout</div>
+            </section>
+
+            <section className="ribbon-panel" aria-label="Select Mode">
+              <div className="ribbon-panel-body">
+                <button
+                  type="button"
+                  className={`ribbon-large${isActive('select') ? ' active' : ''}`}
+                  data-testid="view-tool-select"
+                  title={tip('Selection Mode', ['ESC'])}
+                  onClick={() => props.onActivateTool('select')}
+                >
+                  {Icons.select}
+                  <span>Select</span>
+                </button>
+              </div>
+              <div className="ribbon-panel-title">Select Mode</div>
+            </section>
+          </RibbonBodyShell>
+        ) : null}
+
+        {tab === 'manage' ? (
+          <RibbonBodyShell testId="manage-ribbon">
+            <section className="ribbon-panel" aria-label="Drawing Settings">
+              <div className="ribbon-panel-body">
+                <button
+                  type="button"
+                  className="ribbon-large"
+                  data-testid="manage-units"
+                  title={tip('Drawing Units', ['UNITS'])}
+                  onClick={props.onOpenUnits}
+                >
+                  <span>Units</span>
+                </button>
+                <div className="ribbon-stack">
+                  <button
+                    type="button"
+                    className="ribbon-small"
+                    data-testid="manage-dimstyle"
+                    title={tip('Dimension Style', ['DIMSTYLE'])}
+                    onClick={props.onOpenDimStyle}
+                  >
+                    Dim Style…
+                  </button>
+                  <button
+                    type="button"
+                    className="ribbon-small"
+                    title="Open Properties panel"
+                    onClick={props.onScrollToProperties}
+                  >
+                    Properties…
+                  </button>
+                </div>
+              </div>
+              <div className="ribbon-panel-title">Drawing Settings</div>
+            </section>
+
+            <section className="ribbon-panel" aria-label="Layers">
+              <div className="ribbon-panel-body">
+                <button
+                  type="button"
+                  className="ribbon-large"
+                  data-testid="manage-layer-props"
+                  title="Layer Properties — open layers list"
+                  onClick={props.onScrollToLayers}
+                >
+                  {Icons.layers}
+                  <span>Layer Props</span>
+                </button>
+                <div className="ribbon-layer-main">
+                  <div className="ribbon-layer-row">
+                    <label className="sr-only" htmlFor={manageLayerSelectId}>
+                      Current layer
+                    </label>
+                    <span
+                      className="ribbon-swatch"
+                      style={{ background: currentLayer?.color ?? '#ccc' }}
+                    />
+                    <select
+                      id={manageLayerSelectId}
+                      className="ribbon-select"
+                      data-testid="manage-layer-select"
+                      value={props.currentLayerId}
+                      onChange={(e) => props.onSetCurrentLayer(e.target.value)}
+                    >
+                      {props.layers.map((l) => (
+                        <option key={l.id} value={l.id}>
+                          {l.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="ribbon-layer-actions">
+                    <button
+                      type="button"
+                      className="ribbon-icon-btn"
+                      title="Toggle current layer visibility"
+                      disabled={!currentLayer}
+                      onClick={() =>
+                        currentLayer && props.onToggleLayerVisible(currentLayer)
+                      }
+                    >
+                      {currentLayer?.visible === false ? 'Show' : 'Hide'}
+                    </button>
+                    <button
+                      type="button"
+                      className="ribbon-icon-btn"
+                      title="Toggle current layer lock"
+                      disabled={!currentLayer}
+                      onClick={() =>
+                        currentLayer && props.onToggleLayerLocked(currentLayer)
+                      }
+                    >
+                      {currentLayer?.locked ? 'Unlock' : 'Lock'}
+                    </button>
+                    <button
+                      type="button"
+                      className="ribbon-icon-btn"
+                      title="Add layer"
+                      onClick={props.onAddLayer}
+                    >
+                      +
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <div className="ribbon-panel-title">Layers</div>
+            </section>
+
+            <section className="ribbon-panel" aria-label="Drawing Utilities">
+              <div className="ribbon-panel-body">
+                <button
+                  type="button"
+                  className={`ribbon-large${isActive('area') ? ' active' : ''}`}
+                  data-testid="manage-area"
+                  title={tip('Area', ['AREA'])}
+                  onClick={() => props.onActivateAreaMode('object')}
+                >
+                  <span>Area</span>
+                </button>
+                <div className="ribbon-stack">
+                  <button
+                    type="button"
+                    className="ribbon-small"
+                    data-testid="manage-distance"
+                    title={tip('Distance', ['DIST', 'DI'])}
+                    onClick={() => props.onRunCommand('DIST')}
+                  >
+                    Distance
+                  </button>
+                  <button
+                    type="button"
+                    className="ribbon-small"
+                    disabled
+                    title="Drawing audit — not yet implemented"
+                  >
+                    Audit
+                  </button>
+                </div>
+              </div>
+              <div className="ribbon-panel-title">Drawing Utilities</div>
+            </section>
+
+            <section className="ribbon-panel" aria-label="Document Management">
+              <div className="ribbon-panel-body">
+                <button
+                  type="button"
+                  className="ribbon-large"
+                  data-testid="manage-new"
+                  title={tip('New', ['CTRL+N'])}
+                  onClick={props.onNew}
+                >
+                  {Icons.newDoc}
+                  <span>New</span>
+                </button>
+                <div className="ribbon-stack">
+                  <button
+                    type="button"
+                    className="ribbon-small"
+                    data-testid="manage-open"
+                    title={tip('Open', ['CTRL+O'])}
+                    onClick={props.onOpen}
+                  >
+                    {Icons.open} Open
+                  </button>
+                  <button
+                    type="button"
+                    className="ribbon-small"
+                    data-testid="manage-save"
+                    title={tip('Save', ['CTRL+S'])}
+                    onClick={props.onSave}
+                  >
+                    {Icons.save} Save
+                  </button>
+                  <button
+                    type="button"
+                    className="ribbon-small"
+                    data-testid="manage-save-as"
+                    title={tip('Save As', ['CTRL+SHIFT+S'])}
+                    onClick={props.onSaveAs}
+                  >
+                    {Icons.saveAs} Save As
+                  </button>
+                  <button
+                    type="button"
+                    className="ribbon-small"
+                    disabled
+                    title="Multiple drawing sessions — not yet implemented (P3-B)"
+                  >
+                    Multi-Doc
+                  </button>
+                </div>
+              </div>
+              <div className="ribbon-panel-title">Document Management</div>
+            </section>
+
+            <section className="ribbon-panel" aria-label="Select Mode">
+              <div className="ribbon-panel-body">
+                <button
+                  type="button"
+                  className={`ribbon-large${isActive('select') ? ' active' : ''}`}
+                  data-testid="manage-tool-select"
+                  title={tip('Selection Mode', ['ESC'])}
+                  onClick={() => props.onActivateTool('select')}
+                >
+                  {Icons.select}
+                  <span>Select</span>
+                </button>
+              </div>
+              <div className="ribbon-panel-title">Select Mode</div>
+            </section>
+          </RibbonBodyShell>
         ) : null}
       </div>
 

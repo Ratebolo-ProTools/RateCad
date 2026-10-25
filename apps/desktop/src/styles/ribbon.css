@@ -227,6 +227,7 @@
   border: 1px solid transparent;
   border-bottom: none;
   white-space: nowrap;
+  transition: color 0.12s ease, background 0.12s ease;
 }
 
 .ribbon-tab:hover:not(:disabled) {
@@ -254,6 +255,16 @@
   align-items: stretch;
   background: var(--bg-panel);
   min-width: 0;
+  animation: ribbon-tab-in 0.14s ease;
+}
+
+@keyframes ribbon-tab-in {
+  from {
+    opacity: 0.55;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 .ribbon-body {
@@ -533,6 +544,20 @@
 .ribbon-cursor-prefs .ribbon-select {
   width: 108px;
   min-width: 108px;
+}
+
+.ribbon-mode-readout {
+  height: 22px;
+  min-width: 108px;
+  padding: 0 6px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 2px;
+  border: 1px solid var(--border);
+  background: var(--bg-panel-2);
+  color: var(--text-dim);
+  font-size: 11px;
+  white-space: nowrap;
 }
 
 .ribbon-icon-btn {
