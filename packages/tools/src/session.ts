@@ -261,4 +261,9 @@ export interface PointerInput {
   ctrlKey?: boolean;
   metaKey?: boolean;
   shiftKey?: boolean;
+  /**
+   * Selection / grip aperture in CSS pixels (Phase P2 pickbox).
+   * Defaults to 8 (medium pickbox) when omitted.
+   */
+  pickboxPx?: number;
 }

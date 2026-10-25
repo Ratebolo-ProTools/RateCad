@@ -77,3 +77,24 @@ export {
   layoutPaperBounds,
   viewportPatchFromCamera,
 } from './navigation.js';
+
+export {
+  type CrosshairSize,
+  type DraftingCursorMode,
+  type PickboxSize,
+  type ResolveDraftingCursorInput,
+  CROSSHAIR_ARM_PX,
+  DEFAULT_CROSSHAIR_SIZE,
+  DEFAULT_PICKBOX_SIZE,
+  PICKBOX_HALF_PX,
+  crosshairArmLengthPx,
+  draftingCssCursor,
+  drawDraftingCursor,
+  normalizeCrosshairSize,
+  normalizePickboxSize,
+  pickboxHalfPx,
+  pickboxToleranceWorld,
+  resolveDraftingCursorMode,
+  shouldDrawCrosshair,
+  shouldDrawPickbox,
+} from './draftingCursor.js';

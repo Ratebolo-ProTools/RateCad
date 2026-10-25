@@ -1,11 +1,40 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
-import type { DimensionKind, Layer } from '@ratecad/core';
+import {
+  ChangeEntitiesAppearanceCommand,
+  SetCurrentAppearanceCommand,
+  type CommandBus,
+} from '@ratecad/commands';
+import {
+  LINEWEIGHT_REGISTRY_MM,
+  LINETYPE_REGISTRY,
+  NAMED_COLORS,
+  parseColorInput,
+  rgbToHex,
+  type ColorProperty,
+  type DimensionKind,
+  type DrawingDocument,
+  type Entity,
+  type Layer,
+  type LinetypeProperty,
+  type LineweightProperty,
+} from '@ratecad/core';
+import {
+  canEditEntityProperties,
+  colorEqual,
+  commonValue,
+  getCurrentAppearance,
+  getStoredAppearance,
+  type AppearancePatch,
+} from '@ratecad/geometry';
 import type { AreaToolMode, ToolId } from '@ratecad/tools';
+import type { CrosshairSize, PickboxSize } from '@ratecad/viewport';
 import {
   ApplicationMenuButton,
   type RecentDrawing,
 } from './ApplicationMenu';
 import './styles/ribbon.css';
+
+const MIXED = 'Mixed';
 
 type RibbonTabId =
   | 'home'
@@ -40,6 +69,8 @@ export type RibbonProps = {
   canUndo: boolean;
   canRedo: boolean;
   selectionCount: number;
+  document: DrawingDocument;
+  commandBus: CommandBus;
   layers: Layer[];
   currentLayerId: string;
   snapOn: boolean;
@@ -47,6 +78,10 @@ export type RibbonProps = {
   polarOn: boolean;
   polarIncrement: number;
   areaMode: AreaToolMode;
+  crosshairSize: CrosshairSize;
+  pickboxSize: PickboxSize;
+  onCrosshairSizeChange: (size: CrosshairSize) => void;
+  onPickboxSizeChange: (size: PickboxSize) => void;
   onNew: () => void;
   onOpen: () => void;
   onSave: () => void;
@@ -349,6 +384,9 @@ export function Ribbon(props: RibbonProps) {
   const [dimOpen, setDimOpen] = useState(false);
   const [circleOpen, setCircleOpen] = useState(false);
   const [measureOpen, setMeasureOpen] = useState(false);
+  const [canScrollLeft, setCanScrollLeft] = useState(false);
+  const [canScrollRight, setCanScrollRight] = useState(false);
+  const ribbonBodyRef = useRef<HTMLDivElement>(null);
   const layerSelectId = useId();
   const currentLayer =
     props.layers.find((l) => l.id === props.currentLayerId) ?? props.layers[0];
@@ -357,6 +395,144 @@ export function Ribbon(props: RibbonProps) {
     if (props.activeTool !== tool) return false;
     if (tool === 'dimension' && dimKind) return props.dimKind === dimKind;
     return true;
+  };
+
+  const selectedEntities = props.document.selection
+    .map((id) => props.document.entities.find((e) => e.id === id))
+    .filter((e): e is Entity => !!e);
+  const currentAppearance = getCurrentAppearance(props.document);
+
+  const applyAppearance = (patch: AppearancePatch) => {
+    if (selectedEntities.length === 0) {
+      props.commandBus.execute(new SetCurrentAppearanceCommand(patch));
+      return;
+    }
+    const ids = selectedEntities
+      .filter((e) => canEditEntityProperties(e, props.document))
+      .map((e) => e.id);
+    if (!ids.length) return;
+    props.commandBus.execute(new ChangeEntitiesAppearanceCommand(ids, patch));
+  };
+
+  const colorCommon =
+    selectedEntities.length === 0
+      ? currentAppearance.color
+      : commonValue(
+          selectedEntities.map((e) => getStoredAppearance(e).color),
+          colorEqual,
+        );
+  const ltCommon =
+    selectedEntities.length === 0
+      ? currentAppearance.linetype
+      : commonValue(
+          selectedEntities.map((e) => getStoredAppearance(e).linetype),
+          (a, b) =>
+            a.mode === b.mode &&
+            (a.mode !== 'EXPLICIT' ||
+              b.mode !== 'EXPLICIT' ||
+              a.value === b.value),
+        );
+  const lwCommon =
+    selectedEntities.length === 0
+      ? currentAppearance.lineweight
+      : commonValue(
+          selectedEntities.map((e) => getStoredAppearance(e).lineweight),
+          (a, b) =>
+            a.mode === b.mode &&
+            (a.mode !== 'EXPLICIT' ||
+              b.mode !== 'EXPLICIT' ||
+              a.value === b.value),
+        );
+
+  const colorSelectValue = (() => {
+    if (colorCommon === null) return MIXED;
+    if (!colorCommon || colorCommon.mode === 'BY_LAYER') return 'BY_LAYER';
+    if (colorCommon.mode === 'EXPLICIT') {
+      const hex = rgbToHex(colorCommon.value).toUpperCase();
+      return (
+        Object.entries(NAMED_COLORS).find(
+          ([, rgb]) => rgbToHex(rgb).toUpperCase() === hex,
+        )?.[0] ?? 'CUSTOM'
+      );
+    }
+    return 'BY_LAYER';
+  })();
+
+  const ltSelectValue = (() => {
+    if (ltCommon === null) return MIXED;
+    if (ltCommon?.mode === 'EXPLICIT') return ltCommon.value;
+    return 'BY_LAYER';
+  })();
+
+  const lwSelectValue = (() => {
+    if (lwCommon === null) return MIXED;
+    if (lwCommon?.mode === 'EXPLICIT') return String(lwCommon.value);
+    return 'BY_LAYER';
+  })();
+
+  const onRibbonColor = (raw: string) => {
+    if (raw === MIXED) return;
+    let color: ColorProperty;
+    if (raw === 'BY_LAYER') color = { mode: 'BY_LAYER' };
+    else if (NAMED_COLORS[raw]) {
+      color = { mode: 'EXPLICIT', value: { ...NAMED_COLORS[raw]! } };
+    } else if (raw === 'CUSTOM') {
+      const hex = window.prompt('True Color (#RRGGBB or rgb)', '#FF0000');
+      if (!hex) return;
+      const parsed = parseColorInput(hex);
+      if (!parsed || parsed.mode !== 'EXPLICIT') return;
+      color = parsed;
+    } else {
+      const parsed = parseColorInput(raw);
+      if (!parsed) return;
+      color = parsed;
+    }
+    applyAppearance({ color });
+  };
+
+  const onRibbonLinetype = (raw: string) => {
+    if (raw === MIXED) return;
+    const linetype: LinetypeProperty =
+      raw === 'BY_LAYER'
+        ? { mode: 'BY_LAYER' }
+        : { mode: 'EXPLICIT', value: raw };
+    applyAppearance({ linetype });
+  };
+
+  const onRibbonLineweight = (raw: string) => {
+    if (raw === MIXED) return;
+    const lineweight: LineweightProperty =
+      raw === 'BY_LAYER'
+        ? { mode: 'BY_LAYER' }
+        : { mode: 'EXPLICIT', value: Number(raw) };
+    applyAppearance({ lineweight });
+  };
+
+  const updateRibbonScroll = () => {
+    const el = ribbonBodyRef.current;
+    if (!el) return;
+    setCanScrollLeft(el.scrollLeft > 2);
+    setCanScrollRight(el.scrollLeft + el.clientWidth < el.scrollWidth - 2);
+  };
+
+  useEffect(() => {
+    const el = ribbonBodyRef.current;
+    if (!el) return;
+    updateRibbonScroll();
+    const onScroll = () => updateRibbonScroll();
+    el.addEventListener('scroll', onScroll, { passive: true });
+    const ro = new ResizeObserver(() => updateRibbonScroll());
+    ro.observe(el);
+    return () => {
+      el.removeEventListener('scroll', onScroll);
+      ro.disconnect();
+    };
+  }, [tab]);
+
+  const scrollRibbon = (dir: -1 | 1) => {
+    const el = ribbonBodyRef.current;
+    if (!el) return;
+    el.scrollBy({ left: dir * Math.max(160, el.clientWidth * 0.45), behavior: 'smooth' });
   };
 
   return (
@@ -457,7 +633,22 @@ export function Ribbon(props: RibbonProps) {
         </div>
 
         {tab === 'home' ? (
-          <div className="ribbon-body" data-testid="home-ribbon">
+          <div className="ribbon-body-wrap" data-testid="home-ribbon-wrap">
+            <button
+              type="button"
+              className={`ribbon-scroll-btn left${canScrollLeft ? '' : ' hidden'}`}
+              data-testid="ribbon-scroll-left"
+              aria-label="Scroll ribbon left"
+              title="Scroll left"
+              onClick={() => scrollRibbon(-1)}
+            >
+              ‹
+            </button>
+            <div
+              className="ribbon-body"
+              data-testid="home-ribbon"
+              ref={ribbonBodyRef}
+            >
             {/* DRAW — large Line/PLine/Circle/Arc; small Rect/Polygon/Hatch */}
             <section className="ribbon-panel" aria-label="Draw">
               <div className="ribbon-panel-body">
@@ -930,31 +1121,68 @@ export function Ribbon(props: RibbonProps) {
                   {Icons.match}
                   <span>Match Prop</span>
                 </button>
-                <div className="ribbon-prop-stack">
-                  <button
-                    type="button"
-                    className="ribbon-small"
-                    title="Color — edit in Properties panel"
-                    onClick={props.onScrollToProperties}
-                  >
-                    Color…
-                  </button>
-                  <button
-                    type="button"
-                    className="ribbon-small"
-                    title="Lineweight — edit in Properties panel"
-                    onClick={props.onScrollToProperties}
-                  >
-                    Lineweight…
-                  </button>
-                  <button
-                    type="button"
-                    className="ribbon-small"
-                    title="Linetype — edit in Properties panel"
-                    onClick={props.onScrollToProperties}
-                  >
-                    Linetype…
-                  </button>
+                <div className="ribbon-prop-stack" data-testid="ribbon-properties">
+                  <label className="ribbon-prop-label" title="Color">
+                    <span>Color</span>
+                    <select
+                      className="ribbon-select"
+                      data-testid="ribbon-color"
+                      aria-label="Color"
+                      value={colorSelectValue}
+                      onChange={(e) => onRibbonColor(e.target.value)}
+                    >
+                      {colorCommon === null ? (
+                        <option value={MIXED}>{MIXED}</option>
+                      ) : null}
+                      <option value="BY_LAYER">ByLayer</option>
+                      {Object.keys(NAMED_COLORS).map((name) => (
+                        <option key={name} value={name}>
+                          {name}
+                        </option>
+                      ))}
+                      <option value="CUSTOM">True Color…</option>
+                    </select>
+                  </label>
+                  <label className="ribbon-prop-label" title="Linetype">
+                    <span>Linetype</span>
+                    <select
+                      className="ribbon-select"
+                      data-testid="ribbon-linetype"
+                      aria-label="Linetype"
+                      value={ltSelectValue}
+                      onChange={(e) => onRibbonLinetype(e.target.value)}
+                    >
+                      {ltCommon === null ? (
+                        <option value={MIXED}>{MIXED}</option>
+                      ) : null}
+                      <option value="BY_LAYER">ByLayer</option>
+                      {LINETYPE_REGISTRY.map((lt) => (
+                        <option key={lt.id} value={lt.id}>
+                          {lt.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="ribbon-prop-label" title="Lineweight">
+                    <span>Lineweight</span>
+                    <select
+                      className="ribbon-select"
+                      data-testid="ribbon-lineweight"
+                      aria-label="Lineweight"
+                      value={lwSelectValue}
+                      onChange={(e) => onRibbonLineweight(e.target.value)}
+                    >
+                      {lwCommon === null ? (
+                        <option value={MIXED}>{MIXED}</option>
+                      ) : null}
+                      <option value="BY_LAYER">ByLayer</option>
+                      {LINEWEIGHT_REGISTRY_MM.map((mm) => (
+                        <option key={mm} value={String(mm)}>
+                          {mm === 0 ? '0.00 mm (Default)' : `${mm.toFixed(2)} mm`}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
                 </div>
               </div>
               <div className="ribbon-panel-title">Properties</div>
@@ -1130,6 +1358,43 @@ export function Ribbon(props: RibbonProps) {
                     Polar {props.polarIncrement}°
                   </button>
                 </div>
+                <div className="ribbon-prop-stack ribbon-cursor-prefs">
+                  <label className="ribbon-prop-label" title="Crosshair size (user preference)">
+                    <span>Crosshair</span>
+                    <select
+                      className="ribbon-select"
+                      data-testid="ribbon-crosshair-size"
+                      aria-label="Crosshair size"
+                      value={props.crosshairSize}
+                      onChange={(e) =>
+                        props.onCrosshairSizeChange(
+                          e.target.value as CrosshairSize,
+                        )
+                      }
+                    >
+                      <option value="small">Small</option>
+                      <option value="medium">Medium</option>
+                      <option value="large">Large</option>
+                      <option value="fullscreen">Full Screen</option>
+                    </select>
+                  </label>
+                  <label className="ribbon-prop-label" title="Pickbox size (selection aperture)">
+                    <span>Pickbox</span>
+                    <select
+                      className="ribbon-select"
+                      data-testid="ribbon-pickbox-size"
+                      aria-label="Pickbox size"
+                      value={props.pickboxSize}
+                      onChange={(e) =>
+                        props.onPickboxSizeChange(e.target.value as PickboxSize)
+                      }
+                    >
+                      <option value="small">Small</option>
+                      <option value="medium">Medium</option>
+                      <option value="large">Large</option>
+                    </select>
+                  </label>
+                </div>
               </div>
               <div className="ribbon-panel-title">View</div>
             </section>
@@ -1188,6 +1453,17 @@ export function Ribbon(props: RibbonProps) {
               </div>
               <div className="ribbon-panel-title">Select Mode</div>
             </section>
+            </div>
+            <button
+              type="button"
+              className={`ribbon-scroll-btn right${canScrollRight ? '' : ' hidden'}`}
+              data-testid="ribbon-scroll-right"
+              aria-label="Scroll ribbon right"
+              title="Scroll right"
+              onClick={() => scrollRibbon(1)}
+            >
+              ›
+            </button>
           </div>
         ) : null}
       </div>

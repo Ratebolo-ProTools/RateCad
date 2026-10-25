@@ -248,6 +248,14 @@
   cursor: default;
 }
 
+.ribbon-body-wrap {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  background: var(--bg-panel);
+  min-width: 0;
+}
+
 .ribbon-body {
   display: flex;
   align-items: stretch;
@@ -257,6 +265,41 @@
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: thin;
+  flex: 1 1 auto;
+  min-width: 0;
+  scroll-behavior: smooth;
+}
+
+.ribbon-scroll-btn {
+  flex: 0 0 22px;
+  width: 22px;
+  border: none;
+  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  background: linear-gradient(180deg, #2a3340 0%, #1a212b 100%);
+  color: var(--text);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  z-index: 2;
+}
+
+.ribbon-scroll-btn:hover {
+  background: var(--accent-soft);
+  color: #d7e8ff;
+}
+
+.ribbon-scroll-btn.hidden {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.ribbon-scroll-btn.left {
+  border-left: none;
+}
+
+.ribbon-scroll-btn.right {
+  border-right: none;
 }
 
 .ribbon-panel {
@@ -463,6 +506,33 @@
 .ribbon-prop-stack .ribbon-select {
   width: 118px;
   min-width: 118px;
+}
+
+.ribbon-prop-label {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  min-width: 0;
+}
+
+.ribbon-prop-label > span {
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+.ribbon-cursor-prefs {
+  min-width: 108px;
+  padding-left: 4px;
+  border-left: 1px solid var(--border);
+}
+
+.ribbon-cursor-prefs .ribbon-select {
+  width: 108px;
+  min-width: 108px;
 }
 
 .ribbon-icon-btn {

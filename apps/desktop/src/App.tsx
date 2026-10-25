@@ -149,6 +149,7 @@ import {
   clampCameraZoom,
   createCamera,
   documentVisibleBounds,
+  draftingCssCursor,
   fitCameraToBounds,
   fitPaperCameraToBounds,
   fitPaperInCanvas,
@@ -159,18 +160,26 @@ import {
   panCamera,
   panViewportModel,
   paperViewForLayout,
+  pickboxHalfPx,
+  pickboxToleranceWorld,
   renderDocument,
+  resolveDraftingCursorMode,
   screenToPaper,
   screenToWorld,
   screenToleranceToWorld,
+  shouldDrawCrosshair,
+  shouldDrawPickbox,
   viewportPatchFromCamera,
   ViewHistory,
   zoomAtScreenPoint,
   zoomViewportScale,
   type Camera,
+  type CrosshairSize,
+  type PickboxSize,
   type ViewSnapshot,
   type ViewportGripRole,
 } from '@ratecad/viewport';
+import { loadDraftingPrefs, updateDraftingPrefs } from './draftingPrefs';
 import { ViewportOverlays } from './ViewportOverlays';
 import './styles/app.css';
 
@@ -601,6 +610,15 @@ export function App() {
   const [vpDragTick, setVpDragTick] = useState(0);
   const bumpVpDrag = useCallback(() => setVpDragTick((n) => n + 1), []);
   const [cursorWorld, setCursorWorld] = useState({ x: 0, y: 0 });
+  const [cursorScreen, setCursorScreen] = useState<{ x: number; y: number } | null>(
+    null,
+  );
+  const [pointerOverCanvas, setPointerOverCanvas] = useState(false);
+  const [draftingPrefs, setDraftingPrefs] = useState(() => loadDraftingPrefs());
+  const pickboxPxRef = useRef(pickboxHalfPx(draftingPrefs.pickboxSize));
+  useEffect(() => {
+    pickboxPxRef.current = pickboxHalfPx(draftingPrefs.pickboxSize);
+  }, [draftingPrefs.pickboxSize]);
   const [size, setSize] = useState({ width: 800, height: 600 });
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
@@ -1021,6 +1039,37 @@ export function App() {
         ? engUi.hideEntityIds
         : sess.hideEntityIds,
       cursorWorld,
+      cursorScreen,
+      showDraftingCursor:
+        pointerOverCanvas &&
+        shouldDrawCrosshair(
+          resolveDraftingCursorMode({
+            activeTool: sess.activeTool,
+            sessionMode: sess.mode,
+            spacePan: spaceDownRef.current,
+            isPanning: isPanningRef.current,
+            pointerOverCanvas,
+            engineCommandName: engUi?.commandName,
+            enginePrompt: engUi?.prompt,
+            textDialogOpen: sess.mode === 'text-input',
+          }),
+        ),
+      showPickbox:
+        pointerOverCanvas &&
+        shouldDrawPickbox(
+          resolveDraftingCursorMode({
+            activeTool: sess.activeTool,
+            sessionMode: sess.mode,
+            spacePan: spaceDownRef.current,
+            isPanning: isPanningRef.current,
+            pointerOverCanvas,
+            engineCommandName: engUi?.commandName,
+            enginePrompt: engUi?.prompt,
+            textDialogOpen: sess.mode === 'text-input',
+          }),
+        ),
+      crosshairSize: draftingPrefs.crosshairSize,
+      pickboxSize: draftingPrefs.pickboxSize,
       snap: inPaper ? null : sess.lastSnap,
       hoveredEntityId: hoveredId,
       paperSpaceLayout: inPaper ? activeLayout : null,
@@ -1037,6 +1086,10 @@ export function App() {
     camera,
     size,
     cursorWorld,
+    cursorScreen,
+    pointerOverCanvas,
+    draftingPrefs.crosshairSize,
+    draftingPrefs.pickboxSize,
     engineUi,
     hoveredId,
     workspaceMode,
@@ -2729,6 +2782,7 @@ export function App() {
         ctrlKey: event.ctrlKey,
         metaKey: event.metaKey,
         shiftKey: event.shiftKey,
+        pickboxPx: pickboxPxRef.current,
       });
       if (next.mode === 'grip' || next.mode === 'window') {
         canvas.setPointerCapture(event.pointerId);
@@ -2756,6 +2810,7 @@ export function App() {
       ctrlKey: event.ctrlKey,
       metaKey: event.metaKey,
       shiftKey: event.shiftKey,
+      pickboxPx: pickboxPxRef.current,
     });
     if (next.mode === 'grip' || next.mode === 'window') {
       canvas.setPointerCapture(event.pointerId);
@@ -2781,6 +2836,10 @@ export function App() {
   };
 
   const onPointerMove = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    const screenPos = getScreenFromEvent(event);
+    setCursorScreen(screenPos);
+    if (!pointerOverCanvas) setPointerOverCanvas(true);
+
     // Paper-space viewport drag preview
     if (
       workspaceModeRef.current === 'PAPER_SPACE' &&
@@ -2849,6 +2908,7 @@ export function App() {
         ctrlKey: event.ctrlKey,
         metaKey: event.metaKey,
         shiftKey: event.shiftKey,
+        pickboxPx: pickboxPxRef.current,
       });
       if (next !== sessionRef.current) {
         syncSession({ ...next, activeTool: tool as ToolId });
@@ -2867,9 +2927,12 @@ export function App() {
       return;
     }
 
-    // Hover / preselection when idle pointer (select) mode
+    // Hover / preselection when idle pointer (select) mode — pickbox aperture
     if (sessionRef.current.activeTool === 'select' && sessionRef.current.mode === 'idle') {
-      const tol = screenToleranceToWorld(getActiveInteractionCamera(), 8);
+      const tol = pickboxToleranceWorld(
+        getActiveInteractionCamera(),
+        draftingPrefs.pickboxSize,
+      );
       const sm = selectionManagerRef.current;
       const id = sm
         ? sm.updateHover(world, tol)
@@ -2890,6 +2953,7 @@ export function App() {
       ctrlKey: event.ctrlKey,
       metaKey: event.metaKey,
       shiftKey: event.shiftKey,
+      pickboxPx: pickboxPxRef.current,
     });
     if (next !== sessionRef.current) {
       syncSession(next);
@@ -2966,6 +3030,7 @@ export function App() {
         ctrlKey: event.ctrlKey,
         metaKey: event.metaKey,
         shiftKey: event.shiftKey,
+        pickboxPx: pickboxPxRef.current,
       });
       syncSession({ ...next, activeTool: tool as ToolId });
       refreshEngineUi();
@@ -2977,6 +3042,7 @@ export function App() {
       ctrlKey: event.ctrlKey,
       metaKey: event.metaKey,
       shiftKey: event.shiftKey,
+      pickboxPx: pickboxPxRef.current,
     });
     if (next !== sessionRef.current) {
       syncSession(next);
@@ -3070,12 +3136,32 @@ export function App() {
   const currentLayer = getLayer(doc, doc.currentLayerId) ?? doc.layers[0];
   const showTextDialog = session.mode === 'text-input';
 
+  const draftingCursorMode = resolveDraftingCursorMode({
+    activeTool: session.activeTool,
+    sessionMode: session.mode,
+    spacePan: spaceDownRef.current,
+    isPanning: isPanningRef.current,
+    pointerOverCanvas,
+    engineCommandName: engineUi?.commandName,
+    enginePrompt: engineUi?.prompt,
+    textDialogOpen: showTextDialog,
+  });
   const canvasClass = [
     'viewport-canvas',
-    session.activeTool === 'pan' || spaceDownRef.current ? 'pan-ready' : '',
+    draftingCursorMode === 'pan' ? 'pan-ready' : '',
+    isPanningRef.current ? 'panning' : '',
+    draftingCursorMode === 'select' ||
+    draftingCursorMode === 'draw' ||
+    draftingCursorMode === 'modify' ||
+    draftingCursorMode === 'zoom-window'
+      ? 'drafting-cursor'
+      : '',
   ]
     .filter(Boolean)
     .join(' ');
+  const canvasStyle = {
+    cursor: draftingCssCursor(draftingCursorMode),
+  } as const;
 
   return (
     <div className="app-shell">
@@ -3222,6 +3308,8 @@ export function App() {
         canUndo={canUndo}
         canRedo={canRedo}
         selectionCount={doc.selection.length}
+        document={doc}
+        commandBus={busRef.current}
         layers={doc.layers}
         currentLayerId={doc.currentLayerId}
         snapOn={doc.settings.snapToGrid}
@@ -3229,6 +3317,14 @@ export function App() {
         polarOn={polarOn}
         polarIncrement={polarIncrement}
         areaMode={session.areaMode}
+        crosshairSize={draftingPrefs.crosshairSize}
+        pickboxSize={draftingPrefs.pickboxSize}
+        onCrosshairSizeChange={(size: CrosshairSize) => {
+          setDraftingPrefs(updateDraftingPrefs({ crosshairSize: size }));
+        }}
+        onPickboxSizeChange={(size: PickboxSize) => {
+          setDraftingPrefs(updateDraftingPrefs({ pickboxSize: size }));
+        }}
         onNew={() => void newDrawing()}
         onOpen={() => void openDrawing()}
         onSave={() => void saveDrawing(false)}
@@ -3316,11 +3412,26 @@ export function App() {
           <canvas
             ref={canvasRef}
             data-cad-canvas="1"
+            data-testid="drafting-canvas"
             className={canvasClass}
+            style={canvasStyle}
             onPointerDown={onPointerDown}
             onPointerMove={onPointerMove}
             onPointerUp={onPointerUp}
             onPointerCancel={onPointerUp}
+            onPointerEnter={(e) => {
+              setPointerOverCanvas(true);
+              setCursorScreen(getScreenFromEvent(e));
+            }}
+            onPointerLeave={() => {
+              setPointerOverCanvas(false);
+              setCursorScreen(null);
+              if (hoveredIdRef.current) {
+                hoveredIdRef.current = null;
+                setHoveredId(null);
+                selectionManagerRef.current?.setHovered(null);
+              }
+            }}
             onWheel={onWheel}
             onContextMenu={(e) => e.preventDefault()}
             onDoubleClick={(e) => {

@@ -43,6 +43,11 @@ import {
   screenToWorld,
   worldToScreen,
 } from './camera.js';
+import {
+  drawDraftingCursor,
+  type CrosshairSize,
+  type PickboxSize,
+} from './draftingCursor.js';
 import { getEntityGrips, getSelectionGrips, type Grip } from './grips.js';
 import {
   cameraForViewport,
@@ -88,6 +93,16 @@ export interface RenderOptions {
   /** Transient selection window (world coords). */
   selectionRect?: { a: Vec2; b: Vec2 } | null;
   cursorWorld?: Vec2 | null;
+  /**
+   * Screen-space drafting cursor (CSS pixels, canvas-local).
+   * Preferred for crosshair/pickbox so Model / Paper / Viewport stay accurate.
+   */
+  cursorScreen?: Vec2 | null;
+  /** When false, skip drawn crosshair/pickbox (pan / pointer left canvas). */
+  showDraftingCursor?: boolean;
+  showPickbox?: boolean;
+  crosshairSize?: CrosshairSize;
+  pickboxSize?: PickboxSize;
   snap?: SnapResult | null;
   grips?: Grip[];
   /** Hide selected originals while showing previewEntities (move). */
@@ -1180,6 +1195,26 @@ export function renderPaperSpace(
     selectedIds: new Set(options.selectedPaperEntityIds ?? []),
     hoveredId: options.hoveredEntityId ?? null,
   });
+
+  paintDraftingCursor(ctx, options);
+}
+
+function paintDraftingCursor(
+  ctx: CanvasRenderingContext2D,
+  options: RenderOptions,
+): void {
+  if (options.showDraftingCursor === false) return;
+  const screen = options.cursorScreen;
+  if (!screen) return;
+  drawDraftingCursor(ctx, {
+    cursorScreen: screen,
+    canvasWidth: options.width,
+    canvasHeight: options.height,
+    crosshairSize: options.crosshairSize,
+    pickboxSize: options.pickboxSize,
+    showCrosshair: true,
+    showPickbox: options.showPickbox === true,
+  });
 }
 
 /**
@@ -1258,4 +1293,6 @@ export function renderDocument(
   if (options.snap) {
     drawSnapIndicator(ctx, options.snap, camera, width, height, theme);
   }
+
+  paintDraftingCursor(ctx, options);
 }

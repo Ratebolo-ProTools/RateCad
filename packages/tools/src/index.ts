@@ -210,6 +210,12 @@ function snapPoint(
   });
 }
 
+/** Selection aperture in CSS pixels — Phase P2 pickbox (default medium = 8). */
+function pickboxPixels(input: PointerInput): number {
+  const px = input.pickboxPx;
+  return typeof px === 'number' && Number.isFinite(px) && px > 0 ? px : 8;
+}
+
 function selectedOrMessage(bus: CommandBus): Entity[] {
   return getSelectedEntities(bus.getDocument());
 }
@@ -241,7 +247,7 @@ export function handleToolPointerDown(
     const selected = selectedOrMessage(bus);
     if (selected.length > 0 && !multi) {
       const grips = getSelectionGrips(selected, bus.getDocument().entities);
-      const gripTol = screenToleranceToWorld(input.camera, 8);
+      const gripTol = screenToleranceToWorld(input.camera, pickboxPixels(input));
       const grip = hitTestGrip(grips, point, gripTol);
       if (grip) {
         const entity = getEntity(bus.getDocument(), grip.entityId);
@@ -268,7 +274,7 @@ export function handleToolPointerDown(
       }
     }
 
-    const tol = screenToleranceToWorld(input.camera, 8);
+    const tol = screenToleranceToWorld(input.camera, pickboxPixels(input));
     const id = hitTestDocument(bus.getDocument(), point, tol);
     if (id) {
       if (multi) {
@@ -350,7 +356,7 @@ export function handleToolPointerDown(
   if (session.activeTool === 'move') {
     const selected = modifiableSelected(bus);
     if (selected.length === 0) {
-      const tol = screenToleranceToWorld(input.camera, 8);
+      const tol = screenToleranceToWorld(input.camera, pickboxPixels(input));
       const id = hitTestDocument(bus.getDocument(), point, tol);
       if (id) {
         const ent = getEntity(bus.getDocument(), id);
@@ -423,7 +429,7 @@ export function handleToolPointerDown(
     const toCopy =
       selected.length > 0 ? selected : selectedOrMessage(bus);
     if (toCopy.length === 0) {
-      const tol = screenToleranceToWorld(input.camera, 8);
+      const tol = screenToleranceToWorld(input.camera, pickboxPixels(input));
       const id = hitTestDocument(bus.getDocument(), point, tol);
       if (id) {
         bus.updateWithoutHistory((doc) => setSelection(doc, [id]));

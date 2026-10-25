@@ -212,6 +212,10 @@
   cursor: crosshair;
 }
 
+.viewport-canvas.drafting-cursor {
+  cursor: none;
+}
+
 .viewport-canvas.panning {
   cursor: grabbing;
 }
