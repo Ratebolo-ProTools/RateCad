@@ -25,6 +25,11 @@ import {
   distCommand,
   unitsCommand,
 } from './commands/unitsDimStyle.js';
+import {
+  panCommand,
+  zoomCommand,
+  zoomExtentsCommand,
+} from './commands/zoom.js';
 import type { CadCommandCategory, CadEngineCommand } from './types.js';
 
 /** Tool-bridge stubs for remaining aliases (activate existing tool path). */
@@ -90,6 +95,9 @@ export function createDefaultEngineRegistry(): CadEngineRegistry {
     dashUnitsCommand,
     dimstyleCommand,
     distCommand,
+    zoomCommand,
+    zoomExtentsCommand,
+    panCommand,
     toolBridge('polyline', 'POLYLINE', ['PL', 'PLINE'], 'polyline', 'Draw a polyline', {
       category: 'Draw',
       keywords: ['polyline', 'pline', 'path', 'arc'],

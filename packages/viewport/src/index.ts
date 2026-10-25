@@ -62,3 +62,18 @@ export {
   getSelectionGrips,
   hitTestGrip,
 } from './grips.js';
+
+export {
+  type ViewSnapshot,
+  ViewHistory,
+  NAV_MAX_ZOOM,
+  NAV_MIN_WINDOW,
+  NAV_MIN_ZOOM,
+  cameraForZoomWindow,
+  clampCameraZoom,
+  documentVisibleBounds,
+  fitCameraToBounds,
+  fitPaperCameraToBounds,
+  layoutPaperBounds,
+  viewportPatchFromCamera,
+} from './navigation.js';

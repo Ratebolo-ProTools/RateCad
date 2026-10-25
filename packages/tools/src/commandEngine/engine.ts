@@ -53,6 +53,17 @@ export interface EngineHost {
   openUnitsDialog?: () => void;
   /** Open Dimension Style Manager (DIMSTYLE command). */
   openDimStyleDialog?: () => void;
+  /** ZOOM Extents — fit visible geometry (Phase P1). */
+  zoomExtents?: () => { ok: boolean; message: string };
+  /** ZOOM Window — frame two corners (Phase P1). */
+  zoomWindow?: (
+    a: import('@ratecad/core').Vec2,
+    b: import('@ratecad/core').Vec2,
+  ) => { ok: boolean; message: string };
+  /** ZOOM Previous — restore last view snapshot (Phase P1). */
+  zoomPrevious?: () => { ok: boolean; message: string };
+  /** Activate pan tool (PAN command / nav bar). */
+  beginPanTool?: () => void;
 }
 
 type Running = {

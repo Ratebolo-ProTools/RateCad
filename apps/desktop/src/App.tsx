@@ -52,6 +52,7 @@ import {
   isEntityModifiable,
   replaceViewport,
   setActiveLayout,
+  sheetSizeInPageUnits,
   updateLayoutSheetMeta,
   workspaceModeLabel,
   type DimensionKind,
@@ -144,11 +145,17 @@ import {
   applyViewportGripResize,
   applyViewportMove,
   cameraForViewport,
+  cameraForZoomWindow,
+  clampCameraZoom,
   createCamera,
+  documentVisibleBounds,
+  fitCameraToBounds,
+  fitPaperCameraToBounds,
   fitPaperInCanvas,
   getViewportGrips,
   hitTestPaperSpaceEntities,
   hitTestViewportGrip,
+  layoutPaperBounds,
   panCamera,
   panViewportModel,
   paperViewForLayout,
@@ -156,11 +163,15 @@ import {
   screenToPaper,
   screenToWorld,
   screenToleranceToWorld,
+  viewportPatchFromCamera,
+  ViewHistory,
   zoomAtScreenPoint,
   zoomViewportScale,
   type Camera,
+  type ViewSnapshot,
   type ViewportGripRole,
 } from '@ratecad/viewport';
+import { ViewportOverlays } from './ViewportOverlays';
 import './styles/app.css';
 
 const UNIT_OPTIONS: LengthUnit[] = [...SUPPORTED_LENGTH_UNITS];
@@ -497,6 +508,28 @@ export function App() {
   const cameraRef = useRef<Camera>(createCamera());
   /** Preserved Model Space camera when switching to a layout tab. */
   const modelCameraRef = useRef<Camera>(createCamera());
+  const viewHistoryRef = useRef(new ViewHistory(32));
+  const wheelHistoryArmedRef = useRef(true);
+  const panHistoryPushedRef = useRef(false);
+  const sizeRef = useRef({ width: 800, height: 600 });
+  const navApiRef = useRef({
+    zoomExtents: (): { ok: boolean; message: string } => ({
+      ok: false,
+      message: 'ZOOM Extents unavailable',
+    }),
+    zoomWindow: (
+      _a: { x: number; y: number },
+      _b: { x: number; y: number },
+    ): { ok: boolean; message: string } => ({
+      ok: false,
+      message: 'ZOOM Window unavailable',
+    }),
+    zoomPrevious: (): { ok: boolean; message: string } => ({
+      ok: false,
+      message: 'ZOOM Previous unavailable',
+    }),
+    beginPanTool: (): void => undefined,
+  });
   const sessionRef = useRef<ToolSession>(createToolSession('select'));
   const workspaceModeRef = useRef<WorkspaceMode>('MODEL_SPACE');
   const activeViewportIdRef = useRef<ViewportId | null>(null);
@@ -622,6 +655,267 @@ export function App() {
     setCamera(next);
   }, []);
 
+  const captureViewSnapshot = useCallback((): ViewSnapshot | null => {
+    const mode = workspaceModeRef.current;
+    const d = busRef.current.getDocument();
+    if (mode === 'MODEL_SPACE') {
+      return { kind: 'model', camera: { ...cameraRef.current } };
+    }
+    const layoutId = d.activeLayoutId;
+    if (!layoutId) return null;
+    const layout = d.layouts.find((l) => l.id === layoutId);
+    if (!layout) return null;
+    if (mode === 'PAPER_SPACE') {
+      return {
+        kind: 'paper',
+        layoutId,
+        paperCamera: {
+          ...(layout.paperCamera ?? defaultPaperCamera()),
+        },
+      };
+    }
+    const vpId = activeViewportIdRef.current;
+    if (!vpId) return null;
+    const vp = layout.viewports.find((v) => v.id === vpId);
+    if (!vp) return null;
+    return {
+      kind: 'viewport',
+      layoutId,
+      viewportId: vpId,
+      modelCenterX: vp.modelCenterX,
+      modelCenterY: vp.modelCenterY,
+      scale: vp.scale,
+    };
+  }, []);
+
+  const pushViewHistory = useCallback(() => {
+    const snap = captureViewSnapshot();
+    if (snap) viewHistoryRef.current.push(snap);
+  }, [captureViewSnapshot]);
+
+  const applyViewSnapshot = useCallback(
+    (snap: ViewSnapshot): { ok: boolean; message: string } => {
+      if (snap.kind === 'model') {
+        if (workspaceModeRef.current !== 'MODEL_SPACE') {
+          return { ok: false, message: 'Previous view is Model Space only' };
+        }
+        syncCamera(clampCameraZoom(snap.camera));
+        return { ok: true, message: 'ZOOM Previous' };
+      }
+      const d = busRef.current.getDocument();
+      if (snap.kind === 'paper') {
+        if (
+          workspaceModeRef.current !== 'PAPER_SPACE' ||
+          d.activeLayoutId !== snap.layoutId
+        ) {
+          return { ok: false, message: 'Previous view is for another layout' };
+        }
+        busRef.current.updateWithoutHistory((doc) =>
+          updateLayoutSheetMeta(doc, snap.layoutId, {
+            paperCamera: snap.paperCamera,
+          }),
+        );
+        return { ok: true, message: 'ZOOM Previous' };
+      }
+      if (
+        workspaceModeRef.current !== 'VIEWPORT_MODEL_SPACE' ||
+        d.activeLayoutId !== snap.layoutId ||
+        activeViewportIdRef.current !== snap.viewportId
+      ) {
+        return { ok: false, message: 'Previous view is for another viewport' };
+      }
+      const layout = d.layouts.find((l) => l.id === snap.layoutId);
+      const vp = layout?.viewports.find((v) => v.id === snap.viewportId);
+      if (!vp) return { ok: false, message: 'Viewport not found' };
+      if (vp.locked) {
+        return { ok: false, message: 'Viewport locked — unlock to restore view' };
+      }
+      busRef.current.updateWithoutHistory((doc) =>
+        replaceViewport(doc, snap.layoutId, {
+          ...vp,
+          modelCenterX: snap.modelCenterX,
+          modelCenterY: snap.modelCenterY,
+          scale: snap.scale,
+        }),
+      );
+      return { ok: true, message: 'ZOOM Previous' };
+    },
+    [syncCamera],
+  );
+
+  const applyModelOrViewportCamera = useCallback(
+    (next: Camera): { ok: boolean; message: string } => {
+      const cam = clampCameraZoom(next);
+      const mode = workspaceModeRef.current;
+      if (mode === 'MODEL_SPACE') {
+        pushViewHistory();
+        syncCamera(cam);
+        return { ok: true, message: 'View updated' };
+      }
+      if (mode === 'VIEWPORT_MODEL_SPACE') {
+        const d = busRef.current.getDocument();
+        const layoutId = d.activeLayoutId;
+        const vpId = activeViewportIdRef.current;
+        if (!layoutId || !vpId) {
+          return { ok: false, message: 'No active viewport' };
+        }
+        const layout = d.layouts.find((l) => l.id === layoutId);
+        const vp = layout?.viewports.find((v) => v.id === vpId);
+        if (!layout || !vp) return { ok: false, message: 'Viewport not found' };
+        if (vp.locked) {
+          return { ok: false, message: 'Viewport locked — unlock to pan/zoom' };
+        }
+        const view = fitPaperInCanvas(
+          layout.pageSettings,
+          sizeRef.current.width,
+          sizeRef.current.height,
+        );
+        const paperUnitMm = view.page.units === 'inch' ? 25.4 : 1;
+        const pxPerPaperUnit = view.pxPerMm * paperUnitMm;
+        const patch = viewportPatchFromCamera(cam, pxPerPaperUnit);
+        pushViewHistory();
+        busRef.current.updateWithoutHistory((doc) =>
+          replaceViewport(doc, layoutId, { ...vp, ...patch }),
+        );
+        return { ok: true, message: 'View updated' };
+      }
+      return { ok: false, message: 'Use Extents/Window in Model or viewport' };
+    },
+    [pushViewHistory, syncCamera],
+  );
+
+  const zoomExtents = useCallback((): { ok: boolean; message: string } => {
+    const { width, height } = sizeRef.current;
+    const mode = workspaceModeRef.current;
+    const d = busRef.current.getDocument();
+
+    if (mode === 'PAPER_SPACE') {
+      const layoutId = d.activeLayoutId;
+      if (!layoutId) return { ok: false, message: 'No active layout' };
+      const layout = d.layouts.find((l) => l.id === layoutId);
+      if (!layout) return { ok: false, message: 'Layout not found' };
+      pushViewHistory();
+      const bounds = layoutPaperBounds(layout);
+      const sheet = sheetSizeInPageUnits(layout.pageSettings);
+      const paperCamera = bounds
+        ? fitPaperCameraToBounds(
+            bounds,
+            sheet.width,
+            sheet.height,
+            width,
+            height,
+          )
+        : defaultPaperCamera();
+      busRef.current.updateWithoutHistory((doc) =>
+        updateLayoutSheetMeta(doc, layoutId, { paperCamera }),
+      );
+      return { ok: true, message: 'ZOOM Extents' };
+    }
+
+    const bounds = documentVisibleBounds(d);
+    if (!bounds) {
+      if (mode === 'MODEL_SPACE') {
+        pushViewHistory();
+        syncCamera(createCamera());
+      } else {
+        const result = applyModelOrViewportCamera(createCamera());
+        if (!result.ok) return result;
+      }
+      return { ok: true, message: 'ZOOM Extents (empty drawing)' };
+    }
+
+    let fitWidth = width;
+    let fitHeight = height;
+    if (mode === 'VIEWPORT_MODEL_SPACE') {
+      const layoutId = d.activeLayoutId;
+      const vpId = activeViewportIdRef.current;
+      const layout = d.layouts.find((l) => l.id === layoutId);
+      const vp = layout?.viewports.find((v) => v.id === vpId);
+      if (layout && vp) {
+        const view = fitPaperInCanvas(layout.pageSettings, width, height);
+        const { screenRect } = cameraForViewport(vp, view);
+        fitWidth = Math.max(1, screenRect.w);
+        fitHeight = Math.max(1, screenRect.h);
+      }
+    }
+
+    const next = fitCameraToBounds(bounds, fitWidth, fitHeight);
+    const result = applyModelOrViewportCamera(next);
+    if (!result.ok) return result;
+    return { ok: true, message: 'ZOOM Extents' };
+  }, [applyModelOrViewportCamera, pushViewHistory, syncCamera]);
+
+  const zoomWindow = useCallback(
+    (
+      a: { x: number; y: number },
+      b: { x: number; y: number },
+    ): { ok: boolean; message: string } => {
+      const { width, height } = sizeRef.current;
+      const mode = workspaceModeRef.current;
+      if (mode === 'PAPER_SPACE') {
+        // Paper zoom window: approximate via zoom factor on paper camera
+        const d = busRef.current.getDocument();
+        const layoutId = d.activeLayoutId;
+        if (!layoutId) return { ok: false, message: 'No active layout' };
+        const layout = d.layouts.find((l) => l.id === layoutId);
+        if (!layout) return { ok: false, message: 'Layout not found' };
+        const minX = Math.min(a.x, b.x);
+        const maxX = Math.max(a.x, b.x);
+        const minY = Math.min(a.y, b.y);
+        const maxY = Math.max(a.y, b.y);
+        if (maxX - minX < 1e-9 || maxY - minY < 1e-9) {
+          return { ok: false, message: 'Null view window' };
+        }
+        const sheet = sheetSizeInPageUnits(layout.pageSettings);
+        pushViewHistory();
+        const paperCamera = fitPaperCameraToBounds(
+          { minX, minY, maxX, maxY },
+          sheet.width,
+          sheet.height,
+          width,
+          height,
+        );
+        busRef.current.updateWithoutHistory((doc) =>
+          updateLayoutSheetMeta(doc, layoutId, { paperCamera }),
+        );
+        return { ok: true, message: 'ZOOM Window' };
+      }
+
+      let fitWidth = width;
+      let fitHeight = height;
+      if (mode === 'VIEWPORT_MODEL_SPACE') {
+        const d = busRef.current.getDocument();
+        const layout = d.layouts.find((l) => l.id === d.activeLayoutId);
+        const vp = layout?.viewports.find(
+          (v) => v.id === activeViewportIdRef.current,
+        );
+        if (layout && vp) {
+          const view = fitPaperInCanvas(
+            layout.pageSettings,
+            width,
+            height,
+          );
+          const { screenRect } = cameraForViewport(vp, view);
+          fitWidth = Math.max(1, screenRect.w);
+          fitHeight = Math.max(1, screenRect.h);
+        }
+      }
+
+      const next = cameraForZoomWindow(a, b, fitWidth, fitHeight);
+      if (!next) return { ok: false, message: 'Null view window' };
+      const result = applyModelOrViewportCamera(next);
+      if (!result.ok) return result;
+      return { ok: true, message: 'ZOOM Window' };
+    },
+    [applyModelOrViewportCamera, pushViewHistory],
+  );
+
+  const zoomPrevious = useCallback((): { ok: boolean; message: string } => {
+    const prev = viewHistoryRef.current.previous();
+    if (!prev) return { ok: false, message: 'No previous view' };
+    return applyViewSnapshot(prev);
+  }, [applyViewSnapshot]);
+
   const markDirty = useCallback((value: boolean) => {
     dirtyRef.current = value;
     setDirty(value);
@@ -674,10 +968,12 @@ export function App() {
       const entry = entries[0];
       if (!entry) return;
       const { width, height } = entry.contentRect;
-      setSize({
+      const nextSize = {
         width: Math.max(1, Math.floor(width)),
         height: Math.max(1, Math.floor(height)),
-      });
+      };
+      sizeRef.current = nextSize;
+      setSize(nextSize);
     });
     observer.observe(wrap);
     return () => observer.disconnect();
@@ -905,6 +1201,20 @@ export function App() {
     [syncSession],
   );
 
+  const beginPanTool = useCallback(() => {
+    activateToolOnly('pan');
+    setCommandFeedback('PAN: Drag to pan — ESC for Select');
+  }, [activateToolOnly]);
+
+  useEffect(() => {
+    navApiRef.current = {
+      zoomExtents,
+      zoomWindow,
+      zoomPrevious,
+      beginPanTool,
+    };
+  }, [beginPanTool, zoomExtents, zoomPrevious, zoomWindow]);
+
   // Create command engine once (host uses refs for live document/cursor).
   useEffect(() => {
     selectionManagerRef.current = new SelectionManager(busRef.current);
@@ -1011,6 +1321,11 @@ export function App() {
         showDimStyleDialogRef.current = true;
         setShowDimStyleDialog(true);
       },
+      zoomExtents: () => navApiRef.current.zoomExtents(),
+      zoomWindow: (a: { x: number; y: number }, b: { x: number; y: number }) =>
+        navApiRef.current.zoomWindow(a, b),
+      zoomPrevious: () => navApiRef.current.zoomPrevious(),
+      beginPanTool: () => navApiRef.current.beginPanTool(),
     };
     engineRef.current = new CadCommandEngine(
       createDefaultEngineRegistry(),
@@ -2122,6 +2437,11 @@ export function App() {
     if (!pending) return;
     pendingPanRef.current = null;
 
+    if (!panHistoryPushedRef.current) {
+      pushViewHistory();
+      panHistoryPushedRef.current = true;
+    }
+
     // VIEWPORT_MODEL_SPACE: pan the viewport camera (not model geometry).
     if (workspaceModeRef.current === 'VIEWPORT_MODEL_SPACE') {
       const d = busRef.current.getDocument();
@@ -2171,7 +2491,7 @@ export function App() {
     }
 
     syncCamera(panCamera(cameraRef.current, pending.dx, pending.dy));
-  }, [size.height, size.width, syncCamera]);
+  }, [pushViewHistory, size.height, size.width, syncCamera]);
 
   const snapWorld = useCallback(
     (world: { x: number; y: number }) => {
@@ -2239,6 +2559,7 @@ export function App() {
       }
       canvas.setPointerCapture(event.pointerId);
       isPanningRef.current = true;
+      panHistoryPushedRef.current = false;
       lastPointerRef.current = { x: event.clientX, y: event.clientY };
       return;
     }
@@ -2578,6 +2899,7 @@ export function App() {
   const onPointerUp = (event: ReactPointerEvent<HTMLCanvasElement>) => {
     const wasPanning = isPanningRef.current;
     isPanningRef.current = false;
+    panHistoryPushedRef.current = false;
     lastPointerRef.current = null;
     const canvas = canvasRef.current;
     if (canvas?.hasPointerCapture(event.pointerId)) {
@@ -2667,6 +2989,14 @@ export function App() {
     if (!canvas) return;
     const screen = getScreenFromEvent(event);
     const factor = event.deltaY < 0 ? 1.1 : 1 / 1.1;
+
+    if (wheelHistoryArmedRef.current) {
+      pushViewHistory();
+      wheelHistoryArmedRef.current = false;
+      window.setTimeout(() => {
+        wheelHistoryArmedRef.current = true;
+      }, 400);
+    }
 
     if (workspaceModeRef.current === 'PAPER_SPACE') {
       const d = busRef.current.getDocument();
@@ -3044,6 +3374,39 @@ export function App() {
                 return;
               }
               editSelectedText();
+            }}
+          />
+          <ViewportOverlays
+            panActive={session.activeTool === 'pan'}
+            zoomWindowActive={
+              engineUi?.commandName === 'ZOOM' &&
+              (engineUi.prompt.toLowerCase().includes('corner') ||
+                engineUi.prompt.toLowerCase().includes('window'))
+            }
+            onPan={() => {
+              void runEngineCommand('PAN');
+            }}
+            onZoomExtents={() => {
+              void runEngineCommand('ZE');
+            }}
+            onZoomWindow={() => {
+              const eng = engineRef.current;
+              if (!eng) return;
+              eng.start('ZOOM');
+              eng.setBuffer('W');
+              eng.confirm('enter');
+              refreshEngineUi();
+              setCommandFeedback('ZOOM: Specify first corner:');
+            }}
+            onZoomPrevious={() => {
+              const eng = engineRef.current;
+              if (!eng) return;
+              eng.start('ZOOM');
+              eng.setBuffer('P');
+              eng.confirm('enter');
+              refreshEngineUi();
+              const ui = eng.getUiState();
+              if (ui.message) setCommandFeedback(ui.message);
             }}
           />
           <div className="layout-tabs" role="tablist" aria-label="Model and layouts">
