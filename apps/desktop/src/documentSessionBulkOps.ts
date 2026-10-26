@@ -21,7 +21,7 @@ import { LAST_DRAWING_CLOSE_POLICY } from './documentSessionClose.js';
 
 export { LAST_DRAWING_CLOSE_POLICY };
 
-export type BulkOpKind = 'save-all' | 'close-all';
+export type BulkOpKind = 'save-all' | 'close-all' | 'exit';
 
 /** Stable ordered snapshot of open session IDs (tab order). */
 export function snapshotOpenSessionIds(

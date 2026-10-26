@@ -238,7 +238,8 @@ describe('P3-B3A two-session isolation', () => {
     expect(DOCUMENT_SPECIFIC_STATE).toContain('CadCommandEngine');
     expect(DOCUMENT_SPECIFIC_STATE).toContain('SelectionManager');
     expect(REMAINING_FOR_P3_B3B_UI_SWITCH).toHaveLength(0);
-    expect(REMAINING_FOR_P3_B4).toContain('applicationExitMultiDocumentPrompt');
+    expect(REMAINING_FOR_P3_B4).not.toContain('applicationExitMultiDocumentPrompt');
+    expect(REMAINING_FOR_P3_B4).toContain('closeLastDrawingWithoutReplacementPolicy');
     expect(MULTI_DOCUMENT_ACTIONS_ENABLED).toBe(true);
     expect(CLOSE_TAB_ACTIONS_ENABLED).toBe(true);
     expect(listSessions(createDocumentSessionStore())).toEqual([]);

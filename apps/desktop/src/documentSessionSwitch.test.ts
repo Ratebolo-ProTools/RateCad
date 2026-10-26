@@ -328,7 +328,8 @@ describe('P3-B3B multi-document switching', () => {
   it('feature flags: switch and individual close enabled; Close All deferred', () => {
     expect(MULTI_DOCUMENT_ACTIONS_ENABLED).toBe(true);
     expect(CLOSE_TAB_ACTIONS_ENABLED).toBe(true);
-    expect(REMAINING_FOR_P3_B4).toContain('applicationExitMultiDocumentPrompt');
+    expect(REMAINING_FOR_P3_B4).not.toContain('applicationExitMultiDocumentPrompt');
+    expect(REMAINING_FOR_P3_B4).toContain('closeLastDrawingWithoutReplacementPolicy');
   });
 
   it('bindSessionEngine after switch attaches to the new session bus only', () => {

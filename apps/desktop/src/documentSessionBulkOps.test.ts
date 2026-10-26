@@ -237,7 +237,8 @@ describe('P3-B4B2A Save All / Close All', () => {
   it('23–24: architecture lists bulk ops; exit deferred; individual close still on', () => {
     expect(P3_B4B2A_BULK_OPS).toContain('saveAllDrawings');
     expect(P3_B4B2A_BULK_OPS).toContain('closeAllDrawingsTwoStage');
-    expect(REMAINING_FOR_P3_B4).toContain('applicationExitMultiDocumentPrompt');
+    expect(REMAINING_FOR_P3_B4).not.toContain('applicationExitMultiDocumentPrompt');
+    expect(REMAINING_FOR_P3_B4).toContain('closeLastDrawingWithoutReplacementPolicy');
     expect(REMAINING_FOR_P3_B4).not.toContain('closeAllDrawings');
     expect(CLOSE_TAB_ACTIONS_ENABLED).toBe(true);
   });

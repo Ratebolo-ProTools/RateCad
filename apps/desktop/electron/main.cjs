@@ -5,6 +5,17 @@ const fs = require('node:fs/promises');
 /** @type {BrowserWindow | null} */
 let mainWindow = null;
 
+/** When true, the next close event proceeds without asking the renderer. */
+let shutdownAuthorized = false;
+
+/**
+ * In-flight exit handshake with the renderer.
+ * Missing / late / mismatched replies never authorize close.
+ * @type {{ requestId: number } | null}
+ */
+let exitHandshake = null;
+let exitRequestSeq = 0;
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1440,
@@ -35,8 +46,41 @@ function createWindow() {
     mainWindow.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
   }
 
+  mainWindow.on('close', (event) => {
+    if (shutdownAuthorized) {
+      return;
+    }
+    // Always prevent until the renderer explicitly approves.
+    event.preventDefault();
+
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      return;
+    }
+    if (exitHandshake) {
+      // Duplicate close (X / Alt+F4 / quit) while preparing — ignore.
+      return;
+    }
+    if (mainWindow.webContents.isDestroyed() || mainWindow.webContents.isCrashed()) {
+      // Renderer unavailable — do NOT treat as approval.
+      console.warn('[exit] renderer unavailable; refusing to close');
+      return;
+    }
+
+    exitRequestSeq += 1;
+    const requestId = exitRequestSeq;
+    exitHandshake = { requestId };
+    try {
+      mainWindow.webContents.send('app:prepare-exit', { requestId });
+    } catch (err) {
+      console.warn('[exit] failed to send prepare-exit', err);
+      exitHandshake = null;
+    }
+  });
+
   mainWindow.on('closed', () => {
     mainWindow = null;
+    exitHandshake = null;
+    shutdownAuthorized = false;
   });
 }
 
@@ -240,9 +284,68 @@ ipcMain.handle('fs:openRatecadPath', async (_event, filePath) => {
   }
 });
 
+/**
+ * Renderer finished exit preparation for a window-close handshake.
+ * Stale requestIds are ignored. Missing approval never closes.
+ */
+ipcMain.handle('app:exit-response', (_event, payload) => {
+  const requestId = payload?.requestId;
+  const status = payload?.status;
+  if (
+    typeof requestId !== 'number' ||
+    !exitHandshake ||
+    exitHandshake.requestId !== requestId
+  ) {
+    return { ok: false, ignored: true };
+  }
+
+  exitHandshake = null;
+
+  if (status === 'approved') {
+    shutdownAuthorized = true;
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.close();
+    }
+    return { ok: true, closed: true };
+  }
+
+  // canceled | failed | anything else → keep window open
+  shutdownAuthorized = false;
+  return { ok: true, closed: false };
+});
+
+/**
+ * Called by renderer Application Menu Exit AFTER preparation already succeeded.
+ * Does not ask the renderer again — authorizes the final close only.
+ * Uses window.close() (guarded) rather than an unguarded destroy().
+ */
 ipcMain.handle('app:quit', () => {
-  app.quit();
+  shutdownAuthorized = true;
+  exitHandshake = null;
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.close();
+  } else {
+    app.quit();
+  }
   return { ok: true };
+});
+
+/**
+ * Belt-and-suspenders: app.quit() / menu role:quit / OS quit must not
+ * terminate while unsaved drawings are unresolved. Cancel the quit wave
+ * and route through the window close handshake unless already authorized.
+ */
+app.on('before-quit', (event) => {
+  if (shutdownAuthorized) return;
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  event.preventDefault();
+  if (exitHandshake) return;
+  // Trigger the same prepare-exit path as the window X button.
+  try {
+    mainWindow.close();
+  } catch (err) {
+    console.warn('[exit] before-quit could not request window close', err);
+  }
 });
 
 app.whenReady().then(() => {
@@ -255,5 +358,9 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
+  if (process.platform !== 'darwin') {
+    // Windows already closed through the guarded path (or never created).
+    shutdownAuthorized = true;
+    app.quit();
+  }
 });

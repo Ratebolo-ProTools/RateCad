@@ -160,11 +160,19 @@ import {
   formatSaveAllProgress,
   formatSaveAllStopped,
   revalidateAllCloseAllDecisions,
-  sessionFingerprint,
   snapshotOpenSessionIds,
   type BulkOpKind,
   type CloseAllDecision,
 } from './documentSessionBulkOps';
+import {
+  BROWSER_EXIT_POLICY,
+  EXIT_SAVE_DIALOG_TITLE,
+  anySessionDirty,
+  exitSaveDialogMessage,
+  prepareDirtyLifecycleDecisions,
+  sessionsChangedSinceSnapshot,
+  type ExitStatus,
+} from './documentSessionExit';
 import { CloseSaveDialog } from './CloseSaveDialog';
 import { serializeDocument } from '@ratecad/io';
 import {
@@ -2331,9 +2339,92 @@ export function App() {
   }, [saveDrawingForSession, switchToDocumentSession]);
 
   /**
+   * Shared dirty-session Stage A used by Close All and Exit.
+   * Never disposes sessions and never creates replacement drawings.
+   */
+  const runLifecyclePrepare = useCallback(
+    async (
+      mode: 'close-all' | 'exit',
+      snapshot: string[],
+    ): Promise<
+      | { status: 'approved'; decisions: CloseAllDecision[] }
+      | { status: 'canceled' | 'failed'; reason: string }
+    > => {
+      const store = sessionStoreRef.current;
+      const platform = resolveFileOpsPlatform(window.ratecadDesktop);
+      const prepared = await prepareDirtyLifecycleDecisions({
+        store,
+        snapshot,
+        prompt: async (session, index1, total) => {
+          const title = getSessionTitle(session);
+          if (mode === 'exit') {
+            return promptCloseSave(session, {
+              dialogTitle: EXIT_SAVE_DIALOG_TITLE,
+              message: exitSaveDialogMessage(title),
+              progressLabel: formatCloseAllProgress(index1, total),
+            });
+          }
+          return promptCloseSave(session, {
+            dialogTitle: CLOSE_ALL_SAVE_DIALOG_TITLE,
+            message: closeAllSaveDialogMessage(title),
+            progressLabel: formatCloseAllProgress(index1, total),
+          });
+        },
+        save: async (sessionId, forceDialog) => {
+          setClosePromptBusy(true);
+          const outcome = await saveDrawingForSession(sessionId, forceDialog);
+          setClosePrompt(null);
+          setClosePromptBusy(false);
+          if (outcome.ok) return { ok: true };
+          return {
+            ok: false,
+            reason:
+              outcome.reason === 'canceled'
+                ? 'Save was canceled'
+                : outcome.message || 'Save failed',
+          };
+        },
+        needsForceDialog: (session) =>
+          !canQuickSaveToExistingPath(session, platform),
+      });
+
+      if (prepared.status !== 'approved') {
+        return {
+          status: prepared.status,
+          reason: prepared.reason,
+        };
+      }
+
+      if (sessionsChangedSinceSnapshot(store, snapshot)) {
+        return {
+          status: 'failed',
+          reason: 'Open drawings changed during preparation',
+        };
+      }
+
+      const recheck = revalidateAllCloseAllDecisions(
+        store,
+        prepared.decisions,
+      );
+      if (!recheck.ok) {
+        return {
+          status: 'failed',
+          reason:
+            recheck.reason === 'edited-after-dont-save'
+              ? `${recheck.title ?? 'A drawing'} changed after Don't Save`
+              : `${recheck.title ?? 'A drawing'} has unsaved changes`,
+        };
+      }
+
+      return { status: 'approved', decisions: prepared.decisions };
+    },
+    [promptCloseSave, saveDrawingForSession],
+  );
+
+  /**
    * P3-B4B2A — Close All with two-stage prepare / commit.
-   * Stage A: resolve every dirty drawing (no disposal).
-   * Stage B: revalidate, dispose all targets, replace with one untitled.
+   * Stage A: shared prepare (never dispose).
+   * Stage B: dispose all targets, replace with one untitled.
    */
   const closeAllDrawings = useCallback(async () => {
     if (bulkOpRef.current) {
@@ -2351,96 +2442,19 @@ export function App() {
 
     bulkOpRef.current = 'close-all';
     setBulkOpBusy(true);
-    const decisions: CloseAllDecision[] = [];
 
     try {
-      const platform = resolveFileOpsPlatform(window.ratecadDesktop);
-
-      // —— Stage A: prepare (never dispose) ——
-      for (let i = 0; i < snapshot.length; i += 1) {
-        const sessionId = snapshot[i]!;
-        const session = getSession(store, sessionId);
-        if (!session || session.disposed) continue;
-
-        if (!shouldPromptSaveBeforeClose(session)) {
-          decisions.push({
-            sessionId,
-            kind: 'close-clean',
-            fingerprint: sessionFingerprint(session),
-            title: getSessionTitle(session),
-          });
-          continue;
-        }
-
-        const title = getSessionTitle(session);
-        const choice = await promptCloseSave(session, {
-          dialogTitle: CLOSE_ALL_SAVE_DIALOG_TITLE,
-          message: closeAllSaveDialogMessage(title),
-          progressLabel: formatCloseAllProgress(i + 1, snapshot.length),
-        });
-
-        if (choice === 'cancel') {
-          setClosePrompt(null);
-          setClosePromptBusy(false);
-          setStatusExtra('Close All canceled');
-          return;
-        }
-
-        if (choice === 'save') {
-          setClosePromptBusy(true);
-          const forceDialog = !canQuickSaveToExistingPath(session, platform);
-          const outcome = await saveDrawingForSession(sessionId, forceDialog);
-          setClosePrompt(null);
-          setClosePromptBusy(false);
-          if (!outcome.ok) {
-            setStatusExtra(
-              outcome.reason === 'canceled'
-                ? 'Close All canceled — save was canceled'
-                : `Close All stopped — ${title} was not saved`,
-            );
-            return;
-          }
-          const after = getSession(store, sessionId);
-          if (!after || after.disposed || after.dirty) {
-            setStatusExtra(
-              `Close All stopped — latest changes to ${title} are not saved`,
-            );
-            return;
-          }
-          decisions.push({
-            sessionId,
-            kind: 'close-after-save',
-            fingerprint: sessionFingerprint(after),
-            title: getSessionTitle(after),
-          });
-          continue;
-        }
-
-        // Don't Save — record decision; dispose later in Stage B.
-        setClosePrompt(null);
-        setClosePromptBusy(false);
-        const live = getSession(store, sessionId);
-        if (!live || live.disposed) continue;
-        decisions.push({
-          sessionId,
-          kind: 'close-discard',
-          fingerprint: sessionFingerprint(live),
-          title: getSessionTitle(live),
-        });
-      }
-
-      // —— Stage B: revalidate then commit ——
-      const recheck = revalidateAllCloseAllDecisions(store, decisions);
-      if (!recheck.ok) {
+      const prepared = await runLifecyclePrepare('close-all', snapshot);
+      if (prepared.status !== 'approved') {
         setStatusExtra(
-          recheck.reason === 'edited-after-dont-save'
-            ? `Close All stopped — ${recheck.title ?? 'a drawing'} changed after Don't Save`
-            : `Close All stopped — ${recheck.title ?? 'a drawing'} has unsaved changes`,
+          prepared.status === 'canceled'
+            ? 'Close All canceled'
+            : `Close All stopped — ${prepared.reason}`,
         );
         return;
       }
 
-      const toClose = collectCloseableSessionIds(store, decisions);
+      const toClose = collectCloseableSessionIds(store, prepared.decisions);
       cancelActiveTransientWork();
       for (const id of toClose) {
         const session = getSession(store, id);
@@ -2454,9 +2468,7 @@ export function App() {
       }
       previousActiveSessionIdRef.current = null;
 
-      // Last-drawing policy exactly once after Close All.
       void LAST_DRAWING_CLOSE_POLICY;
-      // Temporarily clear bulk lock so createNewDocumentTab is allowed.
       bulkOpRef.current = null;
       createNewDocumentTab();
       setStatusExtra('Close All completed · started a new untitled drawing');
@@ -2470,9 +2482,67 @@ export function App() {
     cancelActiveTransientWork,
     createNewDocumentTab,
     prepareSessionDeactivation,
-    promptCloseSave,
-    saveDrawingForSession,
+    runLifecyclePrepare,
   ]);
+
+  /**
+   * P3-B4B2B — prepare safe application exit (no dispose, no untitled).
+   * Returns approved only after all dirty drawings are resolved and revalidated.
+   */
+  const prepareApplicationExit = useCallback(async (): Promise<ExitStatus> => {
+    if (bulkOpRef.current && bulkOpRef.current !== 'exit') {
+      setStatusExtra('Cannot exit during Save All / Close All');
+      return 'failed';
+    }
+    if (bulkOpRef.current === 'exit') {
+      return 'failed';
+    }
+    if (closePromptOpenRef.current) {
+      return 'failed';
+    }
+
+    const store = sessionStoreRef.current;
+    const snapshot = snapshotOpenSessionIds(store);
+
+    bulkOpRef.current = 'exit';
+    setBulkOpBusy(true);
+    try {
+      const prepared = await runLifecyclePrepare('exit', snapshot);
+      if (prepared.status !== 'approved') {
+        setStatusExtra(
+          prepared.status === 'canceled'
+            ? 'Exit canceled'
+            : `Exit stopped — ${prepared.reason}`,
+        );
+        return prepared.status === 'canceled' ? 'canceled' : 'failed';
+      }
+
+      // Final revalidation immediately before authorization.
+      if (sessionsChangedSinceSnapshot(store, snapshot)) {
+        setStatusExtra('Exit stopped — open drawings changed');
+        return 'failed';
+      }
+      const recheck = revalidateAllCloseAllDecisions(
+        store,
+        prepared.decisions,
+      );
+      if (!recheck.ok) {
+        setStatusExtra(
+          `Exit stopped — ${recheck.title ?? 'a drawing'} is not safe to leave`,
+        );
+        return 'failed';
+      }
+
+      // Exit does NOT dispose sessions and does NOT create untitled.
+      setStatusExtra('Exit approved');
+      return 'approved';
+    } finally {
+      bulkOpRef.current = null;
+      setBulkOpBusy(false);
+      setClosePrompt(null);
+      setClosePromptBusy(false);
+    }
+  }, [runLifecyclePrepare]);
 
   /** P3-B4A — open validated contents into a new tab (or activate duplicate). */
   const openContentsInSession = useCallback(
@@ -2621,59 +2691,79 @@ export function App() {
     [openContentsInSession],
   );
 
+  /**
+   * P3-B4B2B — Application Menu Exit.
+   * Electron: prepare → quitApp (main authorizes final close).
+   * Browser: prepare only; never pretends to quit the browser process.
+   */
   const exitApp = useCallback(async () => {
-    if (!(await confirmDiscardIfNeeded())) return;
+    const status = await prepareApplicationExit();
+    if (status !== 'approved') return;
+
     const api = window.ratecadDesktop;
     if (api?.quitApp) {
       try {
         await api.quitApp();
         return;
       } catch {
-        // Fall through to window.close / soft exit.
+        setStatusExtra('Exit approved but quit failed — close the window manually');
+        return;
       }
     }
-    window.close();
-    // Browser / blocked close: soft-exit to a clean untitled drawing.
-    const ds = documentSessionRef.current;
-    if (ds) {
-      setSuppressDirty(true);
-      replaceSessionDocument(
-        ds,
-        ensureLayouts(createEmptyDocument('Untitled Drawing')),
-        { filePath: null, dirty: false },
-      );
-      markDirty(false);
-      setSuppressDirty(false);
-      setProjectPath(null);
-      syncDocumentSessionAfterReplace(ds);
-      setStatusExtra('Session closed');
-      return;
+
+    // Browser preview: no process quit. Clear discard-authorized dirty
+    // flags so beforeunload does not keep warning after the user resolved
+    // Don't Save during Exit prepare. Do not create untitled / dispose.
+    void BROWSER_EXIT_POLICY;
+    const store = sessionStoreRef.current;
+    for (const session of listSessions(store)) {
+      if (session.dirty) {
+        // User authorized Don't Save (or Save already cleared dirty).
+        // Prefer leaving saved clean; for remaining dirty after approve,
+        // fingerprints already matched discard decisions — clear dirty
+        // only to silence beforeunload after explicit exit consent.
+        clearSessionDirty(session);
+      }
     }
-    setSuppressDirty(true);
-    busRef.current.reset(
-      ensureLayouts(createEmptyDocument('Untitled Drawing')),
+    setDirty(false);
+    dirtyRef.current = false;
+    setSessionListVersion((n) => n + 1);
+    setStatusExtra(
+      'Exit prepared — close this browser tab when ready (browser cannot quit RateCAD)',
     );
-    workspaceModeRef.current = 'MODEL_SPACE';
-    setWorkspaceMode('MODEL_SPACE');
-    setActiveViewportId(null);
-    setSelectedViewportId(null);
-    setSelectedPaperEntityIds([]);
-    markDirty(false);
-    setSuppressDirty(false);
-    setProjectPath(null);
-    syncSession(createToolSession('select'));
-    syncCamera(createCamera());
-    viewHistoryRef.current.clear();
-    setStatusExtra('Session closed');
-  }, [
-    confirmDiscardIfNeeded,
-    markDirty,
-    setProjectPath,
-    setSuppressDirty,
-    syncCamera,
-    syncDocumentSessionAfterReplace,
-    syncSession,
-  ]);
+  }, [prepareApplicationExit]);
+
+  /** Electron main → renderer: window X / OS close handshake. */
+  useEffect(() => {
+    const api = window.ratecadDesktop;
+    if (!api?.onPrepareExit || !api.respondExitPreparation) return;
+    return api.onPrepareExit((requestId) => {
+      void (async () => {
+        let status: ExitStatus = 'failed';
+        try {
+          status = await prepareApplicationExit();
+        } catch {
+          status = 'failed';
+        }
+        try {
+          await api.respondExitPreparation?.({ requestId, status });
+        } catch {
+          // Main ignores missing reply as non-approval.
+        }
+      })();
+    });
+  }, [prepareApplicationExit]);
+
+  /** Browser beforeunload when any open drawing is dirty. */
+  useEffect(() => {
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (!anySessionDirty(sessionStoreRef.current)) return;
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [sessionListVersion, dirty]);
 
   const deleteSelection = useCallback(() => {
     const doc = busRef.current.getDocument();
