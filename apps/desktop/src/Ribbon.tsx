@@ -88,6 +88,11 @@ export type RibbonProps = {
   onOpen: () => void;
   onSave: () => void;
   onSaveAs: () => void;
+  onSaveAll?: () => void;
+  onCloseAll?: () => void;
+  saveAllDisabled?: boolean;
+  closeAllDisabled?: boolean;
+  bulkFileOpBusy?: boolean;
   onUndo: () => void;
   onRedo: () => void;
   onDeleteSelection: () => void;
@@ -618,6 +623,11 @@ export function Ribbon(props: RibbonProps) {
             onOpen={props.onOpen}
             onSave={props.onSave}
             onSaveAs={props.onSaveAs}
+            onSaveAll={props.onSaveAll}
+            onCloseAll={props.onCloseAll}
+            saveAllDisabled={props.saveAllDisabled}
+            closeAllDisabled={props.closeAllDisabled}
+            bulkBusy={props.bulkFileOpBusy}
             onOpenRecent={props.onOpenRecent}
             onExit={props.onExit}
           />

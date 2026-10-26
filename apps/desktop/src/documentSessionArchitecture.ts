@@ -1,5 +1,5 @@
 /**
- * DocumentSession architecture classification (P3-B1 → P3-B4B1).
+ * DocumentSession architecture classification (P3-B1 → P3-B4B2A).
  *
  * Document-specific (must be per session):
  *   DrawingDocument (via CommandBus), CommandBus undo/redo,
@@ -19,7 +19,8 @@
  * P3-B3B: App mirror rebind on tab switch.
  * P3-B4A: session-aware New / Open / Save / Save As / Recent.
  * P3-B4B1: individual tab close with Save / Don't Save / Cancel.
- * Close All / application-exit multi-doc remain P3-B4B2.
+ * P3-B4B2A: Save All / Close All (two-stage prepare/commit).
+ * Application-exit multi-doc remains P3-B4B2B.
  */
 
 export const DOCUMENT_SPECIFIC_STATE = [
@@ -64,10 +65,9 @@ export const SHARED_IMMUTABLE_SERVICES = [
 export const REMAINING_FOR_P3_B3B_UI_SWITCH = [] as const;
 
 /**
- * Remaining after P3-B4B1 (not started until P3-B4B2 approved).
+ * Remaining after P3-B4B2A (not started until P3-B4B2B approved).
  */
 export const REMAINING_FOR_P3_B4 = [
-  'closeAllDrawings',
   'applicationExitMultiDocumentPrompt',
   'closeLastDrawingWithoutReplacementPolicy',
 ] as const;
@@ -88,6 +88,14 @@ export const P3_B4B1_CLOSE_OPS = [
   'inactiveTabClose',
   'activeTabFallback',
   'lastTabReplaceWithUntitled',
+] as const;
+
+export const P3_B4B2A_BULK_OPS = [
+  'saveAllDrawings',
+  'closeAllDrawingsTwoStage',
+  'closeAllPrepareWithoutDispose',
+  'closeAllDirtyRevalidation',
+  'closeAllLastTabReplaceOnce',
 ] as const;
 
 /**

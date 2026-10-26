@@ -1,5 +1,5 @@
 /**
- * P3-B4B1 — Save / Don't Save / Cancel confirmation before closing a dirty tab.
+ * P3-B4B1/B4B2A — Save / Don't Save / Cancel confirmation before closing.
  */
 
 import { useEffect, useId, useRef } from 'react';
@@ -12,6 +12,12 @@ import {
 export type CloseSaveDialogProps = {
   drawingName: string;
   busy?: boolean;
+  /** Override dialog title (Close All uses a shorter title). */
+  title?: string;
+  /** Override body message. */
+  message?: string;
+  /** e.g. "Drawing 2 of 4" for Close All. */
+  progressLabel?: string;
   onChoose: (choice: CloseSaveChoice) => void;
 };
 
@@ -21,8 +27,9 @@ export function CloseSaveDialog(props: CloseSaveDialogProps) {
   const submittedRef = useRef(false);
 
   useEffect(() => {
+    submittedRef.current = false;
     saveRef.current?.focus();
-  }, []);
+  }, [props.drawingName, props.progressLabel]);
 
   const choose = (choice: CloseSaveChoice) => {
     if (props.busy) return;
@@ -30,6 +37,10 @@ export function CloseSaveDialog(props: CloseSaveDialogProps) {
     submittedRef.current = true;
     props.onChoose(choice);
   };
+
+  const title = props.title ?? CLOSE_SAVE_DIALOG_TITLE;
+  const message =
+    props.message ?? closeSaveDialogMessage(props.drawingName);
 
   return (
     <div
@@ -40,7 +51,6 @@ export function CloseSaveDialog(props: CloseSaveDialogProps) {
       data-testid="close-save-dialog"
       data-cad-dialog="1"
       onMouseDown={(e) => {
-        // Backdrop click → Cancel
         if (e.target === e.currentTarget) choose('cancel');
       }}
       onKeyDown={(e) => {
@@ -52,8 +62,13 @@ export function CloseSaveDialog(props: CloseSaveDialogProps) {
       }}
     >
       <div className="modal-panel">
-        <h3 id={titleId}>{CLOSE_SAVE_DIALOG_TITLE}</h3>
-        <p>{closeSaveDialogMessage(props.drawingName)}</p>
+        <h3 id={titleId}>{title}</h3>
+        {props.progressLabel ? (
+          <p className="modal-progress" data-testid="close-save-dialog-progress">
+            {props.progressLabel}
+          </p>
+        ) : null}
+        <p>{message}</p>
         <div className="modal-actions">
           <button
             ref={saveRef}

@@ -150,6 +150,21 @@ import {
   shouldPromptSaveBeforeClose,
   type CloseSaveChoice,
 } from './documentSessionClose';
+import {
+  CLOSE_ALL_SAVE_DIALOG_TITLE,
+  closeAllSaveDialogMessage,
+  collectCloseableSessionIds,
+  filterDirtySessionIds,
+  formatCloseAllProgress,
+  formatSaveAllCompleted,
+  formatSaveAllProgress,
+  formatSaveAllStopped,
+  revalidateAllCloseAllDecisions,
+  sessionFingerprint,
+  snapshotOpenSessionIds,
+  type BulkOpKind,
+  type CloseAllDecision,
+} from './documentSessionBulkOps';
 import { CloseSaveDialog } from './CloseSaveDialog';
 import { serializeDocument } from '@ratecad/io';
 import {
@@ -629,11 +644,17 @@ export function App() {
   const saveInFlightRef = useRef<Set<string>>(new Set());
   /** Prevent duplicate close workflows for the same session. */
   const closeInFlightRef = useRef<Set<string>>(new Set());
+  /** P3-B4B2A — exclusive Save All / Close All lock. */
+  const bulkOpRef = useRef<BulkOpKind | null>(null);
+  const [bulkOpBusy, setBulkOpBusy] = useState(false);
   /** Prefer this session when closing the active tab (MRU). */
   const previousActiveSessionIdRef = useRef<string | null>(null);
   const [closePrompt, setClosePrompt] = useState<{
     sessionId: string;
     title: string;
+    dialogTitle?: string;
+    message?: string;
+    progressLabel?: string;
     resolve: (choice: CloseSaveChoice) => void;
   } | null>(null);
   const [closePromptBusy, setClosePromptBusy] = useState(false);
@@ -1791,6 +1812,10 @@ export function App() {
 
   /** P3-B3B — create a new untitled DocumentSession tab and activate it. */
   const createNewDocumentTab = useCallback(() => {
+    if (bulkOpRef.current) {
+      setStatusExtra('Cannot create a drawing during Save All / Close All');
+      return;
+    }
     const store = sessionStoreRef.current;
     cancelActiveTransientWork();
     const current = documentSessionRef.current;
@@ -2065,12 +2090,22 @@ export function App() {
   );
 
   const promptCloseSave = useCallback(
-    (session: DocumentSession): Promise<CloseSaveChoice> => {
+    (
+      session: DocumentSession,
+      options?: {
+        dialogTitle?: string;
+        message?: string;
+        progressLabel?: string;
+      },
+    ): Promise<CloseSaveChoice> => {
       return new Promise((resolve) => {
         setClosePromptBusy(false);
         setClosePrompt({
           sessionId: session.id,
           title: getCloseDialogTitle(session),
+          dialogTitle: options?.dialogTitle,
+          message: options?.message,
+          progressLabel: options?.progressLabel,
           resolve,
         });
       });
@@ -2140,6 +2175,10 @@ export function App() {
   /** P3-B4B1 — safe individual tab close with Save / Don't Save / Cancel. */
   const requestCloseDocumentTab = useCallback(
     async (sessionId: string) => {
+      if (bulkOpRef.current) {
+        setStatusExtra('Cannot close a tab during Save All / Close All');
+        return;
+      }
       if (closeInFlightRef.current.has(sessionId)) return;
       if (closePromptOpenRef.current) return;
 
@@ -2223,6 +2262,218 @@ export function App() {
     [finalizeCloseSession, promptCloseSave, saveDrawingForSession],
   );
 
+  /**
+   * P3-B4B2A — Save All: sequential session-aware saves. Never closes tabs.
+   */
+  const saveAllDrawings = useCallback(async () => {
+    if (bulkOpRef.current) {
+      setStatusExtra('A bulk file operation is already in progress');
+      return;
+    }
+    if (closePromptOpenRef.current) return;
+
+    const store = sessionStoreRef.current;
+    const snapshot = snapshotOpenSessionIds(store);
+    const dirtyIds = filterDirtySessionIds(store, snapshot);
+    if (dirtyIds.length === 0) {
+      setStatusExtra(formatSaveAllCompleted(0));
+      return;
+    }
+
+    bulkOpRef.current = 'save-all';
+    setBulkOpBusy(true);
+    const savedTitles: string[] = [];
+    const activeIdAtStart = documentSessionRef.current?.id ?? null;
+
+    try {
+      const platform = resolveFileOpsPlatform(window.ratecadDesktop);
+      for (let i = 0; i < dirtyIds.length; i += 1) {
+        const sessionId = dirtyIds[i]!;
+        const session = getSession(store, sessionId);
+        if (!session || session.disposed) {
+          setStatusExtra(
+            formatSaveAllStopped('a drawing that is no longer open'),
+          );
+          return;
+        }
+        const title = getSessionTitle(session);
+        setStatusExtra(formatSaveAllProgress(i + 1, dirtyIds.length, title));
+        const forceDialog = !canQuickSaveToExistingPath(session, platform);
+        const outcome = await saveDrawingForSession(sessionId, forceDialog);
+        if (!outcome.ok) {
+          setStatusExtra(formatSaveAllStopped(title));
+          return;
+        }
+        const after = getSession(store, sessionId);
+        if (!after || after.disposed || after.dirty) {
+          setStatusExtra(formatSaveAllStopped(title));
+          return;
+        }
+        savedTitles.push(title);
+      }
+
+      // Preserve active selection — do not switch tabs during Save All.
+      if (
+        activeIdAtStart &&
+        documentSessionRef.current?.id !== activeIdAtStart
+      ) {
+        const still = getSession(store, activeIdAtStart);
+        if (still && !still.disposed) {
+          switchToDocumentSession(activeIdAtStart);
+        }
+      }
+      setSessionListVersion((n) => n + 1);
+      setStatusExtra(formatSaveAllCompleted(savedTitles.length));
+    } finally {
+      bulkOpRef.current = null;
+      setBulkOpBusy(false);
+    }
+  }, [saveDrawingForSession, switchToDocumentSession]);
+
+  /**
+   * P3-B4B2A — Close All with two-stage prepare / commit.
+   * Stage A: resolve every dirty drawing (no disposal).
+   * Stage B: revalidate, dispose all targets, replace with one untitled.
+   */
+  const closeAllDrawings = useCallback(async () => {
+    if (bulkOpRef.current) {
+      setStatusExtra('A bulk file operation is already in progress');
+      return;
+    }
+    if (closePromptOpenRef.current) return;
+
+    const store = sessionStoreRef.current;
+    const snapshot = snapshotOpenSessionIds(store);
+    if (snapshot.length === 0) {
+      createNewDocumentTab();
+      return;
+    }
+
+    bulkOpRef.current = 'close-all';
+    setBulkOpBusy(true);
+    const decisions: CloseAllDecision[] = [];
+
+    try {
+      const platform = resolveFileOpsPlatform(window.ratecadDesktop);
+
+      // —— Stage A: prepare (never dispose) ——
+      for (let i = 0; i < snapshot.length; i += 1) {
+        const sessionId = snapshot[i]!;
+        const session = getSession(store, sessionId);
+        if (!session || session.disposed) continue;
+
+        if (!shouldPromptSaveBeforeClose(session)) {
+          decisions.push({
+            sessionId,
+            kind: 'close-clean',
+            fingerprint: sessionFingerprint(session),
+            title: getSessionTitle(session),
+          });
+          continue;
+        }
+
+        const title = getSessionTitle(session);
+        const choice = await promptCloseSave(session, {
+          dialogTitle: CLOSE_ALL_SAVE_DIALOG_TITLE,
+          message: closeAllSaveDialogMessage(title),
+          progressLabel: formatCloseAllProgress(i + 1, snapshot.length),
+        });
+
+        if (choice === 'cancel') {
+          setClosePrompt(null);
+          setClosePromptBusy(false);
+          setStatusExtra('Close All canceled');
+          return;
+        }
+
+        if (choice === 'save') {
+          setClosePromptBusy(true);
+          const forceDialog = !canQuickSaveToExistingPath(session, platform);
+          const outcome = await saveDrawingForSession(sessionId, forceDialog);
+          setClosePrompt(null);
+          setClosePromptBusy(false);
+          if (!outcome.ok) {
+            setStatusExtra(
+              outcome.reason === 'canceled'
+                ? 'Close All canceled — save was canceled'
+                : `Close All stopped — ${title} was not saved`,
+            );
+            return;
+          }
+          const after = getSession(store, sessionId);
+          if (!after || after.disposed || after.dirty) {
+            setStatusExtra(
+              `Close All stopped — latest changes to ${title} are not saved`,
+            );
+            return;
+          }
+          decisions.push({
+            sessionId,
+            kind: 'close-after-save',
+            fingerprint: sessionFingerprint(after),
+            title: getSessionTitle(after),
+          });
+          continue;
+        }
+
+        // Don't Save — record decision; dispose later in Stage B.
+        setClosePrompt(null);
+        setClosePromptBusy(false);
+        const live = getSession(store, sessionId);
+        if (!live || live.disposed) continue;
+        decisions.push({
+          sessionId,
+          kind: 'close-discard',
+          fingerprint: sessionFingerprint(live),
+          title: getSessionTitle(live),
+        });
+      }
+
+      // —— Stage B: revalidate then commit ——
+      const recheck = revalidateAllCloseAllDecisions(store, decisions);
+      if (!recheck.ok) {
+        setStatusExtra(
+          recheck.reason === 'edited-after-dont-save'
+            ? `Close All stopped — ${recheck.title ?? 'a drawing'} changed after Don't Save`
+            : `Close All stopped — ${recheck.title ?? 'a drawing'} has unsaved changes`,
+        );
+        return;
+      }
+
+      const toClose = collectCloseableSessionIds(store, decisions);
+      cancelActiveTransientWork();
+      for (const id of toClose) {
+        const session = getSession(store, id);
+        if (session && !session.disposed) {
+          prepareSessionDeactivation(session);
+        }
+      }
+
+      for (const id of toClose) {
+        removeSession(store, id);
+      }
+      previousActiveSessionIdRef.current = null;
+
+      // Last-drawing policy exactly once after Close All.
+      void LAST_DRAWING_CLOSE_POLICY;
+      // Temporarily clear bulk lock so createNewDocumentTab is allowed.
+      bulkOpRef.current = null;
+      createNewDocumentTab();
+      setStatusExtra('Close All completed · started a new untitled drawing');
+    } finally {
+      bulkOpRef.current = null;
+      setBulkOpBusy(false);
+      setClosePrompt(null);
+      setClosePromptBusy(false);
+    }
+  }, [
+    cancelActiveTransientWork,
+    createNewDocumentTab,
+    prepareSessionDeactivation,
+    promptCloseSave,
+    saveDrawingForSession,
+  ]);
+
   /** P3-B4A — open validated contents into a new tab (or activate duplicate). */
   const openContentsInSession = useCallback(
     (contents: string, path?: string | null) => {
@@ -2261,6 +2512,10 @@ export function App() {
   );
 
   const openDrawing = useCallback(async () => {
+    if (bulkOpRef.current) {
+      setStatusExtra('Cannot open a drawing during Save All / Close All');
+      return;
+    }
     // Multi-document Open never discards siblings or replaces the active tab.
     const api = window.ratecadDesktop;
 
@@ -3819,6 +4074,9 @@ export function App() {
       {closePrompt ? (
         <CloseSaveDialog
           drawingName={closePrompt.title}
+          title={closePrompt.dialogTitle}
+          message={closePrompt.message}
+          progressLabel={closePrompt.progressLabel}
           busy={closePromptBusy}
           onChoose={(choice) => {
             if (closePromptBusy && choice !== 'cancel') return;
@@ -4009,6 +4267,11 @@ export function App() {
         onOpen={() => void openDrawing()}
         onSave={() => void saveDrawing(false)}
         onSaveAs={() => void saveDrawing(true)}
+        onSaveAll={() => void saveAllDrawings()}
+        onCloseAll={() => void closeAllDrawings()}
+        saveAllDisabled={bulkOpBusy || !documentTabs.some((t) => t.dirty)}
+        closeAllDisabled={bulkOpBusy}
+        bulkFileOpBusy={bulkOpBusy}
         onUndo={undo}
         onRedo={redo}
         onDeleteSelection={deleteSelection}

@@ -323,7 +323,7 @@ describe('P3-B4B1 close helpers', () => {
     expect(MULTI_DOCUMENT_ACTIONS_ENABLED).toBe(true);
     expect(CLOSE_TAB_ACTIONS_ENABLED).toBe(true);
     expect(P3_B4B1_CLOSE_OPS).toContain('individualTabClose');
-    expect(REMAINING_FOR_P3_B4).toContain('closeAllDrawings');
+    expect(REMAINING_FOR_P3_B4).toContain('applicationExitMultiDocumentPrompt');
   });
 
   it('25: .ratecad compatibility + clear dirty helper', () => {

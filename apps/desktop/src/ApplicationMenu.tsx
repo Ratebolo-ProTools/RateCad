@@ -16,6 +16,12 @@ type Props = {
   onOpen: () => void;
   onSave: () => void;
   onSaveAs: () => void;
+  /** P3-B4B2A */
+  onSaveAll?: () => void;
+  onCloseAll?: () => void;
+  saveAllDisabled?: boolean;
+  closeAllDisabled?: boolean;
+  bulkBusy?: boolean;
   onOpenRecent: (entry: RecentDrawing) => void;
   onExit: () => void;
 };
@@ -114,6 +120,49 @@ export function ApplicationMenuButton(props: Props) {
           >
             <span>Save As…</span>
             <kbd>Ctrl+Shift+S</kbd>
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            data-testid="app-menu-save-all"
+            disabled={props.saveAllDisabled || props.bulkBusy || !props.onSaveAll}
+            title={
+              props.bulkBusy
+                ? 'A bulk file operation is in progress'
+                : props.saveAllDisabled
+                  ? 'No drawings need saving'
+                  : 'Save all open drawings'
+            }
+            onClick={() => {
+              if (!props.onSaveAll || props.saveAllDisabled || props.bulkBusy) {
+                return;
+              }
+              run(props.onSaveAll);
+            }}
+          >
+            <span>Save All</span>
+          </button>
+          <div className="app-menu-sep" />
+          <button
+            type="button"
+            role="menuitem"
+            data-testid="app-menu-close-all"
+            disabled={
+              props.closeAllDisabled || props.bulkBusy || !props.onCloseAll
+            }
+            title={
+              props.bulkBusy
+                ? 'A bulk file operation is in progress'
+                : 'Close all open drawings'
+            }
+            onClick={() => {
+              if (!props.onCloseAll || props.closeAllDisabled || props.bulkBusy) {
+                return;
+              }
+              run(props.onCloseAll);
+            }}
+          >
+            <span>Close All</span>
           </button>
           <div className="app-menu-sep" />
           <div className={`app-menu-submenu${recentOpen ? ' open' : ''}`}>
