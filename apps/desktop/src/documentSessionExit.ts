@@ -183,3 +183,49 @@ export function anySessionDirty(store: DocumentSessionStore): boolean {
     return !!s && !s.disposed && s.dirty;
   });
 }
+
+/**
+ * ISS-N1 — scoped gate for Electron unload after explicit exit approval.
+ *
+ * Exit prepare intentionally leaves Don't-Save sessions dirty (no artificial
+ * "saved" marking). Chromium `beforeunload` would then block
+ * `BrowserWindow.close()` even after main authorizes shutdown.
+ *
+ * Arm only immediately before `quitApp` / approved `exit-response`.
+ * Disarm on cancel, failure, ignored IPC, or quit failure so a stuck gate
+ * cannot weaken later protection. Browser preview never arms this gate.
+ */
+export type ElectronExitUnloadGate = {
+  /** True only during an approved Electron shutdown unload attempt. */
+  armed: boolean;
+};
+
+export function createElectronExitUnloadGate(): ElectronExitUnloadGate {
+  return { armed: false };
+}
+
+export function armElectronAuthorizedUnload(
+  gate: ElectronExitUnloadGate,
+): void {
+  gate.armed = true;
+}
+
+export function disarmElectronAuthorizedUnload(
+  gate: ElectronExitUnloadGate,
+): void {
+  gate.armed = false;
+}
+
+/**
+ * Whether `beforeunload` should prevent leaving while drawings are dirty.
+ * When the Electron authorized-unload gate is armed, return false so the
+ * approved `mainWindow.close()` can proceed without clearing dirty flags.
+ */
+export function shouldPreventUnloadForDirtySessions(
+  anyDirty: boolean,
+  gate: ElectronExitUnloadGate,
+): boolean {
+  if (!anyDirty) return false;
+  if (gate.armed) return false;
+  return true;
+}

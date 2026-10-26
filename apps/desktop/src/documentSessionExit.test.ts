@@ -35,9 +35,13 @@ import {
   BROWSER_EXIT_POLICY,
   EXIT_SAVE_DIALOG_TITLE,
   anySessionDirty,
+  armElectronAuthorizedUnload,
+  createElectronExitUnloadGate,
+  disarmElectronAuthorizedUnload,
   exitSaveDialogMessage,
   prepareDirtyLifecycleDecisions,
   sessionsChangedSinceSnapshot,
+  shouldPreventUnloadForDirtySessions,
 } from './documentSessionExit.js';
 import {
   revalidateAllCloseAllDecisions,
@@ -316,6 +320,82 @@ describe('P3-B4B2B safe application exit', () => {
     });
     expect(store.activeSessionId).toBe(b.id);
     expect(getSessionTitle(b)).toBeTruthy();
+    disposeAllSessions(store);
+  });
+});
+
+/** ISS-N1 — authorized Electron unload must not be blocked by beforeunload. */
+describe('ISS-N1 Electron authorized unload gate', () => {
+  it('dirty sessions still block unload when gate is disarmed', () => {
+    const gate = createElectronExitUnloadGate();
+    expect(gate.armed).toBe(false);
+    expect(shouldPreventUnloadForDirtySessions(true, gate)).toBe(true);
+    expect(shouldPreventUnloadForDirtySessions(false, gate)).toBe(false);
+  });
+
+  it('armed gate allows unload without clearing dirty', () => {
+    const gate = createElectronExitUnloadGate();
+    armElectronAuthorizedUnload(gate);
+    expect(gate.armed).toBe(true);
+    // Dirty remains conceptually true — gate only scopes beforeunload.
+    expect(shouldPreventUnloadForDirtySessions(true, gate)).toBe(false);
+  });
+
+  it('disarm restores protection after cancel / failed quit', () => {
+    const gate = createElectronExitUnloadGate();
+    armElectronAuthorizedUnload(gate);
+    disarmElectronAuthorizedUnload(gate);
+    expect(gate.armed).toBe(false);
+    expect(shouldPreventUnloadForDirtySessions(true, gate)).toBe(true);
+  });
+
+  it('browser policy never implies Electron gate arming', () => {
+    expect(BROWSER_EXIT_POLICY).toBe('prepare-only-no-process-quit');
+    const gate = createElectronExitUnloadGate();
+    // Browser path leaves gate disarmed; dirty still blocks tab close.
+    expect(shouldPreventUnloadForDirtySessions(true, gate)).toBe(true);
+  });
+
+  it('Dont Save prepare leaves sessions dirty (no artificial clear)', async () => {
+    const store = createDocumentSessionStore();
+    const a = createAndRegisterSession(store, { bindMinimalEngine: true });
+    const b = createAndRegisterSession(store, { bindMinimalEngine: true });
+    markSessionDirty(a);
+    markSessionDirty(b);
+    const result = await prepareDirtyLifecycleDecisions({
+      store,
+      snapshot: snapshotOpenSessionIds(store),
+      prompt: async () => 'dont-save',
+      save: async () => ({ ok: true }),
+      needsForceDialog: () => false,
+    });
+    expect(result.status).toBe('approved');
+    expect(a.dirty).toBe(true);
+    expect(b.dirty).toBe(true);
+    expect(anySessionDirty(store)).toBe(true);
+    // Gate + dirty: without arm, beforeunload would block; with arm, allow.
+    const gate = createElectronExitUnloadGate();
+    expect(shouldPreventUnloadForDirtySessions(true, gate)).toBe(true);
+    armElectronAuthorizedUnload(gate);
+    expect(shouldPreventUnloadForDirtySessions(true, gate)).toBe(false);
+    disposeAllSessions(store);
+  });
+
+  it('cancel prepare path never needs an armed gate', async () => {
+    const store = createDocumentSessionStore();
+    const a = createAndRegisterSession(store, { bindMinimalEngine: true });
+    markSessionDirty(a);
+    const result = await prepareDirtyLifecycleDecisions({
+      store,
+      snapshot: snapshotOpenSessionIds(store),
+      prompt: async () => 'cancel',
+      save: async () => ({ ok: true }),
+      needsForceDialog: () => false,
+    });
+    expect(result.status).toBe('canceled');
+    expect(a.dirty).toBe(true);
+    const gate = createElectronExitUnloadGate();
+    expect(shouldPreventUnloadForDirtySessions(true, gate)).toBe(true);
     disposeAllSessions(store);
   });
 });

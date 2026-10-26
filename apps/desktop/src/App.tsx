@@ -168,9 +168,13 @@ import {
   BROWSER_EXIT_POLICY,
   EXIT_SAVE_DIALOG_TITLE,
   anySessionDirty,
+  armElectronAuthorizedUnload,
+  createElectronExitUnloadGate,
+  disarmElectronAuthorizedUnload,
   exitSaveDialogMessage,
   prepareDirtyLifecycleDecisions,
   sessionsChangedSinceSnapshot,
+  shouldPreventUnloadForDirtySessions,
   type ExitStatus,
 } from './documentSessionExit';
 import { CloseSaveDialog } from './CloseSaveDialog';
@@ -654,6 +658,8 @@ export function App() {
   const closeInFlightRef = useRef<Set<string>>(new Set());
   /** P3-B4B2A — exclusive Save All / Close All lock. */
   const bulkOpRef = useRef<BulkOpKind | null>(null);
+  /** ISS-N1 — allow one authorized Electron unload without clearing dirty. */
+  const electronExitUnloadGateRef = useRef(createElectronExitUnloadGate());
   const [bulkOpBusy, setBulkOpBusy] = useState(false);
   /** Prefer this session when closing the active tab (MRU). */
   const previousActiveSessionIdRef = useRef<string | null>(null);
@@ -2698,23 +2704,39 @@ export function App() {
    */
   const exitApp = useCallback(async () => {
     const status = await prepareApplicationExit();
-    if (status !== 'approved') return;
+    if (status !== 'approved') {
+      // Canceled / failed prepare must never leave the unload gate armed.
+      disarmElectronAuthorizedUnload(electronExitUnloadGateRef.current);
+      return;
+    }
 
     const api = window.ratecadDesktop;
     if (api?.quitApp) {
+      // ISS-N1: arm only for this approved Electron unload attempt so
+      // beforeunload does not block mainWindow.close() while Don't-Save
+      // sessions remain dirty by design. Keep armed across the IPC return
+      // — Chromium may run beforeunload after quitApp resolves.
+      armElectronAuthorizedUnload(electronExitUnloadGateRef.current);
       try {
         await api.quitApp();
+        // If the window is somehow still open, restore protection shortly.
+        window.setTimeout(() => {
+          disarmElectronAuthorizedUnload(electronExitUnloadGateRef.current);
+        }, 2500);
         return;
       } catch {
+        disarmElectronAuthorizedUnload(electronExitUnloadGateRef.current);
         setStatusExtra('Exit approved but quit failed — close the window manually');
         return;
       }
     }
 
-    // Browser preview: no process quit. Clear discard-authorized dirty
-    // flags so beforeunload does not keep warning after the user resolved
-    // Don't Save during Exit prepare. Do not create untitled / dispose.
+    // Browser preview: never arm the Electron unload gate. Clear
+    // discard-authorized dirty flags so beforeunload does not keep
+    // warning after the user resolved Don't Save during Exit prepare.
+    // Do not create untitled / dispose.
     void BROWSER_EXIT_POLICY;
+    disarmElectronAuthorizedUnload(electronExitUnloadGateRef.current);
     const store = sessionStoreRef.current;
     for (const session of listSessions(store)) {
       if (session.dirty) {
@@ -2745,19 +2767,49 @@ export function App() {
         } catch {
           status = 'failed';
         }
+        // Arm only when prepare approved so main's subsequent close() is
+        // not blocked by beforeunload; disarm when not closing.
+        if (status === 'approved') {
+          armElectronAuthorizedUnload(electronExitUnloadGateRef.current);
+        } else {
+          disarmElectronAuthorizedUnload(electronExitUnloadGateRef.current);
+        }
         try {
-          await api.respondExitPreparation?.({ requestId, status });
+          const reply = await api.respondExitPreparation?.({
+            requestId,
+            status,
+          });
+          // Stale / ignored / non-close replies must not leave the gate armed.
+          if (!reply?.closed) {
+            disarmElectronAuthorizedUnload(electronExitUnloadGateRef.current);
+          } else {
+            // Close was requested — keep armed for pending beforeunload,
+            // then disarm if the window is still alive (failed unload).
+            window.setTimeout(() => {
+              disarmElectronAuthorizedUnload(electronExitUnloadGateRef.current);
+            }, 2500);
+          }
         } catch {
           // Main ignores missing reply as non-approval.
+          disarmElectronAuthorizedUnload(electronExitUnloadGateRef.current);
         }
       })();
     });
   }, [prepareApplicationExit]);
 
-  /** Browser beforeunload when any open drawing is dirty. */
+  /**
+   * Dirty-session beforeunload guard.
+   * ISS-N1: when Electron exit was just authorized, skip prevention so
+   * mainWindow.close() can complete — without clearing dirty flags and
+   * without disabling this guard for ordinary / browser tab closes.
+   */
   useEffect(() => {
     const onBeforeUnload = (event: BeforeUnloadEvent) => {
-      if (!anySessionDirty(sessionStoreRef.current)) return;
+      const block = shouldPreventUnloadForDirtySessions(
+        anySessionDirty(sessionStoreRef.current),
+        electronExitUnloadGateRef.current,
+      );
+      if (!block) return;
       event.preventDefault();
       event.returnValue = '';
     };
