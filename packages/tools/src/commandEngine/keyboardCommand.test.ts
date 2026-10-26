@@ -44,6 +44,10 @@ describe('suggestion ranking', () => {
     const rows = reg.suggestRanked('M');
     expect(rows[0]?.name).toBe('MOVE');
     expect(rows.some((r) => r.name === 'MIRROR')).toBe(true);
+    // Primary alias MI outranks name-only / secondary M* hits (MVIEW).
+    expect(rows.findIndex((r) => r.name === 'MIRROR')).toBeLessThan(
+      rows.findIndex((r) => r.name === 'MVIEW'),
+    );
   });
 
   it('ranks MI as MIRROR', () => {

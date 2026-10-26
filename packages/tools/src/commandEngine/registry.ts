@@ -18,14 +18,25 @@ export type EngineResolveResult = EngineResolveOk | EngineResolveErr;
 const MATCH_SCORE: Record<CommandSuggestion['matchKind'], number> = {
   'exact-alias': 1000,
   'exact-name': 950,
-  'name-prefix': 800,
-  'alias-prefix': 750,
+  // Alias prefixes outrank name prefixes so MI/MV/CO beat long name-only hits
+  // for short AutoCAD-style typing (M → MOVE then MIRROR, not MVIEW first).
+  'alias-prefix': 860,
+  'name-prefix': 780,
   'keyword-prefix': 650,
   'name-contains': 500,
   'keyword-contains': 400,
   typo: 250,
   recent: 100,
 };
+
+/** For 1–2 char input, ignore long secondary aliases (e.g. MEASUREGEOM for "M"). */
+function aliasPrefixHits(aliases: string[], input: string): string[] {
+  const hits = aliases.filter((a) => a.startsWith(input));
+  if (input.length <= 2) {
+    return hits.filter((a) => a.length <= input.length + 2);
+  }
+  return hits;
+}
 
 export class CadEngineRegistry {
   private readonly byId = new Map<string, CadEngineCommand>();
@@ -106,12 +117,17 @@ export class CadEngineRegistry {
       return rows.slice(0, limit);
     }
 
+    const allowKeywords = input.length >= 3;
+    const allowTypo = options.allowTypo !== false && input.length >= 4;
+
     for (const c of this.list()) {
       const nameKey = normalizeCommandInput(c.name);
       const aliases = c.aliases.map((a) => normalizeCommandInput(a)).filter(Boolean);
       const keywords = (c.keywords ?? []).map((k) =>
         normalizeCommandInput(k),
       );
+      const prefixAliases = aliasPrefixHits(aliases, input);
+      const primaryAlias = aliases[0] ?? '';
 
       let kind: CommandSuggestion['matchKind'] | null = null;
       let score = 0;
@@ -122,22 +138,33 @@ export class CadEngineRegistry {
       } else if (nameKey === input) {
         kind = 'exact-name';
         score = MATCH_SCORE['exact-name'];
+      } else if (prefixAliases.length > 0) {
+        kind = 'alias-prefix';
+        const best = prefixAliases.reduce((a, b) =>
+          a.length <= b.length ? a : b,
+        );
+        // Primary short alias (MI, CO, PL) outranks secondary (MA on MATCHPROP).
+        const primaryHit =
+          primaryAlias.startsWith(input) && prefixAliases.includes(primaryAlias);
+        score =
+          MATCH_SCORE['alias-prefix'] -
+          best.length * 5 +
+          (primaryHit && best.length <= 3 ? 40 : 0);
       } else if (nameKey.startsWith(input)) {
         kind = 'name-prefix';
-        score = MATCH_SCORE['name-prefix'] - Math.min(40, nameKey.length - input.length);
-      } else if (aliases.some((a) => a.startsWith(input))) {
-        kind = 'alias-prefix';
-        score = MATCH_SCORE['alias-prefix'];
-      } else if (keywords.some((k) => k.startsWith(input))) {
+        score =
+          MATCH_SCORE['name-prefix'] -
+          Math.min(40, nameKey.length - input.length);
+      } else if (allowKeywords && keywords.some((k) => k.startsWith(input))) {
         kind = 'keyword-prefix';
         score = MATCH_SCORE['keyword-prefix'];
-      } else if (nameKey.includes(input)) {
+      } else if (allowKeywords && nameKey.includes(input)) {
         kind = 'name-contains';
         score = MATCH_SCORE['name-contains'];
-      } else if (keywords.some((k) => k.includes(input))) {
+      } else if (allowKeywords && keywords.some((k) => k.includes(input))) {
         kind = 'keyword-contains';
         score = MATCH_SCORE['keyword-contains'];
-      } else if (options.allowTypo !== false && input.length >= 3) {
+      } else if (allowTypo) {
         const dist = editDistance(input, nameKey);
         if (dist > 0 && dist <= 2) {
           kind = 'typo';
@@ -156,8 +183,8 @@ export class CadEngineRegistry {
 
       if (!kind) continue;
 
-      // Usage boost (deterministic, secondary)
-      if (usage) {
+      // Usage boost (deterministic, secondary — must not overturn exact alias)
+      if (usage && kind !== 'exact-alias' && kind !== 'exact-name') {
         const freq = usage.getFrequency(c.id);
         const recentIdx = usage.recentIndex(c.id);
         score += Math.min(40, freq * 2);
@@ -170,7 +197,7 @@ export class CadEngineRegistry {
     rows.sort(
       (a, b) =>
         b.score - a.score ||
-        a.name.length - b.name.length ||
+        (a.alias?.length ?? 99) - (b.alias?.length ?? 99) ||
         a.name.localeCompare(b.name),
     );
 

@@ -485,6 +485,38 @@
   opacity: 0.9;
 }
 
+.cmd-suggest .cmd-desc {
+  display: inline-block;
+  margin-left: 6px;
+  color: var(--text-dim);
+  font-size: 9px;
+  font-weight: 400;
+  max-width: 14rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
+.dyn-suggest .cmd-suggest {
+  height: auto;
+  min-height: 22px;
+  width: 100%;
+  text-align: left;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 4px;
+  padding: 4px 8px;
+}
+
+.dyn-suggest .cmd-desc {
+  flex-basis: 100%;
+  margin-left: 1.6rem;
+  max-width: none;
+  white-space: normal;
+}
+
 .dyn-input {
   position: absolute;
   z-index: 5;

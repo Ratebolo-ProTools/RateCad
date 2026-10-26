@@ -178,6 +178,7 @@ import {
   type ExitStatus,
 } from './documentSessionExit';
 import { CloseSaveDialog } from './CloseSaveDialog';
+import { ENGINE_TOOLS } from './engineTools';
 import { serializeDocument } from '@ratecad/io';
 import {
   appendInputBuffer,
@@ -210,6 +211,8 @@ import {
   setActiveTool,
   setAreaToolMode,
   setRectangleConstraints,
+  shouldCaptureCadCommandChar,
+  isImeCompositionEvent,
   spaceConfirmsCommand,
   spaceRepeatsLastCommand,
   undoAreaPoint,
@@ -764,6 +767,12 @@ export function App() {
   const [discardPrompt, setDiscardPrompt] = useState<{
     resolve: (ok: boolean) => void;
   } | null>(null);
+  const discardPromptOpenRef = useRef(false);
+  const discardPromptRef = useRef(discardPrompt);
+  useEffect(() => {
+    discardPromptOpenRef.current = discardPrompt != null;
+    discardPromptRef.current = discardPrompt;
+  }, [discardPrompt]);
   const [textPrompt, setTextPrompt] = useState('');
   const textInputRef = useRef<HTMLInputElement | null>(null);
   const [commandLine, setCommandLine] = useState('');
@@ -1595,21 +1604,7 @@ export function App() {
   const activateTool = useCallback(
     (tool: ToolId, dimKind?: DimensionKind) => {
       const eng = engineRef.current;
-      const ENGINE_TOOLS = new Set([
-        'line',
-        'rectangle',
-        'circle',
-        'move',
-        'copy',
-        'trim',
-        'fillet',
-        'extend',
-        'offset',
-        'mirror',
-        'rotate',
-        'scale',
-        'area',
-      ]);
+      // Same pathway as typed aliases (PL, EX, MI, …) via CadCommandEngine.
       if (eng && ENGINE_TOOLS.has(tool)) {
         eng.start(tool);
         refreshEngineUi();
@@ -3058,7 +3053,7 @@ export function App() {
         target?.dataset?.cadCommand === '1' ||
         target?.dataset?.cadRectDim === '1';
 
-      // Close-save dialog owns ESC / actions — block CAD routing behind it.
+      // Close-save / Save As / discard / units / dimstyle dialogs own the keyboard.
       if (closePromptOpenRef.current) {
         if (event.key === 'Escape') {
           event.preventDefault();
@@ -3070,6 +3065,29 @@ export function App() {
             setClosePromptBusy(false);
           }
         }
+        return;
+      }
+      if (discardPromptOpenRef.current) {
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          event.stopPropagation();
+          const prompt = discardPromptRef.current;
+          if (prompt) {
+            prompt.resolve(false);
+            setDiscardPrompt(null);
+          }
+        }
+        return;
+      }
+      if (showUnitsDialogRef.current || showDimStyleDialogRef.current) {
+        return;
+      }
+      if (bulkOpRef.current) {
+        return;
+      }
+
+      // IME composition must never start CAD commands or mutate the buffer.
+      if (isImeCompositionEvent(event)) {
         return;
       }
 
@@ -3297,10 +3315,20 @@ export function App() {
         event.preventDefault();
         const eng = engineRef.current;
         const ui = eng?.getUiState();
-        if (ui && ui.suggestionRows.length > 0 && !eng?.isRunning()) {
+        const buf = (eng?.getBuffer() ?? commandLineRef.current).trim();
+        // Suggestions only while typing; empty buffer uses command history.
+        if (
+          buf &&
+          ui &&
+          ui.suggestionRows.length > 0 &&
+          !eng?.isRunning()
+        ) {
           eng?.moveSuggestion(-1);
         } else {
           eng?.historyUp();
+          const next = eng?.getBuffer() ?? '';
+          commandLineRef.current = next;
+          setCommandLine(next);
         }
         refreshEngineUi();
         return;
@@ -3309,10 +3337,19 @@ export function App() {
         event.preventDefault();
         const eng = engineRef.current;
         const ui = eng?.getUiState();
-        if (ui && ui.suggestionRows.length > 0 && !eng?.isRunning()) {
+        const buf = (eng?.getBuffer() ?? commandLineRef.current).trim();
+        if (
+          buf &&
+          ui &&
+          ui.suggestionRows.length > 0 &&
+          !eng?.isRunning()
+        ) {
           eng?.moveSuggestion(1);
         } else {
           eng?.historyDown();
+          const next = eng?.getBuffer() ?? '';
+          commandLineRef.current = next;
+          setCommandLine(next);
         }
         refreshEngineUi();
         return;
@@ -3444,19 +3481,26 @@ export function App() {
           }
         }
 
-        // Command / prompt entry (including @ < , for coordinates)
-        if (event.key.length === 1 && !event.altKey) {
-          const ch = event.key;
-          if (/^[a-z0-9_\-./\\@,<°]$/i.test(ch)) {
-            event.preventDefault();
-            const eng = engineRef.current;
-            const next = (eng?.getBuffer() ?? commandLineRef.current) + ch;
-            eng?.setBuffer(next);
-            commandLineRef.current = next;
-            setCommandLine(next);
-            setCommandFeedback(null);
-            refreshEngineUi();
-          }
+        // Automatic command typing (canvas owns focus — no click into field).
+        if (
+          shouldCaptureCadCommandChar({
+            key: event.key,
+            metaKey: event.metaKey,
+            ctrlKey: event.ctrlKey,
+            altKey: event.altKey,
+            inEditableField: inField,
+            isComposing: event.isComposing,
+            keyCode: event.keyCode,
+          })
+        ) {
+          event.preventDefault();
+          const eng = engineRef.current;
+          const next = (eng?.getBuffer() ?? commandLineRef.current) + event.key;
+          eng?.setBuffer(next);
+          commandLineRef.current = next;
+          setCommandLine(next);
+          setCommandFeedback(null);
+          refreshEngineUi();
         }
       }
     };
@@ -4232,7 +4276,12 @@ export function App() {
         />
       ) : null}
       {discardPrompt ? (
-        <div className="modal-backdrop" role="dialog" aria-modal="true">
+        <div
+          className="modal-backdrop"
+          role="dialog"
+          aria-modal="true"
+          data-cad-dialog="1"
+        >
           <div className="modal-panel">
             <h3>Unsaved changes</h3>
             <p>Discard unsaved changes and continue?</p>
@@ -4724,6 +4773,9 @@ export function App() {
                           {row.alias ?? '·'}
                         </span>
                         <span className="cmd-name">{row.name}</span>
+                        {row.description ? (
+                          <span className="cmd-desc">{row.description}</span>
+                        ) : null}
                       </button>
                     </li>
                   ))}
@@ -4763,20 +4815,28 @@ export function App() {
                     e.preventDefault();
                     const eng = engineRef.current;
                     const ui = eng?.getUiState();
-                    if (ui && ui.suggestionRows.length > 0) {
+                    const buf = (eng?.getBuffer() ?? commandLineRef.current).trim();
+                    if (buf && ui && ui.suggestionRows.length > 0) {
                       eng?.moveSuggestion(-1);
                     } else {
                       eng?.historyUp();
+                      const next = eng?.getBuffer() ?? '';
+                      commandLineRef.current = next;
+                      setCommandLine(next);
                     }
                     refreshEngineUi();
                   } else if (e.key === 'ArrowDown') {
                     e.preventDefault();
                     const eng = engineRef.current;
                     const ui = eng?.getUiState();
-                    if (ui && ui.suggestionRows.length > 0) {
+                    const buf = (eng?.getBuffer() ?? commandLineRef.current).trim();
+                    if (buf && ui && ui.suggestionRows.length > 0) {
                       eng?.moveSuggestion(1);
                     } else {
                       eng?.historyDown();
+                      const next = eng?.getBuffer() ?? '';
+                      commandLineRef.current = next;
+                      setCommandLine(next);
                     }
                     refreshEngineUi();
                   } else if (e.key === 'Escape') {
@@ -4818,6 +4878,7 @@ export function App() {
                         ? 'cmd-suggest active'
                         : 'cmd-suggest'
                     }
+                    title={row.description}
                     onClick={() => {
                       engineRef.current?.selectSuggestion(i);
                       engineRef.current?.confirm('enter');
@@ -4827,6 +4888,9 @@ export function App() {
                   >
                     <span className="cmd-alias">{row.alias ?? ''}</span>
                     {row.name}
+                    {row.description ? (
+                      <span className="cmd-desc">{row.description}</span>
+                    ) : null}
                     {row.matchKind === 'typo' ? ' ?' : ''}
                   </button>
                 ))}

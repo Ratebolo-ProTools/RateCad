@@ -173,6 +173,12 @@ export {
   type KeyboardContext,
 } from './keyboardContext.js';
 export {
+  isCadCommandChar,
+  isImeCompositionEvent,
+  isRepeatableCommandName,
+  shouldCaptureCadCommandChar,
+} from './keyboardCadInput.js';
+export {
   formatDefaultHint,
   formatOptionsHint,
   matchOption,

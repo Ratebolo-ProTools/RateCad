@@ -19,6 +19,7 @@ import {
 import { CadEngineRegistry } from './registry.js';
 import { setEngineRectangleConstraints } from './commands/rectangle.js';
 import { CommandUsageTracker } from './usage.js';
+import { isRepeatableCommandName } from './keyboardCadInput.js';
 import type {
   CadCommandContext,
   CadCommandUiState,
@@ -127,6 +128,10 @@ export class CadCommandEngine {
     return this.lastCompletedName;
   }
 
+  private rememberCompleted(name: string | null): void {
+    this.lastCompletedName = isRepeatableCommandName(name) ? name : null;
+  }
+
   /** True while a handoff tool (MIRROR, etc.) owns the canvas after start(). */
   hasPendingHandoff(): boolean {
     return this.handoffName != null;
@@ -139,7 +144,7 @@ export class CadCommandEngine {
   finalizeHandoffIfCommitted(): boolean {
     if (!this.handoffName) return false;
     if (this.sessionCommittedWork()) {
-      this.lastCompletedName = this.handoffName;
+      this.rememberCompleted(this.handoffName);
       this.handoffName = null;
       return true;
     }
@@ -152,7 +157,7 @@ export class CadCommandEngine {
    */
   completeHandoff(): boolean {
     if (!this.handoffName) return false;
-    this.lastCompletedName = this.handoffName;
+    this.rememberCompleted(this.handoffName);
     this.handoffName = null;
     return true;
   }
@@ -208,6 +213,14 @@ export class CadCommandEngine {
       this.suggestionRows = [];
       this.suggestionIndex = -1;
       this.naturalLanguagePending = false;
+      return;
+    }
+    // Empty buffer: no active suggestion list so ↑/↓ browse command history.
+    if (!this.buffer.trim()) {
+      this.suggestionRows = [];
+      this.suggestionIndex = -1;
+      this.naturalLanguagePending = false;
+      this.message = null;
       return;
     }
     const classified = classifyIdleCommandInput(this.buffer);
@@ -336,7 +349,7 @@ export class CadCommandEngine {
       if (boot.complete) {
         this.message = boot.status ?? this.running.status;
         // Successful immediate completion (e.g. MSPACE/PSPACE).
-        this.lastCompletedName = command.name;
+        this.rememberCompleted(command.name);
         this.running = null;
         this.host.activateSelect();
         return { ok: true };
@@ -422,14 +435,8 @@ export class CadCommandEngine {
         return;
       }
 
-      // Exact resolve first (M → MOVE, MI → MIRROR)
-      const exact = this.registry.resolve(raw);
-      if (exact.ok) {
-        this.startCommand(exact.command);
-        return;
-      }
-
-      // Ambiguous / partial: use highlighted suggestion only
+      // Highlighted suggestion wins (ArrowUp/Down then Enter/Space → MIRROR
+      // even when buffer is still exact alias "M" for MOVE).
       if (this.suggestionRows.length && this.suggestionIndex >= 0) {
         const row = this.suggestionRows[this.suggestionIndex]!;
         const cmd = this.registry.get(row.commandId);
@@ -437,6 +444,13 @@ export class CadCommandEngine {
           this.startCommand(cmd);
           return;
         }
+      }
+
+      // Exact alias/name when no suggestion list (e.g. programmatic start path)
+      const exact = this.registry.resolve(raw);
+      if (exact.ok) {
+        this.startCommand(exact.command);
+        return;
       }
 
       this.start(raw);
@@ -505,7 +519,7 @@ export class CadCommandEngine {
       // Preserve last completed when ESC ends a session that already committed geometry
       // (e.g. LINE drew segments then ESC). Do not store abandoned/no-op cancels.
       if (this.sessionCommittedWork()) {
-        this.lastCompletedName = this.running.command.name;
+        this.rememberCompleted(this.running.command.name);
       }
       if (this.running.command.onCancel) {
         this.running.command.onCancel(this.running.state);
@@ -669,7 +683,7 @@ export class CadCommandEngine {
     if (result.kind === 'complete') {
       this.message = result.message ?? null;
       // Successful completion — store for SPACE/Enter repeat.
-      this.lastCompletedName = r.command.name;
+      this.rememberCompleted(r.command.name);
       this.running = null;
       this.handoffName = null;
       this.buffer = '';
