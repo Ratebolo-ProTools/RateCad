@@ -12,10 +12,19 @@ export interface Command {
 
 export type CommandListener = (doc: DrawingDocument) => void;
 
+/** Why the bus last notified listeners — used for dirty-state classification. */
+export type CommandBusChangeKind =
+  | 'execute'
+  | 'undo'
+  | 'redo'
+  | 'reset'
+  | 'updateWithoutHistory';
+
 export class CommandBus {
   private undoStack: Command[] = [];
   private redoStack: Command[] = [];
   private listeners = new Set<CommandListener>();
+  private lastChangeKind: CommandBusChangeKind = 'reset';
 
   constructor(private document: DrawingDocument) {}
 
@@ -23,20 +32,26 @@ export class CommandBus {
     return this.document;
   }
 
+  /** Kind of the most recent bus mutation (for dirty tracking). */
+  getLastChangeKind(): CommandBusChangeKind {
+    return this.lastChangeKind;
+  }
+
   subscribe(listener: CommandListener): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
 
-  private notify(): void {
+  private notify(kind: CommandBusChangeKind): void {
+    this.lastChangeKind = kind;
     for (const listener of this.listeners) {
       listener(this.document);
     }
   }
 
-  private setDocument(doc: DrawingDocument): void {
+  private setDocument(doc: DrawingDocument, kind: CommandBusChangeKind): void {
     this.document = doc;
-    this.notify();
+    this.notify(kind);
   }
 
   /** Replace document without recording history (e.g. new/open). */
@@ -44,19 +59,19 @@ export class CommandBus {
     this.document = doc;
     this.undoStack = [];
     this.redoStack = [];
-    this.notify();
+    this.notify('reset');
   }
 
   /** Non-history UI updates such as selection changes. */
   updateWithoutHistory(mutator: (doc: DrawingDocument) => DrawingDocument): void {
-    this.setDocument(mutator(this.document));
+    this.setDocument(mutator(this.document), 'updateWithoutHistory');
   }
 
   execute(command: Command): void {
     this.document = command.execute(this.document);
     this.undoStack.push(command);
     this.redoStack = [];
-    this.notify();
+    this.notify('execute');
   }
 
   canUndo(): boolean {
@@ -77,7 +92,7 @@ export class CommandBus {
     if (!command) return;
     this.document = command.undo(this.document);
     this.redoStack.push(command);
-    this.notify();
+    this.notify('undo');
   }
 
   redo(): void {
@@ -85,6 +100,6 @@ export class CommandBus {
     if (!command) return;
     this.document = command.execute(this.document);
     this.undoStack.push(command);
-    this.notify();
+    this.notify('redo');
   }
 }

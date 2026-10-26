@@ -1,4 +1,8 @@
-export type { Command, CommandListener } from './bus.js';
+export type {
+  Command,
+  CommandBusChangeKind,
+  CommandListener,
+} from './bus.js';
 export { CommandBus } from './bus.js';
 export {
   CreateCircleCommand,

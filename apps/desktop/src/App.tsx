@@ -100,6 +100,21 @@ import { UnitsDialog } from './UnitsDialog';
 import { DimStyleManager } from './DimStyleManager';
 import { AreaModeStrip, Ribbon } from './Ribbon';
 import type { RecentDrawing } from './ApplicationMenu';
+import {
+  clearSessionDirty,
+  createUntitledBus,
+  markSessionDirty,
+  replaceSessionDocument,
+  setSessionFilePath,
+  shouldMarkDirtyForBusChange,
+  shouldPromptDiscard,
+  type DocumentSession,
+} from './documentSession';
+import {
+  createAndRegisterSession,
+  createDocumentSessionStore,
+  type DocumentSessionStore,
+} from './documentSessionStore';
 import { serializeDocument, tryParseDocument } from '@ratecad/io';
 import {
   appendInputBuffer,
@@ -195,10 +210,9 @@ function fmtLen(doc: DrawingDocument, value: number, precision?: number): string
   );
 }
 
+/** @deprecated P3-B1 — prefer createUntitledBus / DocumentSession. */
 function createBus(): CommandBus {
-  return new CommandBus(
-    ensureLayouts(createEmptyDocument('Untitled Drawing')),
-  );
+  return createUntitledBus();
 }
 
 function basename(filePath: string): string {
@@ -548,6 +562,29 @@ export function App() {
   const filePathRef = useRef<string | null>(null);
   const dirtyRef = useRef(false);
   const suppressDirtyRef = useRef(false);
+  /**
+   * P3-B1: single DocumentSession wrapping the existing bus/cameras.
+   * Multi-tab UI is not activated; store exists for internal foundation only.
+   * CadCommandEngine remains App-owned (no second command engine).
+   */
+  const sessionStoreRef = useRef<DocumentSessionStore>(
+    createDocumentSessionStore(),
+  );
+  const documentSessionRef = useRef<DocumentSession | null>(null);
+  if (documentSessionRef.current == null) {
+    documentSessionRef.current = createAndRegisterSession(
+      sessionStoreRef.current,
+      {
+        bus: busRef.current,
+        camera: cameraRef.current,
+        modelCamera: modelCameraRef.current,
+        viewHistory: viewHistoryRef.current,
+        toolSession: sessionRef.current,
+        // App subscribe remains the dirty notifier for B1 compatibility.
+        trackDirtyFromBus: false,
+      },
+    );
+  }
   const rafPanRef = useRef<number | null>(null);
   const pendingPanRef = useRef<{ dx: number; dy: number } | null>(null);
   const commandLineRef = useRef('');
@@ -654,6 +691,9 @@ export function App() {
 
   const syncSession = useCallback((next: ToolSession) => {
     sessionRef.current = next;
+    if (documentSessionRef.current) {
+      documentSessionRef.current.toolSession = next;
+    }
     setSession(next);
   }, []);
 
@@ -670,6 +710,9 @@ export function App() {
 
   const syncCamera = useCallback((next: Camera) => {
     cameraRef.current = next;
+    if (documentSessionRef.current) {
+      documentSessionRef.current.camera = next;
+    }
     setCamera(next);
   }, []);
 
@@ -936,11 +979,25 @@ export function App() {
 
   const markDirty = useCallback((value: boolean) => {
     dirtyRef.current = value;
+    const ds = documentSessionRef.current;
+    if (ds) {
+      if (value) markSessionDirty(ds);
+      else clearSessionDirty(ds);
+    }
     setDirty(value);
+  }, []);
+
+  const setSuppressDirty = useCallback((value: boolean) => {
+    suppressDirtyRef.current = value;
+    const ds = documentSessionRef.current;
+    if (ds) ds.suppressDirty = value;
   }, []);
 
   const setProjectPath = useCallback((path: string | null) => {
     filePathRef.current = path;
+    if (documentSessionRef.current) {
+      setSessionFilePath(documentSessionRef.current, path);
+    }
     setFilePath(path);
   }, []);
 
@@ -969,13 +1026,18 @@ export function App() {
   );
 
   useEffect(() => {
+    let previous = busRef.current.getDocument();
     return busRef.current.subscribe((next) => {
       setDoc(next);
       setCanUndo(busRef.current.canUndo());
       setCanRedo(busRef.current.canRedo());
       if (!suppressDirtyRef.current) {
-        markDirty(true);
+        const kind = busRef.current.getLastChangeKind();
+        if (shouldMarkDirtyForBusChange(kind, previous, next)) {
+          markDirty(true);
+        }
       }
+      previous = next;
     });
   }, [markDirty]);
 
@@ -1153,9 +1215,8 @@ export function App() {
     setSelectedPaperEntityIds([]);
     const layout = next.layouts.find((l) => l.id === layoutId);
     setStatusExtra(layout ? `PAPER SPACE · ${layout.name}` : 'PAPER SPACE');
-    setDirty(true);
-    dirtyRef.current = true;
-  }, []);
+    markDirty(true);
+  }, [markDirty]);
 
   useEffect(() => {
     const name = doc.meta.name + (dirty ? ' *' : '');
@@ -1339,8 +1400,7 @@ export function App() {
       },
       onLayoutChanged: (layoutId: string | null, message: string) => {
         setDoc(busRef.current.getDocument());
-        setDirty(true);
-        dirtyRef.current = true;
+        markDirty(true);
         if (layoutId == null) {
           workspaceModeRef.current = 'MODEL_SPACE';
           setWorkspaceMode('MODEL_SPACE');
@@ -1385,8 +1445,13 @@ export function App() {
       busRef.current,
       host,
     );
+    // B1: attach shared controllers to the single session (no second engine).
+    if (documentSessionRef.current) {
+      documentSessionRef.current.selectionManager = selectionManagerRef.current;
+      documentSessionRef.current.engine = engineRef.current;
+    }
     refreshEngineUi();
-  }, [activateToolOnly, refreshEngineUi]);
+  }, [activateToolOnly, markDirty, refreshEngineUi]);
 
   const activateTool = useCallback(
     (tool: ToolId, dimKind?: DimensionKind) => {
@@ -1491,15 +1556,49 @@ export function App() {
   );
 
   const confirmDiscardIfNeeded = useCallback((): Promise<boolean> => {
-    if (!dirtyRef.current) return Promise.resolve(true);
+    const ds = documentSessionRef.current;
+    const dirty = ds ? shouldPromptDiscard(ds) : dirtyRef.current;
+    if (!dirty) return Promise.resolve(true);
     return new Promise((resolve) => {
       setDiscardPrompt({ resolve });
     });
   }, []);
 
+  const syncDocumentSessionAfterReplace = useCallback(
+    (ds: DocumentSession) => {
+      workspaceModeRef.current = ds.workspaceMode;
+      setWorkspaceMode(ds.workspaceMode);
+      setActiveViewportId(ds.activeViewportId);
+      activeViewportIdRef.current = ds.activeViewportId;
+      setSelectedViewportId(ds.selectedViewportId);
+      setSelectedPaperEntityIds([...ds.selectedPaperEntityIds]);
+      sessionRef.current = ds.toolSession;
+      syncSession(ds.toolSession);
+      cameraRef.current = ds.camera;
+      modelCameraRef.current = ds.modelCamera;
+      syncCamera(ds.camera);
+    },
+    [syncCamera, syncSession],
+  );
+
   const newDrawing = useCallback(async () => {
     if (!(await confirmDiscardIfNeeded())) return;
-    suppressDirtyRef.current = true;
+    const ds = documentSessionRef.current;
+    if (ds) {
+      setSuppressDirty(true);
+      replaceSessionDocument(
+        ds,
+        ensureLayouts(createEmptyDocument('Untitled Drawing')),
+        { filePath: null, dirty: false },
+      );
+      markDirty(false);
+      setSuppressDirty(false);
+      setProjectPath(null);
+      syncDocumentSessionAfterReplace(ds);
+      setStatusExtra(null);
+      return;
+    }
+    setSuppressDirty(true);
     busRef.current.reset(
       ensureLayouts(createEmptyDocument('Untitled Drawing')),
     );
@@ -1509,12 +1608,21 @@ export function App() {
     setSelectedViewportId(null);
     setSelectedPaperEntityIds([]);
     markDirty(false);
-    suppressDirtyRef.current = false;
+    setSuppressDirty(false);
     setProjectPath(null);
     syncSession(createToolSession('select'));
     syncCamera(createCamera());
+    viewHistoryRef.current.clear();
     setStatusExtra(null);
-  }, [confirmDiscardIfNeeded, markDirty, setProjectPath, syncCamera, syncSession]);
+  }, [
+    confirmDiscardIfNeeded,
+    markDirty,
+    setProjectPath,
+    setSuppressDirty,
+    syncCamera,
+    syncDocumentSessionAfterReplace,
+    syncSession,
+  ]);
 
   const saveDrawing = useCallback(
     async (forceDialog = false) => {
@@ -1526,13 +1634,13 @@ export function App() {
       const finishLocalSave = (savedPath: string) => {
         setProjectPath(savedPath);
         const name = basename(savedPath).replace(/\.ratecad$/i, '');
-        suppressDirtyRef.current = true;
+        setSuppressDirty(true);
         busRef.current.updateWithoutHistory((d) => ({
           ...d,
           meta: { ...d.meta, name, updatedAt: new Date().toISOString() },
         }));
         markDirty(false);
-        suppressDirtyRef.current = false;
+        setSuppressDirty(false);
         rememberRecentDrawing(savedPath, contents);
         setStatusExtra(`Saved ${basename(savedPath)}`);
       };
@@ -1601,7 +1709,7 @@ export function App() {
         );
       }
     },
-    [markDirty, rememberRecentDrawing, setProjectPath],
+    [markDirty, rememberRecentDrawing, setProjectPath, setSuppressDirty],
   );
 
   const openDrawing = useCallback(async () => {
@@ -1614,21 +1722,35 @@ export function App() {
         setStatusExtra(`Invalid file: ${parsed.error}`);
         return;
       }
-      suppressDirtyRef.current = true;
       const opened = ensureLayouts(parsed.document);
-      busRef.current.reset(opened);
-      setProjectPath(path ?? null);
-      markDirty(false);
-      suppressDirtyRef.current = false;
-      syncSession(createToolSession('select'));
-      syncCamera(createCamera());
-      modelCameraRef.current = createCamera();
-      workspaceModeRef.current =
-        opened.activeLayoutId == null ? 'MODEL_SPACE' : 'PAPER_SPACE';
-      setWorkspaceMode(workspaceModeRef.current);
-      setActiveViewportId(null);
-      setSelectedViewportId(null);
-      setSelectedPaperEntityIds([]);
+      const ds = documentSessionRef.current;
+      if (ds) {
+        setSuppressDirty(true);
+        replaceSessionDocument(ds, opened, {
+          filePath: path ?? null,
+          dirty: false,
+        });
+        markDirty(false);
+        setSuppressDirty(false);
+        setProjectPath(path ?? null);
+        syncDocumentSessionAfterReplace(ds);
+      } else {
+        setSuppressDirty(true);
+        busRef.current.reset(opened);
+        setProjectPath(path ?? null);
+        markDirty(false);
+        setSuppressDirty(false);
+        syncSession(createToolSession('select'));
+        syncCamera(createCamera());
+        modelCameraRef.current = createCamera();
+        viewHistoryRef.current.clear();
+        workspaceModeRef.current =
+          opened.activeLayoutId == null ? 'MODEL_SPACE' : 'PAPER_SPACE';
+        setWorkspaceMode(workspaceModeRef.current);
+        setActiveViewportId(null);
+        setSelectedViewportId(null);
+        setSelectedPaperEntityIds([]);
+      }
       if (path) rememberRecentDrawing(path, contents);
       setStatusExtra(path ? `Opened ${basename(path)}` : 'Opened drawing');
     };
@@ -1691,8 +1813,8 @@ export function App() {
     markDirty,
     rememberRecentDrawing,
     setProjectPath,
-    syncCamera,
-    syncSession,
+    setSuppressDirty,
+    syncDocumentSessionAfterReplace,
   ]);
 
   const openRecentDrawing = useCallback(
@@ -1704,21 +1826,35 @@ export function App() {
           setStatusExtra(`Invalid file: ${parsed.error}`);
           return;
         }
-        suppressDirtyRef.current = true;
         const opened = ensureLayouts(parsed.document);
-        busRef.current.reset(opened);
-        setProjectPath(path ?? null);
-        markDirty(false);
-        suppressDirtyRef.current = false;
-        syncSession(createToolSession('select'));
-        syncCamera(createCamera());
-        modelCameraRef.current = createCamera();
-        workspaceModeRef.current =
-          opened.activeLayoutId == null ? 'MODEL_SPACE' : 'PAPER_SPACE';
-        setWorkspaceMode(workspaceModeRef.current);
-        setActiveViewportId(null);
-        setSelectedViewportId(null);
-        setSelectedPaperEntityIds([]);
+        const ds = documentSessionRef.current;
+        if (ds) {
+          setSuppressDirty(true);
+          replaceSessionDocument(ds, opened, {
+            filePath: path ?? null,
+            dirty: false,
+          });
+          markDirty(false);
+          setSuppressDirty(false);
+          setProjectPath(path ?? null);
+          syncDocumentSessionAfterReplace(ds);
+        } else {
+          setSuppressDirty(true);
+          busRef.current.reset(opened);
+          setProjectPath(path ?? null);
+          markDirty(false);
+          setSuppressDirty(false);
+          syncSession(createToolSession('select'));
+          syncCamera(createCamera());
+          modelCameraRef.current = createCamera();
+          viewHistoryRef.current.clear();
+          workspaceModeRef.current =
+            opened.activeLayoutId == null ? 'MODEL_SPACE' : 'PAPER_SPACE';
+          setWorkspaceMode(workspaceModeRef.current);
+          setActiveViewportId(null);
+          setSelectedViewportId(null);
+          setSelectedPaperEntityIds([]);
+        }
         rememberRecentDrawing(path ?? entry.path, contents);
         setStatusExtra(`Opened ${basename(path ?? entry.path)}`);
       };
@@ -1765,8 +1901,8 @@ export function App() {
       markDirty,
       rememberRecentDrawing,
       setProjectPath,
-      syncCamera,
-      syncSession,
+      setSuppressDirty,
+      syncDocumentSessionAfterReplace,
     ],
   );
 
@@ -1783,7 +1919,22 @@ export function App() {
     }
     window.close();
     // Browser / blocked close: soft-exit to a clean untitled drawing.
-    suppressDirtyRef.current = true;
+    const ds = documentSessionRef.current;
+    if (ds) {
+      setSuppressDirty(true);
+      replaceSessionDocument(
+        ds,
+        ensureLayouts(createEmptyDocument('Untitled Drawing')),
+        { filePath: null, dirty: false },
+      );
+      markDirty(false);
+      setSuppressDirty(false);
+      setProjectPath(null);
+      syncDocumentSessionAfterReplace(ds);
+      setStatusExtra('Session closed');
+      return;
+    }
+    setSuppressDirty(true);
     busRef.current.reset(
       ensureLayouts(createEmptyDocument('Untitled Drawing')),
     );
@@ -1793,16 +1944,19 @@ export function App() {
     setSelectedViewportId(null);
     setSelectedPaperEntityIds([]);
     markDirty(false);
-    suppressDirtyRef.current = false;
+    setSuppressDirty(false);
     setProjectPath(null);
     syncSession(createToolSession('select'));
     syncCamera(createCamera());
+    viewHistoryRef.current.clear();
     setStatusExtra('Session closed');
   }, [
     confirmDiscardIfNeeded,
     markDirty,
     setProjectPath,
+    setSuppressDirty,
     syncCamera,
+    syncDocumentSessionAfterReplace,
     syncSession,
   ]);
 
