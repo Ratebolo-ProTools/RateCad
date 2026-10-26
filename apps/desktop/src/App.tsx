@@ -104,6 +104,7 @@ import {
   bindSessionEngine,
   clearSessionDirty,
   createUntitledBus,
+  getSessionTitle,
   markSessionDirty,
   replaceSessionDocument,
   setSessionFilePath,
@@ -115,13 +116,21 @@ import {
 import {
   createAndRegisterSession,
   createDocumentSessionStore,
+  getSession,
+  setActiveSession,
   type DocumentSessionStore,
 } from './documentSessionStore';
 import {
+  CLOSE_TAB_ACTIONS_ENABLED,
   MULTI_DOCUMENT_ACTIONS_ENABLED,
   applyLiveActiveTabState,
   resolveDocumentTabItems,
 } from './documentTabsModel';
+import {
+  allocateUntitledDrawingNameFromStore,
+  persistActiveSessionMirrors,
+  prepareSessionDeactivation,
+} from './documentSessionSwitch';
 import { serializeDocument, tryParseDocument } from '@ratecad/io';
 import {
   appendInputBuffer,
@@ -570,8 +579,8 @@ export function App() {
   const dirtyRef = useRef(false);
   const suppressDirtyRef = useRef(false);
   /**
-   * P3-B3A: single active DocumentSession owns bus / selection / engine /
-   * cameras / view history. Multi-tab UI switching stays disabled (P3-B3B).
+   * P3-B3B: DocumentSession store holds N isolated sessions; App mirrors
+   * only the active session's bus / selection / engine / cameras / history.
    */
   const sessionStoreRef = useRef<DocumentSessionStore>(
     createDocumentSessionStore(),
@@ -591,6 +600,11 @@ export function App() {
       },
     );
   }
+  const [activeSessionId, setActiveSessionId] = useState<string>(
+    () => documentSessionRef.current!.id,
+  );
+  /** Bumps when the session list or active tab changes (tab strip refresh). */
+  const [sessionListVersion, setSessionListVersion] = useState(0);
   const rafPanRef = useRef<number | null>(null);
   const pendingPanRef = useRef<{ dx: number; dy: number } | null>(null);
   const commandLineRef = useRef('');
@@ -633,6 +647,10 @@ export function App() {
   const [selectedPaperEntityIds, setSelectedPaperEntityIds] = useState<
     string[]
   >([]);
+  const selectedPaperEntityIdsRef = useRef<string[]>([]);
+  useEffect(() => {
+    selectedPaperEntityIdsRef.current = selectedPaperEntityIds;
+  }, [selectedPaperEntityIds]);
   /** Live paper-space viewport drag (move/resize) — preview only until pointer up. */
   type VpDragSession =
     | {
@@ -1034,20 +1052,23 @@ export function App() {
   );
 
   useEffect(() => {
-    let previous = busRef.current.getDocument();
-    return busRef.current.subscribe((next) => {
+    const bus = busRef.current;
+    let previous = bus.getDocument();
+    return bus.subscribe((next) => {
+      // Ignore notifications from a bus that is no longer active.
+      if (busRef.current !== bus) return;
       setDoc(next);
-      setCanUndo(busRef.current.canUndo());
-      setCanRedo(busRef.current.canRedo());
+      setCanUndo(bus.canUndo());
+      setCanRedo(bus.canRedo());
       if (!suppressDirtyRef.current) {
-        const kind = busRef.current.getLastChangeKind();
+        const kind = bus.getLastChangeKind();
         if (shouldMarkDirtyForBusChange(kind, previous, next)) {
           markDirty(true);
         }
       }
       previous = next;
     });
-  }, [markDirty]);
+  }, [markDirty, activeSessionId]);
 
   useEffect(() => {
     const wrap = wrapRef.current;
@@ -1337,35 +1358,57 @@ export function App() {
     };
   }, [beginPanTool, zoomExtents, zoomPrevious, zoomWindow]);
 
-  // Bind CadCommandEngine onto the active DocumentSession (P3-B3A ownership).
+  // Bind CadCommandEngine onto the active DocumentSession (P3-B3A/B3B).
+  // Host methods guard on session id so stale engines cannot mutate the
+  // newly active drawing after a tab switch.
   useEffect(() => {
     const ds = documentSessionRef.current;
     if (!ds) return;
+    const boundSessionId = ds.id;
     selectionManagerRef.current = ds.selectionManager;
+
+    const activeDs = (): DocumentSession | null => {
+      const current = documentSessionRef.current;
+      if (!current || current.disposed || current.id !== boundSessionId) {
+        return null;
+      }
+      return current;
+    };
+
     const host = {
-      getUnits: () => ds.bus.getDocument().settings.units,
-      getWorldUnit: () => ds.bus.getDocument().settings.worldUnit ?? 'ft',
-      getSelectedIds: () => ds.bus.getDocument().selection,
+      getUnits: () =>
+        (activeDs() ?? ds).bus.getDocument().settings.units,
+      getWorldUnit: () =>
+        (activeDs() ?? ds).bus.getDocument().settings.worldUnit ?? 'ft',
+      getSelectedIds: () =>
+        (activeDs() ?? ds).bus.getDocument().selection,
       getCursor: () => cursorWorldRef.current,
       activateTool: (tool: string) => {
+        if (!activeDs()) return;
         activateToolOnly(tool as ToolId);
       },
       activateSelect: () => {
+        if (!activeDs()) return;
         activateToolOnly('select');
       },
       clearSelection: () => {
-        ds.selectionManager.clear();
-        setDoc(ds.bus.getDocument());
-        setSessionHoveredId(ds, null);
+        const session = activeDs();
+        if (!session) return;
+        session.selectionManager.clear();
+        setDoc(session.bus.getDocument());
+        setSessionHoveredId(session, null);
         hoveredIdRef.current = null;
         setHoveredId(null);
       },
       onNaturalLanguage: (text: string) => {
+        if (!activeDs()) return;
         setCommandFeedback(`AI (NL): ${text}`);
       },
       getWorkspaceMode: () => workspaceModeRef.current,
       enterMspace: () => {
-        const d = ds.bus.getDocument();
+        const session = activeDs();
+        if (!session) return { ok: false, message: 'MSPACE: Inactive session' };
+        const d = session.bus.getDocument();
         const layout = d.layouts.find((l) => l.id === d.activeLayoutId);
         if (!layout) {
           return { ok: false, message: 'MSPACE: No active layout' };
@@ -1382,13 +1425,13 @@ export function App() {
           return { ok: false, message: 'MSPACE: No active viewport' };
         }
         workspaceModeRef.current = 'VIEWPORT_MODEL_SPACE';
-        ds.workspaceMode = 'VIEWPORT_MODEL_SPACE';
+        session.workspaceMode = 'VIEWPORT_MODEL_SPACE';
         setWorkspaceMode('VIEWPORT_MODEL_SPACE');
         setActiveViewportId(target.id);
         activeViewportIdRef.current = target.id;
-        ds.activeViewportId = target.id;
+        session.activeViewportId = target.id;
         setSelectedViewportId(target.id);
-        ds.selectedViewportId = target.id;
+        session.selectedViewportId = target.id;
         const vpIndex = layout.viewports.findIndex((v) => v.id === target.id);
         const msg = workspaceModeLabel(
           'VIEWPORT_MODEL_SPACE',
@@ -1399,47 +1442,51 @@ export function App() {
         return { ok: true, message: `MSPACE: ${msg}` };
       },
       enterPspace: () => {
-        const d = ds.bus.getDocument();
+        const session = activeDs();
+        if (!session) return { ok: false, message: 'PSPACE: Inactive session' };
+        const d = session.bus.getDocument();
         const layout = d.layouts.find((l) => l.id === d.activeLayoutId);
         if (!layout) {
           return { ok: false, message: 'PSPACE: No active layout' };
         }
         workspaceModeRef.current = 'PAPER_SPACE';
-        ds.workspaceMode = 'PAPER_SPACE';
+        session.workspaceMode = 'PAPER_SPACE';
         setWorkspaceMode('PAPER_SPACE');
         setActiveViewportId(null);
         activeViewportIdRef.current = null;
-        ds.activeViewportId = null;
+        session.activeViewportId = null;
         setStatusExtra(`PAPER SPACE · ${layout.name}`);
         return { ok: true, message: `PSPACE: PAPER SPACE · ${layout.name}` };
       },
       onLayoutChanged: (layoutId: string | null, message: string) => {
-        setDoc(ds.bus.getDocument());
+        const session = activeDs();
+        if (!session) return;
+        setDoc(session.bus.getDocument());
         markDirty(true);
         if (layoutId == null) {
           workspaceModeRef.current = 'MODEL_SPACE';
-          ds.workspaceMode = 'MODEL_SPACE';
+          session.workspaceMode = 'MODEL_SPACE';
           setWorkspaceMode('MODEL_SPACE');
           setActiveViewportId(null);
           activeViewportIdRef.current = null;
-          ds.activeViewportId = null;
+          session.activeViewportId = null;
           setStatusExtra('MODEL SPACE');
         } else {
           if (workspaceModeRef.current === 'MODEL_SPACE') {
             modelCameraRef.current = { ...cameraRef.current };
-            ds.modelCamera = modelCameraRef.current;
+            session.modelCamera = modelCameraRef.current;
           }
           workspaceModeRef.current = 'PAPER_SPACE';
-          ds.workspaceMode = 'PAPER_SPACE';
+          session.workspaceMode = 'PAPER_SPACE';
           setWorkspaceMode('PAPER_SPACE');
           setActiveViewportId(null);
           activeViewportIdRef.current = null;
-          ds.activeViewportId = null;
+          session.activeViewportId = null;
           setSelectedViewportId(null);
-          ds.selectedViewportId = null;
+          session.selectedViewportId = null;
           setSelectedPaperEntityIds([]);
-          ds.selectedPaperEntityIds = [];
-          const layout = ds.bus
+          session.selectedPaperEntityIds = [];
+          const layout = session.bus
             .getDocument()
             .layouts.find((l) => l.id === layoutId);
           setStatusExtra(
@@ -1449,10 +1496,12 @@ export function App() {
         setCommandFeedback(message);
       },
       openUnitsDialog: () => {
+        if (!activeDs()) return;
         showUnitsDialogRef.current = true;
         setShowUnitsDialog(true);
       },
       openDimStyleDialog: () => {
+        if (!activeDs()) return;
         showDimStyleDialogRef.current = true;
         setShowDimStyleDialog(true);
       },
@@ -1468,7 +1517,7 @@ export function App() {
     }
     engineRef.current = ds.engine;
     refreshEngineUi();
-  }, [activateToolOnly, markDirty, refreshEngineUi]);
+  }, [activateToolOnly, activeSessionId, markDirty, refreshEngineUi]);
 
   const activateTool = useCallback(
     (tool: ToolId, dimKind?: DimensionKind) => {
@@ -1597,6 +1646,164 @@ export function App() {
     },
     [syncCamera, syncSession],
   );
+
+  const flushActiveSessionMirrors = useCallback(() => {
+    const ds = documentSessionRef.current;
+    if (!ds || ds.disposed) return;
+    persistActiveSessionMirrors(ds, {
+      camera: cameraRef.current,
+      modelCamera: modelCameraRef.current,
+      toolSession: sessionRef.current,
+      workspaceMode: workspaceModeRef.current,
+      activeViewportId: activeViewportIdRef.current,
+      selectedViewportId: selectedViewportIdRef.current,
+      selectedPaperEntityIds: selectedPaperEntityIdsRef.current,
+      commandLineBuffer: commandLineRef.current,
+      hoveredId: hoveredIdRef.current,
+      dirty: dirtyRef.current,
+      filePath: filePathRef.current,
+    });
+  }, []);
+
+  const cancelActiveTransientWork = useCallback(() => {
+    engineRef.current?.cancel(false);
+    engineRef.current?.setBuffer('');
+    isPanningRef.current = false;
+    lastPointerRef.current = null;
+    spaceDownRef.current = false;
+    cancelViewportDrag();
+    const cancelled = createToolSession('select');
+    sessionRef.current = cancelled;
+    setSession(cancelled);
+    commandLineRef.current = '';
+    setCommandLine('');
+    setRectLengthText('');
+    setRectWidthText('');
+    setEngineUi(null);
+    setCommandFeedback(null);
+    hoveredIdRef.current = null;
+    setHoveredId(null);
+  }, [cancelViewportDrag]);
+
+  /**
+   * P3-B3B — activate an existing DocumentSession: cancel incomplete work on
+   * the current tab, persist mirrors, rebind App refs to the target session.
+   */
+  const switchToDocumentSession = useCallback(
+    (sessionId: string) => {
+      const store = sessionStoreRef.current;
+      const current = documentSessionRef.current;
+      if (current?.id === sessionId) return;
+      const next = getSession(store, sessionId);
+      if (!next || next.disposed) return;
+
+      cancelActiveTransientWork();
+      if (current && !current.disposed) {
+        flushActiveSessionMirrors();
+        prepareSessionDeactivation(current);
+      }
+
+      setActiveSession(store, next.id);
+      documentSessionRef.current = next;
+      busRef.current = next.bus;
+      viewHistoryRef.current = next.viewHistory;
+      selectionManagerRef.current = next.selectionManager;
+      cameraRef.current = next.camera;
+      modelCameraRef.current = next.modelCamera;
+      sessionRef.current = next.toolSession;
+      workspaceModeRef.current = next.workspaceMode;
+      activeViewportIdRef.current = next.activeViewportId;
+      selectedViewportIdRef.current = next.selectedViewportId;
+      selectedPaperEntityIdsRef.current = [...next.selectedPaperEntityIds];
+      filePathRef.current = next.filePath;
+      dirtyRef.current = next.dirty;
+      hoveredIdRef.current = next.hoveredId;
+      commandLineRef.current = next.commandLineBuffer;
+      suppressDirtyRef.current = next.suppressDirty;
+      engineRef.current = next.engine;
+
+      setActiveSessionId(next.id);
+      setSessionListVersion((n) => n + 1);
+      setDoc(ensureLayouts(next.bus.getDocument()));
+      setCanUndo(next.bus.canUndo());
+      setCanRedo(next.bus.canRedo());
+      setCamera(next.camera);
+      setSession(next.toolSession);
+      setWorkspaceMode(next.workspaceMode);
+      setActiveViewportId(next.activeViewportId);
+      setSelectedViewportId(next.selectedViewportId);
+      setSelectedPaperEntityIds([...next.selectedPaperEntityIds]);
+      setFilePath(next.filePath);
+      setDirty(next.dirty);
+      setHoveredId(next.hoveredId);
+      setCommandLine(next.commandLineBuffer);
+      setRectLengthText('');
+      setRectWidthText('');
+      setStatusExtra(null);
+      refreshEngineUi();
+      wheelHistoryArmedRef.current = true;
+      panHistoryPushedRef.current = false;
+    },
+    [cancelActiveTransientWork, flushActiveSessionMirrors, refreshEngineUi],
+  );
+
+  /** P3-B3B — create a new untitled DocumentSession tab and activate it. */
+  const createNewDocumentTab = useCallback(() => {
+    const store = sessionStoreRef.current;
+    cancelActiveTransientWork();
+    const current = documentSessionRef.current;
+    if (current && !current.disposed) {
+      flushActiveSessionMirrors();
+      prepareSessionDeactivation(current);
+    }
+
+    const name = allocateUntitledDrawingNameFromStore(store);
+    const session = createAndRegisterSession(store, {
+      document: ensureLayouts(createEmptyDocument(name)),
+      trackDirtyFromBus: false,
+    });
+    setActiveSession(store, session.id);
+    documentSessionRef.current = session;
+    busRef.current = session.bus;
+    viewHistoryRef.current = session.viewHistory;
+    selectionManagerRef.current = session.selectionManager;
+    cameraRef.current = session.camera;
+    modelCameraRef.current = session.modelCamera;
+    sessionRef.current = session.toolSession;
+    workspaceModeRef.current = session.workspaceMode;
+    activeViewportIdRef.current = null;
+    selectedViewportIdRef.current = null;
+    selectedPaperEntityIdsRef.current = [];
+    filePathRef.current = null;
+    dirtyRef.current = false;
+    hoveredIdRef.current = null;
+    commandLineRef.current = '';
+    suppressDirtyRef.current = false;
+    engineRef.current = null;
+
+    setActiveSessionId(session.id);
+    setSessionListVersion((n) => n + 1);
+    setDoc(ensureLayouts(session.bus.getDocument()));
+    setCanUndo(false);
+    setCanRedo(false);
+    setCamera(session.camera);
+    setSession(session.toolSession);
+    setWorkspaceMode('MODEL_SPACE');
+    setActiveViewportId(null);
+    setSelectedViewportId(null);
+    setSelectedPaperEntityIds([]);
+    setFilePath(null);
+    setDirty(false);
+    setHoveredId(null);
+    setCommandLine('');
+    setRectLengthText('');
+    setRectWidthText('');
+    setStatusExtra(`New drawing · ${getSessionTitle(session)}`);
+    setCommandFeedback(null);
+    setEngineUi(null);
+    wheelHistoryArmedRef.current = true;
+    panHistoryPushedRef.current = false;
+  }, [cancelActiveTransientWork, flushActiveSessionMirrors]);
 
   const newDrawing = useCallback(async () => {
     if (!(await confirmDiscardIfNeeded())) return;
@@ -3309,10 +3516,9 @@ export function App() {
   const multiSelectLabel =
     selected.length > 1 ? `${selected.length} objects selected` : null;
   const displayName = `${doc.meta.name}${dirty ? ' *' : ''}`;
-  const activeSessionId = documentSessionRef.current?.id ?? null;
   const documentTabs = useMemo(() => {
     const store = sessionStoreRef.current;
-    const fallbackId = activeSessionId ?? 'session-active';
+    const fallbackId = activeSessionId || 'session-active';
     const items = resolveDocumentTabItems(store, {
       sessionId: fallbackId,
       title: doc.meta.name || 'Untitled Drawing',
@@ -3324,7 +3530,8 @@ export function App() {
       dirty,
       filePath: filePath,
     });
-  }, [activeSessionId, dirty, doc.meta.name, filePath]);
+    // sessionListVersion refreshes inactive tab dirty/titles from the store.
+  }, [activeSessionId, dirty, doc.meta.name, filePath, sessionListVersion]);
   const snapLabel = session.lastSnap?.snapped ? session.lastSnap.label : null;
   const currentLayer = getLayer(doc, doc.currentLayerId) ?? doc.layers[0];
   const showTextDialog = session.mode === 'text-input';
@@ -3499,6 +3706,9 @@ export function App() {
         documentTabs={documentTabs}
         activeSessionId={activeSessionId}
         multiDocumentActionsEnabled={MULTI_DOCUMENT_ACTIONS_ENABLED}
+        closeTabActionsEnabled={CLOSE_TAB_ACTIONS_ENABLED}
+        onSelectDocumentTab={switchToDocumentSession}
+        onNewDocumentTab={createNewDocumentTab}
         activeTool={session.activeTool}
         dimKind={session.dimKind}
         canUndo={canUndo}

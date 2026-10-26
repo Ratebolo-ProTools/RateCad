@@ -5,6 +5,7 @@ import { DocumentTabs } from './DocumentTabs.js';
 import {
   CLOSE_TAB_DISABLED_TOOLTIP,
   NEW_TAB_DISABLED_TOOLTIP,
+  NEW_TAB_ENABLED_TOOLTIP,
   START_TAB_TOOLTIP,
   type DocumentTabItem,
 } from './documentTabsModel.js';
@@ -17,7 +18,8 @@ function renderTabs(
     createElement(DocumentTabs, {
       tabs,
       activeSessionId: tabs.find((t) => t.active)?.sessionId ?? null,
-      multiDocumentActionsEnabled: false,
+      multiDocumentActionsEnabled: true,
+      closeTabActionsEnabled: false,
       ...extras,
     }),
   );
@@ -100,12 +102,21 @@ describe('P3-B2 DocumentTabs rendering', () => {
     expect(html).toMatch(/doc-tab-start[^>]*disabled/);
   });
 
-  it('disables multi-document new and close actions', () => {
+  it('enables new tab while keeping close disabled (P3-B3B)', () => {
     const html = renderTabs(sampleTabs);
-    expect(html).toContain(NEW_TAB_DISABLED_TOOLTIP);
+    expect(html).toContain(NEW_TAB_ENABLED_TOOLTIP);
     expect(html).toContain(CLOSE_TAB_DISABLED_TOOLTIP);
-    expect(html).toContain('doc-tab-add is-disabled');
+    expect(html).not.toContain('doc-tab-add is-disabled');
     expect(html).toContain('doc-tab-close is-disabled');
+    expect(html).toContain('aria-label="New drawing"');
+  });
+
+  it('can disable multi-document actions when explicitly blocked', () => {
+    const html = renderTabs(sampleTabs, {
+      multiDocumentActionsEnabled: false,
+    });
+    expect(html).toContain(NEW_TAB_DISABLED_TOOLTIP);
+    expect(html).toContain('doc-tab-add is-disabled');
     expect(html).toMatch(/doc-tab-add[^>]*disabled/);
   });
 
@@ -132,11 +143,11 @@ describe('P3-B2 DocumentTabs rendering', () => {
     expect(html.match(/data-session-id=/g)?.length).toBe(8);
   });
 
-  it('can enable multi-document actions when explicitly allowed (future)', () => {
+  it('can enable close when explicitly allowed (P3-B4 future)', () => {
     const html = renderTabs(sampleTabs, {
-      multiDocumentActionsEnabled: true,
+      closeTabActionsEnabled: true,
     });
-    expect(html).not.toContain('doc-tab-add is-disabled');
-    expect(html).toContain('aria-label="New drawing"');
+    expect(html).not.toContain('doc-tab-close is-disabled');
+    expect(html).toContain('aria-label="Close Untitled Drawing"');
   });
 });

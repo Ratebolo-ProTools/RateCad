@@ -1,5 +1,5 @@
 /**
- * P3-B3A — architecture classification for DocumentSession isolation.
+ * DocumentSession architecture classification (P3-B1 → P3-B3B).
  *
  * Document-specific (must be per session):
  *   DrawingDocument (via CommandBus), CommandBus undo/redo,
@@ -16,9 +16,8 @@
  *   createDefaultEngineRegistry() factories, IO serialize/parse,
  *   geometry/viewport pure helpers, command class definitions.
  *
- * Still mirrored in App React state for the single active session
- * (P3-B3B will rebind these on tab switch):
- *   doc/camera React state, canvas renderer, status/command UI.
+ * P3-B3B rebinds App React mirrors / canvas / command UI on tab switch.
+ * Close / save / discard multi-file workflows remain P3-B4.
  */
 
 export const DOCUMENT_SPECIFIC_STATE = [
@@ -59,10 +58,12 @@ export const SHARED_IMMUTABLE_SERVICES = [
   'commandClassDefinitions',
 ] as const;
 
-/** Remaining App mirrors / bindings before UI multi-tab switch (P3-B3B). */
-export const REMAINING_FOR_P3_B3B_UI_SWITCH = [
-  'reactDocCameraMirrors',
-  'canvasRendererBindings',
-  'statusAndCommandLineReactState',
-  'documentTabSwitchHandlers',
+/** P3-B3B completed App mirror rebind on UI switch. */
+export const REMAINING_FOR_P3_B3B_UI_SWITCH = [] as const;
+
+/** Remaining work after P3-B3B (not started until approved). */
+export const REMAINING_FOR_P3_B4 = [
+  'closeTabWithSaveDiscardPrompt',
+  'multiDocumentCloseWorkflows',
+  'closeLastDrawingPolicy',
 ] as const;

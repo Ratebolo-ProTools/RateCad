@@ -53,10 +53,13 @@ export type RibbonLayoutInfo = {
 
 export type RibbonProps = {
   displayName: string;
-  /** P3-B2 session-aware drawing tabs (single active session until P3-B3). */
+  /** Session-aware drawing tabs (P3-B3B: create + switch enabled). */
   documentTabs: DocumentTabItem[];
   activeSessionId: string | null;
   multiDocumentActionsEnabled?: boolean;
+  closeTabActionsEnabled?: boolean;
+  onSelectDocumentTab?: (sessionId: string) => void;
+  onNewDocumentTab?: () => void;
   activeTool: ToolId;
   dimKind: DimensionKind;
   canUndo: boolean;
@@ -2199,6 +2202,9 @@ export function Ribbon(props: RibbonProps) {
         tabs={props.documentTabs}
         activeSessionId={props.activeSessionId}
         multiDocumentActionsEnabled={props.multiDocumentActionsEnabled}
+        closeTabActionsEnabled={props.closeTabActionsEnabled}
+        onSelectTab={props.onSelectDocumentTab}
+        onNewTab={props.onNewDocumentTab}
       />
     </>
   );

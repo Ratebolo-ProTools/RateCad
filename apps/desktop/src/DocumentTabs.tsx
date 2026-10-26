@@ -1,15 +1,17 @@
 /**
- * P3-B2 — session-aware document tab strip.
+ * P3-B2/B3B — session-aware document tab strip.
  *
- * UI foundation only: Start + drawing tabs + scroll + disabled multi-doc
- * actions. Editing remains single-session until P3-B3 isolation.
+ * P3-B3B enables + (new) and inactive-tab switch. Close stays disabled
+ * until P3-B4 save/discard close workflows.
  */
 
 import { useEffect, useId, useRef } from 'react';
 import {
   CLOSE_TAB_DISABLED_TOOLTIP,
   NEW_TAB_DISABLED_TOOLTIP,
+  NEW_TAB_ENABLED_TOOLTIP,
   START_TAB_TOOLTIP,
+  areCloseTabActionsEnabled,
   areMultiDocumentActionsEnabled,
   truncateTabTitle,
   type DocumentTabItem,
@@ -18,8 +20,10 @@ import {
 export type DocumentTabsProps = {
   tabs: DocumentTabItem[];
   activeSessionId: string | null;
-  /** When false (P3-B2 default), + / close / switch stay non-interactive. */
+  /** When false, + / switch stay non-interactive. */
   multiDocumentActionsEnabled?: boolean;
+  /** When false (P3-B3B default), close × stays non-interactive. */
+  closeTabActionsEnabled?: boolean;
   /** Start tab is a preserved placeholder unless onSelectStart is provided. */
   startInteractive?: boolean;
   onSelectStart?: () => void;
@@ -32,6 +36,7 @@ export function DocumentTabs(props: DocumentTabsProps) {
   const multiEnabled = areMultiDocumentActionsEnabled(
     props.multiDocumentActionsEnabled,
   );
+  const closeEnabled = areCloseTabActionsEnabled(props.closeTabActionsEnabled);
   const startInteractive = props.startInteractive === true;
   const listId = useId();
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -57,7 +62,7 @@ export function DocumentTabs(props: DocumentTabsProps) {
   };
 
   const handleClose = (sessionId: string) => {
-    if (!multiEnabled) return;
+    if (!closeEnabled) return;
     props.onCloseTab?.(sessionId);
   };
 
@@ -119,17 +124,17 @@ export function DocumentTabs(props: DocumentTabsProps) {
                 <span className="sr-only"> (unsaved changes)</span>
               ) : null}
               <span
-                className={`doc-tab-close${multiEnabled ? '' : ' is-disabled'}`}
+                className={`doc-tab-close${closeEnabled ? '' : ' is-disabled'}`}
                 role="button"
-                tabIndex={multiEnabled ? 0 : -1}
-                aria-disabled={!multiEnabled}
+                tabIndex={closeEnabled ? 0 : -1}
+                aria-disabled={!closeEnabled}
                 aria-label={
-                  multiEnabled
+                  closeEnabled
                     ? `Close ${tab.title}`
                     : CLOSE_TAB_DISABLED_TOOLTIP
                 }
                 title={
-                  multiEnabled
+                  closeEnabled
                     ? `Close ${tab.title}`
                     : CLOSE_TAB_DISABLED_TOOLTIP
                 }
@@ -139,7 +144,7 @@ export function DocumentTabs(props: DocumentTabsProps) {
                   handleClose(tab.sessionId);
                 }}
                 onKeyDown={(e) => {
-                  if (!multiEnabled) return;
+                  if (!closeEnabled) return;
                   if (e.key === 'Enter' || e.key === ' ') {
                     e.preventDefault();
                     e.stopPropagation();
@@ -158,7 +163,7 @@ export function DocumentTabs(props: DocumentTabsProps) {
         type="button"
         className={`doc-tab-add${multiEnabled ? '' : ' is-disabled'}`}
         title={
-          multiEnabled ? 'New drawing (new tab)' : NEW_TAB_DISABLED_TOOLTIP
+          multiEnabled ? NEW_TAB_ENABLED_TOOLTIP : NEW_TAB_DISABLED_TOOLTIP
         }
         aria-label={
           multiEnabled ? 'New drawing' : NEW_TAB_DISABLED_TOOLTIP

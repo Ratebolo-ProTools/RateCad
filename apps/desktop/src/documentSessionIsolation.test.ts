@@ -38,8 +38,12 @@ import {
 import {
   DOCUMENT_SPECIFIC_STATE,
   REMAINING_FOR_P3_B3B_UI_SWITCH,
+  REMAINING_FOR_P3_B4,
 } from './documentSessionArchitecture.js';
-import { MULTI_DOCUMENT_ACTIONS_ENABLED } from './documentTabsModel.js';
+import {
+  CLOSE_TAB_ACTIONS_ENABLED,
+  MULTI_DOCUMENT_ACTIONS_ENABLED,
+} from './documentTabsModel.js';
 
 function createIsolatedPair() {
   const a = createDocumentSession({ bindMinimalEngine: true });
@@ -230,11 +234,13 @@ describe('P3-B3A two-session isolation', () => {
     expect(session.engine).toBeNull();
   });
 
-  it('documents architecture ownership and keeps multi-doc UI disabled', () => {
+  it('documents architecture ownership; P3-B3B enables switch, close stays P3-B4', () => {
     expect(DOCUMENT_SPECIFIC_STATE).toContain('CadCommandEngine');
     expect(DOCUMENT_SPECIFIC_STATE).toContain('SelectionManager');
-    expect(REMAINING_FOR_P3_B3B_UI_SWITCH.length).toBeGreaterThan(0);
-    expect(MULTI_DOCUMENT_ACTIONS_ENABLED).toBe(false);
+    expect(REMAINING_FOR_P3_B3B_UI_SWITCH).toHaveLength(0);
+    expect(REMAINING_FOR_P3_B4.length).toBeGreaterThan(0);
+    expect(MULTI_DOCUMENT_ACTIONS_ENABLED).toBe(true);
+    expect(CLOSE_TAB_ACTIONS_ENABLED).toBe(false);
     expect(listSessions(createDocumentSessionStore())).toEqual([]);
   });
 });

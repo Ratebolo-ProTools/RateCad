@@ -5,7 +5,7 @@
  * CommandBus, SelectionManager, CadCommandEngine (when bound), cameras,
  * ViewHistory, tool session, layout/viewport UI fields, file/dirty state.
  *
- * Multi-document UI switching remains disabled (P3-B3B).
+ * P3-B3B enables App tab switching / new-tab create against this ownership.
  * App-shared prefs (ribbon tab, crosshair/pickbox, recents) stay outside.
  */
 
@@ -135,8 +135,8 @@ export const DOCUMENT_SESSION_STATE_KEYS = [
 ] as const;
 
 /**
- * @deprecated P3-B3A owns engine/selection/hover on the session.
- * Remaining work is App React mirror rebind on UI switch (P3-B3B).
+ * @deprecated P3-B3A owns engine/selection/hover; P3-B3B rebinds App mirrors.
+ * Close workflows remain P3-B4.
  */
 export const REMAINING_SHARED_BEFORE_MULTI_TAB = [
   ...REMAINING_FOR_P3_B3B_UI_SWITCH,

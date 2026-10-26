@@ -469,14 +469,8 @@ describe('P3-B1 single-document compatibility', () => {
   });
 
   it('documents remaining shared state before multi-tab', () => {
-    // P3-B3A moved engine/selection onto DocumentSession; remaining items
-    // are App React mirrors / UI switch wiring for P3-B3B.
-    expect(REMAINING_SHARED_BEFORE_MULTI_TAB).toContain(
-      'reactDocCameraMirrors',
-    );
-    expect(REMAINING_SHARED_BEFORE_MULTI_TAB).toContain(
-      'documentTabSwitchHandlers',
-    );
+    // P3-B3B completed App mirror rebind; close workflows remain P3-B4.
+    expect(REMAINING_SHARED_BEFORE_MULTI_TAB).toHaveLength(0);
     expect(listSessions(createDocumentSessionStore())).toEqual([]);
   });
 

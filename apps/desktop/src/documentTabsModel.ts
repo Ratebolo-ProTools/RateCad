@@ -1,7 +1,7 @@
 /**
- * P3-B2 — Document tab view-model helpers.
+ * P3-B2/B3B — Document tab view-model helpers.
  *
- * Maps P3-B1 DocumentSession store state into UI tab descriptors.
+ * Maps DocumentSession store state into UI tab descriptors.
  * Does not own dirty state or create a second session manager.
  */
 
@@ -17,8 +17,14 @@ import {
   type DocumentSessionStore,
 } from './documentSessionStore.js';
 
-/** Multi-document create/close/switch remain disabled until P3-B3 isolation. */
-export const MULTI_DOCUMENT_ACTIONS_ENABLED = false;
+/**
+ * P3-B3B: create new tab + switch between sessions is enabled.
+ * Close remains gated separately (P3-B4).
+ */
+export const MULTI_DOCUMENT_ACTIONS_ENABLED = true;
+
+/** Tab close / discard workflows belong to P3-B4. */
+export const CLOSE_TAB_ACTIONS_ENABLED = false;
 
 export const START_TAB_TOOLTIP =
   'Start workspace — placeholder (not yet interactive)';
@@ -26,8 +32,10 @@ export const START_TAB_TOOLTIP =
 export const NEW_TAB_DISABLED_TOOLTIP =
   'Multiple drawings — not yet available (requires P3-B3 session isolation)';
 
+export const NEW_TAB_ENABLED_TOOLTIP = 'New drawing (new tab)';
+
 export const CLOSE_TAB_DISABLED_TOOLTIP =
-  'Close drawing — not yet available for multi-document (use Application Menu → New to replace this drawing)';
+  'Close drawing — not yet available (P3-B4 multi-file close / save / discard)';
 
 export type DocumentTabItem = {
   sessionId: DocumentSessionId;
@@ -54,7 +62,7 @@ export function documentTabItemFromSession(
   };
 }
 
-/** Build tab items from the P3-B1 session store (no duplicated dirty state). */
+/** Build tab items from the session store (no duplicated dirty state). */
 export function buildDocumentTabItems(
   store: DocumentSessionStore,
 ): DocumentTabItem[] {
@@ -106,11 +114,16 @@ export function truncateTabTitle(title: string, max = 32): string {
   return `${trimmed.slice(0, Math.max(1, max - 1))}…`;
 }
 
-/** Whether + / close / inactive-tab switch are interactive in this phase. */
+/** Whether + / inactive-tab switch are interactive. */
 export function areMultiDocumentActionsEnabled(
   override?: boolean,
 ): boolean {
   return override ?? MULTI_DOCUMENT_ACTIONS_ENABLED;
+}
+
+/** Whether tab close × is interactive (P3-B4). */
+export function areCloseTabActionsEnabled(override?: boolean): boolean {
+  return override ?? CLOSE_TAB_ACTIONS_ENABLED;
 }
 
 export function syncTabItemWithLiveState(

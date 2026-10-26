@@ -2,8 +2,7 @@
  * P3-B1 — lightweight DocumentSession manager.
  *
  * Supports create/register/get/active/list/setActive/remove/dispose.
- * Multi-tab UI is intentionally not wired; App keeps a single active
- * session for user-facing behavior in B1.
+ * P3-B3B wires App tab create/switch against this store.
  */
 
 import {

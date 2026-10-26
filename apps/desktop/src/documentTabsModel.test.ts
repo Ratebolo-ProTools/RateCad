@@ -19,11 +19,13 @@ import {
   setActiveSession,
 } from './documentSessionStore.js';
 import {
+  CLOSE_TAB_ACTIONS_ENABLED,
   CLOSE_TAB_DISABLED_TOOLTIP,
   MULTI_DOCUMENT_ACTIONS_ENABLED,
-  NEW_TAB_DISABLED_TOOLTIP,
+  NEW_TAB_ENABLED_TOOLTIP,
   START_TAB_TOOLTIP,
   applyLiveActiveTabState,
+  areCloseTabActionsEnabled,
   areMultiDocumentActionsEnabled,
   buildDocumentTabItems,
   documentTabItemFromSession,
@@ -129,12 +131,15 @@ describe('P3-B2 document tabs model', () => {
     disposeAllSessions(store);
   });
 
-  it('disables multi-document actions in P3-B2', () => {
-    expect(MULTI_DOCUMENT_ACTIONS_ENABLED).toBe(false);
-    expect(areMultiDocumentActionsEnabled()).toBe(false);
-    expect(areMultiDocumentActionsEnabled(true)).toBe(true);
-    expect(NEW_TAB_DISABLED_TOOLTIP.toLowerCase()).toContain('p3-b3');
-    expect(CLOSE_TAB_DISABLED_TOOLTIP.toLowerCase()).toContain('close');
+  it('enables multi-document create/switch in P3-B3B; close stays disabled', () => {
+    expect(MULTI_DOCUMENT_ACTIONS_ENABLED).toBe(true);
+    expect(CLOSE_TAB_ACTIONS_ENABLED).toBe(false);
+    expect(areMultiDocumentActionsEnabled()).toBe(true);
+    expect(areMultiDocumentActionsEnabled(false)).toBe(false);
+    expect(areCloseTabActionsEnabled()).toBe(false);
+    expect(areCloseTabActionsEnabled(true)).toBe(true);
+    expect(NEW_TAB_ENABLED_TOOLTIP.toLowerCase()).toContain('new drawing');
+    expect(CLOSE_TAB_DISABLED_TOOLTIP.toLowerCase()).toContain('p3-b4');
     expect(START_TAB_TOOLTIP.toLowerCase()).toContain('placeholder');
   });
 
