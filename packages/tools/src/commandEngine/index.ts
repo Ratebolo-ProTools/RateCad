@@ -155,7 +155,7 @@ export function createDefaultEngineRegistry(): CadEngineRegistry {
   return registry;
 }
 
-export { CadCommandEngine } from './engine.js';
+export { CadCommandEngine, type EngineHost } from './engine.js';
 export { CadCommandHistory } from './history.js';
 export { CadEngineRegistry } from './registry.js';
 export { CommandUsageTracker } from './usage.js';

@@ -15,7 +15,6 @@ import {
   setSelection,
   updateLayoutSheetMeta,
 } from '@ratecad/core';
-import { SelectionManager } from '@ratecad/tools';
 import { createCamera } from '@ratecad/viewport';
 import {
   APPLICATION_SHARED_STATE_KEYS,
@@ -159,7 +158,7 @@ describe('P3-B1 DocumentSessionStore', () => {
     expect(session.viewHistory.size).toBe(0);
     expect(session._unsubscribers).toHaveLength(0);
     expect(session.engine).toBeNull();
-    expect(session.selectionManager).toBeNull();
+    expect(session.selectionManager.hoveredId).toBeNull();
     markSessionDirty(session);
     expect(session.dirty).toBe(false);
   });
@@ -225,17 +224,15 @@ describe('P3-B1 dirty-state correction', () => {
 
   it('does not mark dirty for hover highlighting', () => {
     const session = createDocumentSession();
-    const selection = new SelectionManager(session.bus);
-    session.selectionManager = selection;
     session.bus.execute(
       new CreateLineCommand({ x: 0, y: 0 }, { x: 2, y: 0 }),
     );
     clearSessionDirty(session);
     const id = session.bus.getDocument().entities[0]!.id;
-    selection.setHovered(id);
-    expect(selection.hoveredId).toBe(id);
+    session.selectionManager.setHovered(id);
+    expect(session.selectionManager.hoveredId).toBe(id);
     expect(session.dirty).toBe(false);
-    selection.setHovered(null);
+    session.selectionManager.setHovered(null);
     expect(session.dirty).toBe(false);
     disposeDocumentSession(session);
   });
@@ -472,8 +469,14 @@ describe('P3-B1 single-document compatibility', () => {
   });
 
   it('documents remaining shared state before multi-tab', () => {
-    expect(REMAINING_SHARED_BEFORE_MULTI_TAB).toContain('CadCommandEngine');
-    expect(REMAINING_SHARED_BEFORE_MULTI_TAB).toContain('SelectionManager');
+    // P3-B3A moved engine/selection onto DocumentSession; remaining items
+    // are App React mirrors / UI switch wiring for P3-B3B.
+    expect(REMAINING_SHARED_BEFORE_MULTI_TAB).toContain(
+      'reactDocCameraMirrors',
+    );
+    expect(REMAINING_SHARED_BEFORE_MULTI_TAB).toContain(
+      'documentTabSwitchHandlers',
+    );
     expect(listSessions(createDocumentSessionStore())).toEqual([]);
   });
 

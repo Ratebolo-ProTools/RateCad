@@ -174,6 +174,7 @@ export {
   type CadInputType,
   type CadPromptDefinition,
   type CommandSuggestion,
+  type EngineHost,
   type EscAction,
   type KeyboardContext,
 } from './commandEngine/index.js';

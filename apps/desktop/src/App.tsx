@@ -101,11 +101,13 @@ import { DimStyleManager } from './DimStyleManager';
 import { AreaModeStrip, Ribbon } from './Ribbon';
 import type { RecentDrawing } from './ApplicationMenu';
 import {
+  bindSessionEngine,
   clearSessionDirty,
   createUntitledBus,
   markSessionDirty,
   replaceSessionDocument,
   setSessionFilePath,
+  setSessionHoveredId,
   shouldMarkDirtyForBusChange,
   shouldPromptDiscard,
   type DocumentSession,
@@ -568,9 +570,8 @@ export function App() {
   const dirtyRef = useRef(false);
   const suppressDirtyRef = useRef(false);
   /**
-   * P3-B1: single DocumentSession wrapping the existing bus/cameras.
-   * Multi-tab UI is not activated; store exists for internal foundation only.
-   * CadCommandEngine remains App-owned (no second command engine).
+   * P3-B3A: single active DocumentSession owns bus / selection / engine /
+   * cameras / view history. Multi-tab UI switching stays disabled (P3-B3B).
    */
   const sessionStoreRef = useRef<DocumentSessionStore>(
     createDocumentSessionStore(),
@@ -585,7 +586,7 @@ export function App() {
         modelCamera: modelCameraRef.current,
         viewHistory: viewHistoryRef.current,
         toolSession: sessionRef.current,
-        // App subscribe remains the dirty notifier for B1 compatibility.
+        // App subscribe remains the dirty notifier for active-session UI.
         trackDirtyFromBus: false,
       },
     );
@@ -596,7 +597,9 @@ export function App() {
   const commandInputRef = useRef<HTMLInputElement | null>(null);
   const cursorWorldRef = useRef({ x: 0, y: 0 });
   const engineRef = useRef<CadCommandEngine | null>(null);
-  const selectionManagerRef = useRef<SelectionManager | null>(null);
+  const selectionManagerRef = useRef<SelectionManager | null>(
+    documentSessionRef.current.selectionManager,
+  );
   const hoveredIdRef = useRef<string | null>(null);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const polarEngineRef = useRef(
@@ -1334,14 +1337,15 @@ export function App() {
     };
   }, [beginPanTool, zoomExtents, zoomPrevious, zoomWindow]);
 
-  // Create command engine once (host uses refs for live document/cursor).
+  // Bind CadCommandEngine onto the active DocumentSession (P3-B3A ownership).
   useEffect(() => {
-    selectionManagerRef.current = new SelectionManager(busRef.current);
+    const ds = documentSessionRef.current;
+    if (!ds) return;
+    selectionManagerRef.current = ds.selectionManager;
     const host = {
-      getUnits: () => busRef.current.getDocument().settings.units,
-      getWorldUnit: () =>
-        busRef.current.getDocument().settings.worldUnit ?? 'ft',
-      getSelectedIds: () => busRef.current.getDocument().selection,
+      getUnits: () => ds.bus.getDocument().settings.units,
+      getWorldUnit: () => ds.bus.getDocument().settings.worldUnit ?? 'ft',
+      getSelectedIds: () => ds.bus.getDocument().selection,
       getCursor: () => cursorWorldRef.current,
       activateTool: (tool: string) => {
         activateToolOnly(tool as ToolId);
@@ -1350,8 +1354,9 @@ export function App() {
         activateToolOnly('select');
       },
       clearSelection: () => {
-        busRef.current.updateWithoutHistory((d) => clearSelection(d));
-        setDoc(busRef.current.getDocument());
+        ds.selectionManager.clear();
+        setDoc(ds.bus.getDocument());
+        setSessionHoveredId(ds, null);
         hoveredIdRef.current = null;
         setHoveredId(null);
       },
@@ -1360,7 +1365,7 @@ export function App() {
       },
       getWorkspaceMode: () => workspaceModeRef.current,
       enterMspace: () => {
-        const d = busRef.current.getDocument();
+        const d = ds.bus.getDocument();
         const layout = d.layouts.find((l) => l.id === d.activeLayoutId);
         if (!layout) {
           return { ok: false, message: 'MSPACE: No active layout' };
@@ -1377,10 +1382,13 @@ export function App() {
           return { ok: false, message: 'MSPACE: No active viewport' };
         }
         workspaceModeRef.current = 'VIEWPORT_MODEL_SPACE';
+        ds.workspaceMode = 'VIEWPORT_MODEL_SPACE';
         setWorkspaceMode('VIEWPORT_MODEL_SPACE');
         setActiveViewportId(target.id);
         activeViewportIdRef.current = target.id;
+        ds.activeViewportId = target.id;
         setSelectedViewportId(target.id);
+        ds.selectedViewportId = target.id;
         const vpIndex = layout.viewports.findIndex((v) => v.id === target.id);
         const msg = workspaceModeLabel(
           'VIEWPORT_MODEL_SPACE',
@@ -1391,38 +1399,47 @@ export function App() {
         return { ok: true, message: `MSPACE: ${msg}` };
       },
       enterPspace: () => {
-        const d = busRef.current.getDocument();
+        const d = ds.bus.getDocument();
         const layout = d.layouts.find((l) => l.id === d.activeLayoutId);
         if (!layout) {
           return { ok: false, message: 'PSPACE: No active layout' };
         }
         workspaceModeRef.current = 'PAPER_SPACE';
+        ds.workspaceMode = 'PAPER_SPACE';
         setWorkspaceMode('PAPER_SPACE');
         setActiveViewportId(null);
         activeViewportIdRef.current = null;
+        ds.activeViewportId = null;
         setStatusExtra(`PAPER SPACE · ${layout.name}`);
         return { ok: true, message: `PSPACE: PAPER SPACE · ${layout.name}` };
       },
       onLayoutChanged: (layoutId: string | null, message: string) => {
-        setDoc(busRef.current.getDocument());
+        setDoc(ds.bus.getDocument());
         markDirty(true);
         if (layoutId == null) {
           workspaceModeRef.current = 'MODEL_SPACE';
+          ds.workspaceMode = 'MODEL_SPACE';
           setWorkspaceMode('MODEL_SPACE');
           setActiveViewportId(null);
           activeViewportIdRef.current = null;
+          ds.activeViewportId = null;
           setStatusExtra('MODEL SPACE');
         } else {
           if (workspaceModeRef.current === 'MODEL_SPACE') {
             modelCameraRef.current = { ...cameraRef.current };
+            ds.modelCamera = modelCameraRef.current;
           }
           workspaceModeRef.current = 'PAPER_SPACE';
+          ds.workspaceMode = 'PAPER_SPACE';
           setWorkspaceMode('PAPER_SPACE');
           setActiveViewportId(null);
           activeViewportIdRef.current = null;
+          ds.activeViewportId = null;
           setSelectedViewportId(null);
+          ds.selectedViewportId = null;
           setSelectedPaperEntityIds([]);
-          const layout = busRef.current
+          ds.selectedPaperEntityIds = [];
+          const layout = ds.bus
             .getDocument()
             .layouts.find((l) => l.id === layoutId);
           setStatusExtra(
@@ -1445,16 +1462,11 @@ export function App() {
       zoomPrevious: () => navApiRef.current.zoomPrevious(),
       beginPanTool: () => navApiRef.current.beginPanTool(),
     };
-    engineRef.current = new CadCommandEngine(
-      createDefaultEngineRegistry(),
-      busRef.current,
-      host,
-    );
-    // B1: attach shared controllers to the single session (no second engine).
-    if (documentSessionRef.current) {
-      documentSessionRef.current.selectionManager = selectionManagerRef.current;
-      documentSessionRef.current.engine = engineRef.current;
+    // One engine per session — bind once; do not share across sessions.
+    if (!ds.engine) {
+      bindSessionEngine(ds, host, createDefaultEngineRegistry());
     }
+    engineRef.current = ds.engine;
     refreshEngineUi();
   }, [activateToolOnly, markDirty, refreshEngineUi]);
 
@@ -3099,11 +3111,17 @@ export function App() {
       if (id !== hoveredIdRef.current) {
         hoveredIdRef.current = id;
         setHoveredId(id);
+        if (documentSessionRef.current) {
+          setSessionHoveredId(documentSessionRef.current, id);
+        }
       }
     } else if (hoveredIdRef.current) {
       hoveredIdRef.current = null;
       setHoveredId(null);
       selectionManagerRef.current?.setHovered(null);
+      if (documentSessionRef.current) {
+        setSessionHoveredId(documentSessionRef.current, null);
+      }
     }
 
     const next = handleToolPointerMove(sessionRef.current, busRef.current, {
@@ -3642,6 +3660,9 @@ export function App() {
                 hoveredIdRef.current = null;
                 setHoveredId(null);
                 selectionManagerRef.current?.setHovered(null);
+                if (documentSessionRef.current) {
+                  setSessionHoveredId(documentSessionRef.current, null);
+                }
               }
             }}
             onWheel={onWheel}

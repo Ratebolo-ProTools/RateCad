@@ -1,14 +1,12 @@
 /**
- * P3-B1 — DocumentSession foundation.
+ * DocumentSession — per-drawing runtime ownership (P3-B1 → P3-B3A).
  *
- * Packages per-drawing runtime state for future multi-document support
- * without changing DrawingDocument serialization or introducing a second
- * command engine. App-shared preferences (ribbon tab, drafting prefs,
- * recent drawings, window settings) stay outside this module.
+ * P3-B3A isolates document-specific mutable services inside each session:
+ * CommandBus, SelectionManager, CadCommandEngine (when bound), cameras,
+ * ViewHistory, tool session, layout/viewport UI fields, file/dirty state.
  *
- * B1 scope: model + store + single-session App adapter.
- * Multi-tab UI, engine-per-session isolation, and full App ownership
- * migration are deferred to P3-B2 / P3-B3.
+ * Multi-document UI switching remains disabled (P3-B3B).
+ * App-shared prefs (ribbon tab, crosshair/pickbox, recents) stay outside.
  */
 
 import {
@@ -19,17 +17,31 @@ import {
   createEmptyDocument,
   ensureLayouts,
   type DrawingDocument,
+  type EntityId,
   type Layout,
   type LayoutViewport,
   type ViewportId,
   type WorkspaceMode,
 } from '@ratecad/core';
-import { createToolSession, type ToolSession } from '@ratecad/tools';
+import {
+  CadCommandEngine,
+  SelectionManager,
+  cancelTool,
+  createDefaultEngineRegistry,
+  createToolSession,
+  type EngineHost,
+  type ToolSession,
+} from '@ratecad/tools';
 import {
   createCamera,
   ViewHistory,
   type Camera,
 } from '@ratecad/viewport';
+import {
+  APPLICATION_GLOBAL_STATE,
+  DOCUMENT_SPECIFIC_STATE,
+  REMAINING_FOR_P3_B3B_UI_SWITCH,
+} from './documentSessionArchitecture.js';
 
 export type DocumentSessionId = string;
 
@@ -57,13 +69,14 @@ export type DocumentSession = {
   activeViewportId: ViewportId | null;
   selectedViewportId: ViewportId | null;
   selectedPaperEntityIds: string[];
-  /**
-   * Optional App-attached controllers. B1 keeps CadCommandEngine /
-   * SelectionManager constructed once in App and may point these slots
-   * at the shared instances — do not create a second command engine here.
-   */
-  engine: unknown | null;
-  selectionManager: unknown | null;
+  /** Per-session selection + hover owner (bound to this bus). */
+  selectionManager: SelectionManager;
+  /** Per-session command engine; bound when App/host is available. */
+  engine: CadCommandEngine | null;
+  /** Hover highlight for this session only. */
+  hoveredId: EntityId | null;
+  /** Document-specific command-line buffer. */
+  commandLineBuffer: string;
   disposed: boolean;
   /** Session-owned bus unsubscribers (dirty tracking, etc.). */
   readonly _unsubscribers: Array<() => void>;
@@ -84,11 +97,17 @@ export type CreateDocumentSessionOptions = {
   activeViewportId?: ViewportId | null;
   selectedViewportId?: ViewportId | null;
   selectedPaperEntityIds?: string[];
+  selectionManager?: SelectionManager;
   /** When false, caller attaches dirty tracking later. Default true. */
   trackDirtyFromBus?: boolean;
+  /**
+   * When true, bind a CadCommandEngine with a minimal host immediately
+   * (tests / headless isolation). App supplies a richer host via bindSessionEngine.
+   */
+  bindMinimalEngine?: boolean;
 };
 
-/** Application-shared state — must not be stored on DocumentSession. */
+/** @deprecated Prefer APPLICATION_GLOBAL_STATE — kept for P3-B1 tests. */
 export const APPLICATION_SHARED_STATE_KEYS = [
   'activeRibbonTab',
   'applicationPreferences',
@@ -98,7 +117,7 @@ export const APPLICATION_SHARED_STATE_KEYS = [
   'windowSettings',
 ] as const;
 
-/** Document-specific state owned or referenced by DocumentSession. */
+/** @deprecated Prefer DOCUMENT_SPECIFIC_STATE. */
 export const DOCUMENT_SESSION_STATE_KEYS = [
   'drawingGeometry',
   'layers',
@@ -116,21 +135,18 @@ export const DOCUMENT_SESSION_STATE_KEYS = [
 ] as const;
 
 /**
- * Still shared on the single App shell — must be isolated per session
- * before P3-B2 multi-tab UI can safely become functional (P3-B3 work):
- * CadCommandEngine instance, SelectionManager, hover highlight, command-line
- * buffer, polar engine, canvas renderer bindings, and live React mirrors of
- * bus/camera/workspace that still close over App refs.
+ * @deprecated P3-B3A owns engine/selection/hover on the session.
+ * Remaining work is App React mirror rebind on UI switch (P3-B3B).
  */
 export const REMAINING_SHARED_BEFORE_MULTI_TAB = [
-  'CadCommandEngine',
-  'SelectionManager',
-  'hoveredId',
-  'commandLineBuffer',
-  'polarTrackingEngine',
-  'canvasRendererBindings',
-  'appBusRefMirrors',
+  ...REMAINING_FOR_P3_B3B_UI_SWITCH,
 ] as const;
+
+export {
+  APPLICATION_GLOBAL_STATE,
+  DOCUMENT_SPECIFIC_STATE,
+  REMAINING_FOR_P3_B3B_UI_SWITCH,
+};
 
 export function createSessionId(): DocumentSessionId {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -154,6 +170,12 @@ export function getSessionTitle(session: DocumentSession): string {
 export function getSessionDisplayName(session: DocumentSession): string {
   const title = getSessionTitle(session);
   return session.dirty ? `${title} *` : title;
+}
+
+export function getSessionActiveLayoutId(
+  session: DocumentSession,
+): string | null {
+  return getSessionDocument(session).activeLayoutId ?? null;
 }
 
 export function subscribeDirty(
@@ -194,6 +216,23 @@ export function setSessionFilePath(
   session.filePath = filePath;
 }
 
+export function setSessionHoveredId(
+  session: DocumentSession,
+  id: EntityId | null,
+): void {
+  if (session.disposed) return;
+  session.hoveredId = id;
+  session.selectionManager.setHovered(id);
+}
+
+export function setSessionCommandLineBuffer(
+  session: DocumentSession,
+  value: string,
+): void {
+  if (session.disposed) return;
+  session.commandLineBuffer = value;
+}
+
 /**
  * Run a bus/document mutation without flipping dirty
  * (load, successful save metadata, or caller-classified view-only ops).
@@ -221,7 +260,6 @@ export function recordSaveOutcome(
 ): void {
   if (session.disposed) return;
   if (!outcome.ok) {
-    // Keep dirty as-is (including true).
     return;
   }
   if (outcome.filePath !== undefined) {
@@ -259,11 +297,17 @@ export function clearSessionViewHistory(session: DocumentSession): void {
   session.viewHistory.clear();
 }
 
+export function setSessionWorkspaceMode(
+  session: DocumentSession,
+  mode: WorkspaceMode,
+): void {
+  if (session.disposed) return;
+  session.workspaceMode = mode;
+}
+
 /**
  * Strip selection + navigation camera fields so view/selection-only
  * updateWithoutHistory mutations do not look like document edits.
- * Structural layout/viewport fields (bounds, lock, labels, paper entities)
- * remain in the fingerprint.
  */
 export function persistedContentFingerprint(doc: DrawingDocument): string {
   const layouts = doc.layouts.map((layout: Layout) => ({
@@ -285,15 +329,11 @@ export function persistedContentFingerprint(doc: DrawingDocument): string {
       scaleLabel: vp.scaleLabel ?? null,
       showLabel: vp.showLabel ?? null,
       layerVisibilityOverrides: vp.layerVisibilityOverrides,
-      // Intentionally omit modelCenterX/Y, scale, rotation — camera navigation.
     })),
-    // Intentionally omit paperCamera — paper-space pan/zoom.
   }));
 
   return JSON.stringify({
     schemaVersion: doc.schemaVersion,
-    // Omit meta.updatedAt — touchDocument() stamps it on many
-    // updateWithoutHistory paths (including camera navigation).
     meta: {
       name: doc.meta.name,
       createdAt: doc.meta.createdAt,
@@ -305,17 +345,9 @@ export function persistedContentFingerprint(doc: DrawingDocument): string {
     entities: doc.entities,
     activeLayoutId: doc.activeLayoutId ?? null,
     layouts,
-    // Intentionally omit selection + workspaceMode (session UI).
   });
 }
 
-/**
- * Decide whether a bus notification should flip dirty.
- * - execute / undo / redo → always (history-backed document edits)
- * - reset → never here (New/Open use suppress + explicit clear)
- * - updateWithoutHistory → only when persisted content changes
- *   (not selection-only or camera-navigation-only)
- */
 export function shouldMarkDirtyForBusChange(
   kind: CommandBusChangeKind,
   previous: DrawingDocument,
@@ -327,7 +359,6 @@ export function shouldMarkDirtyForBusChange(
   if (kind === 'reset') {
     return false;
   }
-  // updateWithoutHistory
   return (
     persistedContentFingerprint(previous) !==
     persistedContentFingerprint(next)
@@ -349,6 +380,44 @@ export function attachBusDirtyTracking(session: DocumentSession): () => void {
   return unsubscribe;
 }
 
+/** Minimal EngineHost for headless / isolation tests. */
+export function createMinimalEngineHost(
+  session: DocumentSession,
+): EngineHost {
+  return {
+    getUnits: () => session.bus.getDocument().settings.units,
+    getWorldUnit: () => session.bus.getDocument().settings.worldUnit ?? 'ft',
+    getSelectedIds: () => [...session.bus.getDocument().selection],
+    getCursor: () => ({ x: 0, y: 0 }),
+    activateTool: () => undefined,
+    activateSelect: () => {
+      session.toolSession = createToolSession('select');
+    },
+    clearSelection: () => {
+      session.selectionManager.clear();
+      session.hoveredId = null;
+    },
+    getWorkspaceMode: () => session.workspaceMode,
+  };
+}
+
+/**
+ * Bind (or replace) a CadCommandEngine owned by this session.
+ * Uses the session's CommandBus — never a foreign bus.
+ */
+export function bindSessionEngine(
+  session: DocumentSession,
+  host: EngineHost,
+  registry = createDefaultEngineRegistry(),
+): CadCommandEngine {
+  if (session.disposed) {
+    throw new Error('Cannot bind engine on a disposed DocumentSession');
+  }
+  const engine = new CadCommandEngine(registry, session.bus, host);
+  session.engine = engine;
+  return engine;
+}
+
 export function createDocumentSession(
   options: CreateDocumentSessionOptions = {},
 ): DocumentSession {
@@ -357,6 +426,9 @@ export function createDocumentSession(
     (options.document
       ? new CommandBus(ensureLayouts(options.document))
       : createUntitledBus());
+
+  const selectionManager =
+    options.selectionManager ?? new SelectionManager(bus);
 
   const session: DocumentSession = {
     id: createSessionId(),
@@ -374,8 +446,10 @@ export function createDocumentSession(
     selectedPaperEntityIds: options.selectedPaperEntityIds
       ? [...options.selectedPaperEntityIds]
       : [],
+    selectionManager,
     engine: null,
-    selectionManager: null,
+    hoveredId: null,
+    commandLineBuffer: '',
     disposed: false,
     _unsubscribers: [],
     _dirtyListeners: new Set(),
@@ -385,11 +459,15 @@ export function createDocumentSession(
     attachBusDirtyTracking(session);
   }
 
+  if (options.bindMinimalEngine) {
+    bindSessionEngine(session, createMinimalEngineHost(session));
+  }
+
   return session;
 }
 
 /**
- * Replace the drawing inside an existing session (B1 single-document
+ * Replace the drawing inside an existing session (single-document
  * New/Open path). Clears undo history via bus.reset, resets tool/view
  * session fields, and optionally clears dirty/path.
  */
@@ -414,6 +492,9 @@ export function replaceSessionDocument(
   session.activeViewportId = null;
   session.selectedViewportId = null;
   session.selectedPaperEntityIds = [];
+  session.hoveredId = null;
+  session.selectionManager.setHovered(null);
+  session.commandLineBuffer = '';
   if (options.clearViewHistory !== false) {
     session.viewHistory.clear();
   }
@@ -429,8 +510,7 @@ export function replaceSessionDocument(
 
 /**
  * Dispose session-owned resources. Does not dispose application-shared
- * prefs, recent drawings, or a CadCommandEngine that App still owns —
- * only clears session slots and unsubscribes session listeners.
+ * prefs, recent drawings, or App shell services.
  */
 export function disposeDocumentSession(session: DocumentSession): void {
   if (session.disposed) return;
@@ -444,12 +524,14 @@ export function disposeDocumentSession(session: DocumentSession): void {
   }
   session._dirtyListeners.clear();
   session.viewHistory.clear();
-  session.toolSession = createToolSession('select');
+  session.toolSession = cancelTool(createToolSession('select'));
   session.selectedPaperEntityIds = [];
   session.activeViewportId = null;
   session.selectedViewportId = null;
+  session.hoveredId = null;
+  session.selectionManager.setHovered(null);
+  session.commandLineBuffer = '';
   session.engine = null;
-  session.selectionManager = null;
   session.filePath = null;
   session.dirty = false;
 }
