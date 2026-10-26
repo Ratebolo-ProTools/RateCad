@@ -1,8 +1,8 @@
 /**
- * P3-B2/B3B — session-aware document tab strip.
+ * P3-B2/B3B/B4B1 — session-aware document tab strip.
  *
- * P3-B3B enables + (new) and inactive-tab switch. Close stays disabled
- * until P3-B4 save/discard close workflows.
+ * P3-B3B: + and inactive-tab switch.
+ * P3-B4B1: individual × close with App-owned Save/Don't Save/Cancel.
  */
 
 import { useEffect, useId, useRef } from 'react';

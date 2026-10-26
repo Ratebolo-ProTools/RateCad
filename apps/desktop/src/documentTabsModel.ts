@@ -19,12 +19,12 @@ import {
 
 /**
  * P3-B3B: create new tab + switch between sessions is enabled.
- * Close remains gated separately (P3-B4).
+ * P3-B4B1: individual tab close is enabled.
  */
 export const MULTI_DOCUMENT_ACTIONS_ENABLED = true;
 
-/** Tab close / discard workflows belong to P3-B4. */
-export const CLOSE_TAB_ACTIONS_ENABLED = false;
+/** P3-B4B1 — individual drawing-tab close with Save / Don't Save / Cancel. */
+export const CLOSE_TAB_ACTIONS_ENABLED = true;
 
 export const START_TAB_TOOLTIP =
   'Start workspace — placeholder (not yet interactive)';
@@ -36,6 +36,8 @@ export const NEW_TAB_ENABLED_TOOLTIP = 'New drawing (new tab)';
 
 export const CLOSE_TAB_DISABLED_TOOLTIP =
   'Close drawing — not yet available (P3-B4 multi-file close / save / discard)';
+
+export const CLOSE_TAB_ENABLED_TOOLTIP_PREFIX = 'Close';
 
 export type DocumentTabItem = {
   sessionId: DocumentSessionId;

@@ -131,13 +131,13 @@ describe('P3-B2 document tabs model', () => {
     disposeAllSessions(store);
   });
 
-  it('enables multi-document create/switch in P3-B3B; close stays disabled', () => {
+  it('enables multi-document create/switch/close in P3-B4B1', () => {
     expect(MULTI_DOCUMENT_ACTIONS_ENABLED).toBe(true);
-    expect(CLOSE_TAB_ACTIONS_ENABLED).toBe(false);
+    expect(CLOSE_TAB_ACTIONS_ENABLED).toBe(true);
     expect(areMultiDocumentActionsEnabled()).toBe(true);
     expect(areMultiDocumentActionsEnabled(false)).toBe(false);
-    expect(areCloseTabActionsEnabled()).toBe(false);
-    expect(areCloseTabActionsEnabled(true)).toBe(true);
+    expect(areCloseTabActionsEnabled()).toBe(true);
+    expect(areCloseTabActionsEnabled(false)).toBe(false);
     expect(NEW_TAB_ENABLED_TOOLTIP.toLowerCase()).toContain('new drawing');
     expect(CLOSE_TAB_DISABLED_TOOLTIP.toLowerCase()).toContain('p3-b4');
     expect(START_TAB_TOOLTIP.toLowerCase()).toContain('placeholder');

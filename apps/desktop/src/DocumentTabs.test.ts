@@ -19,7 +19,7 @@ function renderTabs(
       tabs,
       activeSessionId: tabs.find((t) => t.active)?.sessionId ?? null,
       multiDocumentActionsEnabled: true,
-      closeTabActionsEnabled: false,
+      closeTabActionsEnabled: true,
       ...extras,
     }),
   );
@@ -102,13 +102,19 @@ describe('P3-B2 DocumentTabs rendering', () => {
     expect(html).toMatch(/doc-tab-start[^>]*disabled/);
   });
 
-  it('enables new tab while keeping close disabled (P3-B3B)', () => {
+  it('enables new and close actions (P3-B4B1)', () => {
     const html = renderTabs(sampleTabs);
     expect(html).toContain(NEW_TAB_ENABLED_TOOLTIP);
-    expect(html).toContain(CLOSE_TAB_DISABLED_TOOLTIP);
     expect(html).not.toContain('doc-tab-add is-disabled');
-    expect(html).toContain('doc-tab-close is-disabled');
+    expect(html).not.toContain('doc-tab-close is-disabled');
     expect(html).toContain('aria-label="New drawing"');
+    expect(html).toContain('aria-label="Close Untitled Drawing"');
+  });
+
+  it('can keep close disabled when explicitly blocked', () => {
+    const html = renderTabs(sampleTabs, { closeTabActionsEnabled: false });
+    expect(html).toContain(CLOSE_TAB_DISABLED_TOOLTIP);
+    expect(html).toContain('doc-tab-close is-disabled');
   });
 
   it('can disable multi-document actions when explicitly blocked', () => {
@@ -143,11 +149,11 @@ describe('P3-B2 DocumentTabs rendering', () => {
     expect(html.match(/data-session-id=/g)?.length).toBe(8);
   });
 
-  it('can enable close when explicitly allowed (P3-B4 future)', () => {
-    const html = renderTabs(sampleTabs, {
-      closeTabActionsEnabled: true,
-    });
-    expect(html).not.toContain('doc-tab-close is-disabled');
-    expect(html).toContain('aria-label="Close Untitled Drawing"');
+  it('Start tab has no close control', () => {
+    const html = renderTabs(sampleTabs);
+    expect(html).toContain('data-testid="doc-tab-start"');
+    // Close controls are only on drawing tabs (session id in testid).
+    expect(html).not.toContain('doc-tab-close-start');
+    expect(html).toContain('data-testid="doc-tab-close-session-a"');
   });
 });

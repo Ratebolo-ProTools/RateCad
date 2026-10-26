@@ -79,19 +79,26 @@ export function setActiveSession(
 
 /**
  * Remove a session from the store and dispose its resources.
- * If it was active, activates another remaining session (if any).
+ * If it was active, activates `preferredNextId` when still present,
+ * otherwise the first remaining session (if any).
  */
 export function removeSession(
   store: DocumentSessionStore,
   id: DocumentSessionId,
+  options?: { preferredNextId?: DocumentSessionId | null },
 ): boolean {
   const session = store.sessions.get(id);
   if (!session) return false;
   store.sessions.delete(id);
   disposeDocumentSession(session);
   if (store.activeSessionId === id) {
-    const next = store.sessions.keys().next();
-    store.activeSessionId = next.done ? null : next.value;
+    const preferred = options?.preferredNextId;
+    if (preferred && store.sessions.has(preferred)) {
+      store.activeSessionId = preferred;
+    } else {
+      const next = store.sessions.keys().next();
+      store.activeSessionId = next.done ? null : next.value;
+    }
   }
   return true;
 }

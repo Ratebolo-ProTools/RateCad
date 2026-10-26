@@ -325,10 +325,10 @@ describe('P3-B3B multi-document switching', () => {
     disposeAllSessions(store);
   });
 
-  it('feature flags: switch enabled, close deferred to P3-B4', () => {
+  it('feature flags: switch and individual close enabled; Close All deferred', () => {
     expect(MULTI_DOCUMENT_ACTIONS_ENABLED).toBe(true);
-    expect(CLOSE_TAB_ACTIONS_ENABLED).toBe(false);
-    expect(REMAINING_FOR_P3_B4).toContain('closeTabWithSaveDiscardPrompt');
+    expect(CLOSE_TAB_ACTIONS_ENABLED).toBe(true);
+    expect(REMAINING_FOR_P3_B4).toContain('closeAllDrawings');
   });
 
   it('bindSessionEngine after switch attaches to the new session bus only', () => {

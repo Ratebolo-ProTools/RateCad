@@ -118,6 +118,8 @@ import {
   createAndRegisterSession,
   createDocumentSessionStore,
   getSession,
+  listSessions,
+  removeSession,
   setActiveSession,
   type DocumentSessionStore,
 } from './documentSessionStore';
@@ -141,6 +143,14 @@ import {
   resolveFileOpsPlatform,
   resolveOpenRequest,
 } from './documentFileOps';
+import {
+  LAST_DRAWING_CLOSE_POLICY,
+  chooseFallbackSessionId,
+  getCloseDialogTitle,
+  shouldPromptSaveBeforeClose,
+  type CloseSaveChoice,
+} from './documentSessionClose';
+import { CloseSaveDialog } from './CloseSaveDialog';
 import { serializeDocument } from '@ratecad/io';
 import {
   appendInputBuffer,
@@ -617,6 +627,22 @@ export function App() {
   const [sessionListVersion, setSessionListVersion] = useState(0);
   /** Prevent concurrent saves for the same session / overlapping writes. */
   const saveInFlightRef = useRef<Set<string>>(new Set());
+  /** Prevent duplicate close workflows for the same session. */
+  const closeInFlightRef = useRef<Set<string>>(new Set());
+  /** Prefer this session when closing the active tab (MRU). */
+  const previousActiveSessionIdRef = useRef<string | null>(null);
+  const [closePrompt, setClosePrompt] = useState<{
+    sessionId: string;
+    title: string;
+    resolve: (choice: CloseSaveChoice) => void;
+  } | null>(null);
+  const [closePromptBusy, setClosePromptBusy] = useState(false);
+  const closePromptOpenRef = useRef(false);
+  const closePromptRef = useRef(closePrompt);
+  useEffect(() => {
+    closePromptOpenRef.current = closePrompt != null;
+    closePromptRef.current = closePrompt;
+  }, [closePrompt]);
   const rafPanRef = useRef<number | null>(null);
   const pendingPanRef = useRef<{ dx: number; dy: number } | null>(null);
   const commandLineRef = useRef('');
@@ -1709,6 +1735,10 @@ export function App() {
       const next = getSession(store, sessionId);
       if (!next || next.disposed) return;
 
+      if (current && !current.disposed) {
+        previousActiveSessionIdRef.current = current.id;
+      }
+
       cancelActiveTransientWork();
       if (current && !current.disposed) {
         flushActiveSessionMirrors();
@@ -1838,31 +1868,56 @@ export function App() {
     [],
   );
 
-  const saveDrawing = useCallback(
-    async (forceDialog = false) => {
+  type SaveOutcome =
+    | { ok: true; clearedDirty: boolean; sessionId: string }
+    | {
+        ok: false;
+        reason:
+          | 'missing'
+          | 'busy'
+          | 'canceled'
+          | 'failed'
+          | 'collision'
+          | 'still-dirty';
+        sessionId?: string;
+        message?: string;
+      };
+
+  /**
+   * Session-targeted save (P3-B4A/B4B1). Works for inactive sessions —
+   * does not require switching the active tab.
+   */
+  const saveDrawingForSession = useCallback(
+    async (
+      sessionId: string,
+      forceDialog = false,
+    ): Promise<SaveOutcome> => {
       const store = sessionStoreRef.current;
-      const target = documentSessionRef.current;
-      if (!target || target.disposed) return;
+      const target = getSession(store, sessionId);
+      if (!target || target.disposed) {
+        return { ok: false, reason: 'missing', sessionId };
+      }
 
       const tx = beginSaveTransaction(target, forceDialog);
       if (saveInFlightRef.current.has(tx.sessionId)) {
         setStatusExtra('Save already in progress for this drawing');
-        return;
+        return { ok: false, reason: 'busy', sessionId: tx.sessionId };
       }
       saveInFlightRef.current.add(tx.sessionId);
 
       const platform = resolveFileOpsPlatform(window.ratecadDesktop);
       const api = window.ratecadDesktop;
-      // Serialize from the captured session — not whatever becomes active later.
       const contents = serializeDocument(target.bus.getDocument());
       const fingerprint = persistedContentFingerprint(target.bus.getDocument());
       setStatusExtra('Saving…');
 
-      const finishLocalSave = (savedPath: string) => {
+      const finishLocalSave = (
+        savedPath: string,
+      ): SaveOutcome => {
         const session = getSession(store, tx.sessionId);
         if (!session || session.disposed) {
           setStatusExtra('Save finished but drawing tab is no longer open');
-          return;
+          return { ok: false, reason: 'missing', sessionId: tx.sessionId };
         }
         const conflict = findSaveAsCollision(
           store,
@@ -1871,8 +1926,14 @@ export function App() {
           platform,
         );
         if (conflict) {
-          setStatusExtra(describeSaveAsCollision(conflict));
-          return;
+          const message = describeSaveAsCollision(conflict);
+          setStatusExtra(message);
+          return {
+            ok: false,
+            reason: 'collision',
+            sessionId: tx.sessionId,
+            message,
+          };
         }
         const result = applySuccessfulSaveToSession(
           session,
@@ -1886,6 +1947,19 @@ export function App() {
             ? `Saved ${basename(savedPath)}`
             : `Saved ${basename(savedPath)} · further edits remain unsaved`,
         );
+        if (!result.clearedDirty) {
+          return {
+            ok: false,
+            reason: 'still-dirty',
+            sessionId: tx.sessionId,
+            message: 'Latest changes are not saved',
+          };
+        }
+        return {
+          ok: true,
+          clearedDirty: true,
+          sessionId: tx.sessionId,
+        };
       };
 
       try {
@@ -1899,12 +1973,16 @@ export function App() {
             forceDialog: false,
           });
           if (result.filePath) {
-            finishLocalSave(result.filePath);
-            return;
+            return finishLocalSave(result.filePath);
           }
           if (result.error) {
             setStatusExtra(`Save failed: ${result.error}`);
-            return;
+            return {
+              ok: false,
+              reason: 'failed',
+              sessionId: tx.sessionId,
+              message: result.error,
+            };
           }
         }
 
@@ -1917,9 +1995,7 @@ export function App() {
           a.download = tx.defaultName;
           a.click();
           URL.revokeObjectURL(url);
-          // Soft identity for tab title only (not reliable for duplicate merge).
-          finishLocalSave(tx.defaultName);
-          return;
+          return finishLocalSave(tx.defaultName);
         }
 
         if (api?.saveDrawing) {
@@ -1932,23 +2008,12 @@ export function App() {
           });
           if (result.canceled) {
             setStatusExtra('Save canceled');
-            return;
+            return { ok: false, reason: 'canceled', sessionId: tx.sessionId };
           }
           if (result.error) {
             setStatusExtra(`Dialog: ${result.error}`);
           } else if (result.filePath) {
-            const conflict = findSaveAsCollision(
-              store,
-              result.filePath,
-              tx.sessionId,
-              platform,
-            );
-            if (conflict) {
-              setStatusExtra(describeSaveAsCollision(conflict));
-              return;
-            }
-            finishLocalSave(result.filePath);
-            return;
+            return finishLocalSave(result.filePath);
           }
         }
 
@@ -1958,30 +2023,204 @@ export function App() {
             preferredName: tx.defaultName,
           });
           if (quick.filePath) {
-            const conflict = findSaveAsCollision(
-              store,
-              quick.filePath,
-              tx.sessionId,
-              platform,
-            );
-            if (conflict) {
-              setStatusExtra(describeSaveAsCollision(conflict));
-              return;
-            }
-            finishLocalSave(quick.filePath);
-            return;
+            return finishLocalSave(quick.filePath);
           }
           setStatusExtra(`Save failed: ${quick.error ?? 'unknown'}`);
+          return {
+            ok: false,
+            reason: 'failed',
+            sessionId: tx.sessionId,
+            message: quick.error,
+          };
         }
+
+        setStatusExtra('Save failed: no save API available');
+        return { ok: false, reason: 'failed', sessionId: tx.sessionId };
       } catch (err) {
-        setStatusExtra(
-          `Save failed: ${err instanceof Error ? err.message : 'unknown'}`,
-        );
+        const message = err instanceof Error ? err.message : 'unknown';
+        setStatusExtra(`Save failed: ${message}`);
+        return {
+          ok: false,
+          reason: 'failed',
+          sessionId: tx.sessionId,
+          message,
+        };
       } finally {
         saveInFlightRef.current.delete(tx.sessionId);
       }
     },
     [rememberRecentDrawing, syncUiAfterTargetedSave],
+  );
+
+  const saveDrawing = useCallback(
+    async (forceDialog = false) => {
+      const id = documentSessionRef.current?.id;
+      if (!id) {
+        setStatusExtra('No active drawing to save');
+        return;
+      }
+      await saveDrawingForSession(id, forceDialog);
+    },
+    [saveDrawingForSession],
+  );
+
+  const promptCloseSave = useCallback(
+    (session: DocumentSession): Promise<CloseSaveChoice> => {
+      return new Promise((resolve) => {
+        setClosePromptBusy(false);
+        setClosePrompt({
+          sessionId: session.id,
+          title: getCloseDialogTitle(session),
+          resolve,
+        });
+      });
+    },
+    [],
+  );
+
+  /**
+   * Finalize close for a resolved session (already clean / discard confirmed).
+   * Last-tab policy: replace with a clean untitled session
+   * (`LAST_DRAWING_CLOSE_POLICY`).
+   */
+  const finalizeCloseSession = useCallback(
+    (sessionId: string) => {
+      const store = sessionStoreRef.current;
+      const target = getSession(store, sessionId);
+      if (!target) {
+        setSessionListVersion((n) => n + 1);
+        return;
+      }
+
+      const wasActive = documentSessionRef.current?.id === sessionId;
+      const fallbackId = wasActive
+        ? chooseFallbackSessionId(
+            store,
+            sessionId,
+            previousActiveSessionIdRef.current,
+          )
+        : documentSessionRef.current?.id ?? null;
+
+      const closingLast =
+        listSessions(store).filter((s) => s.id !== sessionId).length === 0;
+
+      if (wasActive && fallbackId) {
+        switchToDocumentSession(fallbackId);
+      }
+
+      removeSession(store, sessionId, {
+        preferredNextId: wasActive ? fallbackId : store.activeSessionId,
+      });
+
+      if (previousActiveSessionIdRef.current === sessionId) {
+        previousActiveSessionIdRef.current = null;
+      }
+
+      if (closingLast) {
+        void LAST_DRAWING_CLOSE_POLICY;
+        // App cannot operate with zero sessions — create a clean untitled.
+        createNewDocumentTab();
+        setStatusExtra('Drawing closed · started a new untitled drawing');
+        return;
+      }
+
+      setSessionListVersion((n) => n + 1);
+      if (!wasActive && documentSessionRef.current) {
+        // Active tab unchanged; refresh strip only.
+        setStatusExtra(`Closed drawing`);
+      } else if (wasActive && documentSessionRef.current) {
+        setStatusExtra(
+          `Closed drawing · activated ${getSessionTitle(documentSessionRef.current)}`,
+        );
+      }
+    },
+    [createNewDocumentTab, switchToDocumentSession],
+  );
+
+  /** P3-B4B1 — safe individual tab close with Save / Don't Save / Cancel. */
+  const requestCloseDocumentTab = useCallback(
+    async (sessionId: string) => {
+      if (closeInFlightRef.current.has(sessionId)) return;
+      if (closePromptOpenRef.current) return;
+
+      const store = sessionStoreRef.current;
+      const session = getSession(store, sessionId);
+      if (!session || session.disposed) return;
+
+      if (saveInFlightRef.current.has(sessionId)) {
+        setStatusExtra('Cannot close while this drawing is saving');
+        return;
+      }
+
+      if (shouldPromptSaveBeforeClose(session)) {
+        const choice = await promptCloseSave(session);
+        if (choice === 'cancel') {
+          setClosePrompt(null);
+          setStatusExtra('Close canceled');
+          return;
+        }
+        if (choice === 'save') {
+          setClosePromptBusy(true);
+          closeInFlightRef.current.add(sessionId);
+          try {
+            const platform = resolveFileOpsPlatform(window.ratecadDesktop);
+            const forceDialog = !canQuickSaveToExistingPath(session, platform);
+            const outcome = await saveDrawingForSession(sessionId, forceDialog);
+            if (!outcome.ok) {
+              setClosePrompt(null);
+              setClosePromptBusy(false);
+              if (outcome.reason === 'canceled') {
+                setStatusExtra('Close canceled — save was canceled');
+              } else if (outcome.reason === 'still-dirty') {
+                setStatusExtra(
+                  'Close canceled — latest changes are not saved',
+                );
+              } else {
+                setStatusExtra(
+                  outcome.message
+                    ? `Close canceled — ${outcome.message}`
+                    : 'Close canceled — save failed',
+                );
+              }
+              return;
+            }
+            const after = getSession(store, sessionId);
+            if (!after || after.disposed) {
+              setClosePrompt(null);
+              setClosePromptBusy(false);
+              setSessionListVersion((n) => n + 1);
+              return;
+            }
+            if (after.dirty) {
+              setClosePrompt(null);
+              setClosePromptBusy(false);
+              setStatusExtra(
+                'Close canceled — latest changes are not saved',
+              );
+              return;
+            }
+            setClosePrompt(null);
+            setClosePromptBusy(false);
+            finalizeCloseSession(sessionId);
+          } finally {
+            closeInFlightRef.current.delete(sessionId);
+            setClosePromptBusy(false);
+            setClosePrompt(null);
+          }
+          return;
+        }
+        // Don't Save
+        setClosePrompt(null);
+      }
+
+      closeInFlightRef.current.add(sessionId);
+      try {
+        finalizeCloseSession(sessionId);
+      } finally {
+        closeInFlightRef.current.delete(sessionId);
+      }
+    },
+    [finalizeCloseSession, promptCloseSave, saveDrawingForSession],
   );
 
   /** P3-B4A — open validated contents into a new tab (or activate duplicate). */
@@ -2421,6 +2660,21 @@ export function App() {
       const isCadCommandField =
         target?.dataset?.cadCommand === '1' ||
         target?.dataset?.cadRectDim === '1';
+
+      // Close-save dialog owns ESC / actions — block CAD routing behind it.
+      if (closePromptOpenRef.current) {
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          event.stopPropagation();
+          const prompt = closePromptRef.current;
+          if (prompt) {
+            prompt.resolve('cancel');
+            setClosePrompt(null);
+            setClosePromptBusy(false);
+          }
+        }
+        return;
+      }
 
       // Text editors / dialogs / property panels: never launch CAD commands
       if (
@@ -3562,6 +3816,21 @@ export function App() {
 
   return (
     <div className="app-shell">
+      {closePrompt ? (
+        <CloseSaveDialog
+          drawingName={closePrompt.title}
+          busy={closePromptBusy}
+          onChoose={(choice) => {
+            if (closePromptBusy && choice !== 'cancel') return;
+            if (choice === 'save') setClosePromptBusy(true);
+            closePrompt.resolve(choice);
+            if (choice === 'cancel' || choice === 'dont-save') {
+              setClosePrompt(null);
+              setClosePromptBusy(false);
+            }
+          }}
+        />
+      ) : null}
       {discardPrompt ? (
         <div className="modal-backdrop" role="dialog" aria-modal="true">
           <div className="modal-panel">
@@ -3706,6 +3975,7 @@ export function App() {
         closeTabActionsEnabled={CLOSE_TAB_ACTIONS_ENABLED}
         onSelectDocumentTab={switchToDocumentSession}
         onNewDocumentTab={createNewDocumentTab}
+        onCloseDocumentTab={(id) => void requestCloseDocumentTab(id)}
         activeTool={session.activeTool}
         dimKind={session.dimKind}
         canUndo={canUndo}

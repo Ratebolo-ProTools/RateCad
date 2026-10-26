@@ -60,6 +60,7 @@ export type RibbonProps = {
   closeTabActionsEnabled?: boolean;
   onSelectDocumentTab?: (sessionId: string) => void;
   onNewDocumentTab?: () => void;
+  onCloseDocumentTab?: (sessionId: string) => void;
   activeTool: ToolId;
   dimKind: DimensionKind;
   canUndo: boolean;
@@ -2205,6 +2206,7 @@ export function Ribbon(props: RibbonProps) {
         closeTabActionsEnabled={props.closeTabActionsEnabled}
         onSelectTab={props.onSelectDocumentTab}
         onNewTab={props.onNewDocumentTab}
+        onCloseTab={props.onCloseDocumentTab}
       />
     </>
   );

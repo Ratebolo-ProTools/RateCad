@@ -476,9 +476,9 @@ describe('P3-B4A New / Open / Save helpers', () => {
     disposeDocumentSession(session);
   });
 
-  it('close remains disabled; P3-B4B work remains listed', () => {
-    expect(CLOSE_TAB_ACTIONS_ENABLED).toBe(false);
-    expect(REMAINING_FOR_P3_B4).toContain('closeTabWithSaveDiscardPrompt');
+  it('individual close enabled; Close All remains listed for P3-B4B2', () => {
+    expect(CLOSE_TAB_ACTIONS_ENABLED).toBe(true);
+    expect(REMAINING_FOR_P3_B4).toContain('closeAllDrawings');
     expect(P3_B4A_FILE_OPS).toContain('saveAsCollisionReject');
   });
 
