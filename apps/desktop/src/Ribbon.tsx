@@ -40,6 +40,8 @@ import {
   SUPPORTED_DIMENSION_KINDS,
   type RibbonTabId,
 } from './ribbonTabs';
+import { DocumentTabs } from './DocumentTabs';
+import type { DocumentTabItem } from './documentTabsModel';
 import './styles/ribbon.css';
 
 const MIXED = 'Mixed';
@@ -51,6 +53,10 @@ export type RibbonLayoutInfo = {
 
 export type RibbonProps = {
   displayName: string;
+  /** P3-B2 session-aware drawing tabs (single active session until P3-B3). */
+  documentTabs: DocumentTabItem[];
+  activeSessionId: string | null;
+  multiDocumentActionsEnabled?: boolean;
   activeTool: ToolId;
   dimKind: DimensionKind;
   canUndo: boolean;
@@ -2189,41 +2195,11 @@ export function Ribbon(props: RibbonProps) {
         ) : null}
       </div>
 
-      <div className="document-tabs" role="tablist" aria-label="Drawings">
-        <button type="button" className="doc-tab" title="Start" disabled>
-          Start
-        </button>
-        <button type="button" className="doc-tab active" title={props.displayName}>
-          <span className="doc-tab-label">{props.displayName}</span>
-          <span
-            className="doc-tab-close"
-            role="button"
-            tabIndex={0}
-            title="Close drawing (New)"
-            onClick={(e) => {
-              e.stopPropagation();
-              props.onNew();
-            }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault();
-                props.onNew();
-              }
-            }}
-          >
-            ×
-          </span>
-        </button>
-        <button
-          type="button"
-          className="doc-tab-add"
-          title="New drawing"
-          aria-label="New drawing"
-          onClick={props.onNew}
-        >
-          +
-        </button>
-      </div>
+      <DocumentTabs
+        tabs={props.documentTabs}
+        activeSessionId={props.activeSessionId}
+        multiDocumentActionsEnabled={props.multiDocumentActionsEnabled}
+      />
     </>
   );
 }

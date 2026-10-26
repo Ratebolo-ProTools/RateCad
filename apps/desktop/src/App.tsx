@@ -115,6 +115,11 @@ import {
   createDocumentSessionStore,
   type DocumentSessionStore,
 } from './documentSessionStore';
+import {
+  MULTI_DOCUMENT_ACTIONS_ENABLED,
+  applyLiveActiveTabState,
+  resolveDocumentTabItems,
+} from './documentTabsModel';
 import { serializeDocument, tryParseDocument } from '@ratecad/io';
 import {
   appendInputBuffer,
@@ -3286,6 +3291,22 @@ export function App() {
   const multiSelectLabel =
     selected.length > 1 ? `${selected.length} objects selected` : null;
   const displayName = `${doc.meta.name}${dirty ? ' *' : ''}`;
+  const activeSessionId = documentSessionRef.current?.id ?? null;
+  const documentTabs = useMemo(() => {
+    const store = sessionStoreRef.current;
+    const fallbackId = activeSessionId ?? 'session-active';
+    const items = resolveDocumentTabItems(store, {
+      sessionId: fallbackId,
+      title: doc.meta.name || 'Untitled Drawing',
+      dirty,
+      filePath: filePath,
+    });
+    return applyLiveActiveTabState(items, store, {
+      title: doc.meta.name || 'Untitled Drawing',
+      dirty,
+      filePath: filePath,
+    });
+  }, [activeSessionId, dirty, doc.meta.name, filePath]);
   const snapLabel = session.lastSnap?.snapped ? session.lastSnap.label : null;
   const currentLayer = getLayer(doc, doc.currentLayerId) ?? doc.layers[0];
   const showTextDialog = session.mode === 'text-input';
@@ -3457,6 +3478,9 @@ export function App() {
       ) : null}
       <Ribbon
         displayName={displayName}
+        documentTabs={documentTabs}
+        activeSessionId={activeSessionId}
+        multiDocumentActionsEnabled={MULTI_DOCUMENT_ACTIONS_ENABLED}
         activeTool={session.activeTool}
         dimKind={session.dimKind}
         canUndo={canUndo}

@@ -600,25 +600,66 @@
   display: flex;
   align-items: center;
   height: 28px;
-  padding: 0 6px;
+  padding: 0 4px 0 6px;
   background: #10141a;
   border-bottom: 1px solid var(--border);
   min-width: 0;
   flex: 0 0 auto;
+  gap: 2px;
+  overflow: hidden;
+}
+
+.document-tabs-scroll {
+  display: flex;
+  align-items: flex-end;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  gap: 1px;
+}
+
+.document-tabs-scroll::-webkit-scrollbar {
+  height: 4px;
+}
+
+.document-tabs-scroll::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 2px;
 }
 
 .doc-tab {
   height: 24px;
-  padding: 0 12px;
+  padding: 0 10px;
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   font-size: 12px;
   color: var(--text-dim);
   border: 1px solid transparent;
   border-bottom: none;
   border-radius: 3px 3px 0 0;
-  max-width: 220px;
+  max-width: 200px;
+  flex: 0 0 auto;
+  background: transparent;
+  cursor: default;
+}
+
+.doc-tab:not(:disabled):not(.active) {
+  cursor: pointer;
+}
+
+.doc-tab:focus-visible {
+  outline: 1px solid var(--accent, #3b82f6);
+  outline-offset: -1px;
+  z-index: 1;
+}
+
+.doc-tab:disabled,
+.doc-tab[aria-disabled='true'] {
+  opacity: 0.75;
+  cursor: default;
 }
 
 .doc-tab.active {
@@ -626,12 +667,18 @@
   background: var(--bg-app);
   border-color: var(--border);
   margin-bottom: -1px;
+  cursor: default;
+}
+
+.doc-tab-start {
+  flex: 0 0 auto;
 }
 
 .doc-tab-label {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  min-width: 0;
 }
 
 .doc-tab-close {
@@ -643,11 +690,22 @@
   justify-content: center;
   font-size: 12px;
   color: var(--text-dim);
+  flex: 0 0 auto;
 }
 
-.doc-tab-close:hover {
+.doc-tab-close:hover:not(.is-disabled) {
   background: var(--bg-hover);
   color: var(--text);
+}
+
+.doc-tab-close.is-disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.doc-tab-close:focus-visible {
+  outline: 1px solid var(--accent, #3b82f6);
+  outline-offset: 0;
 }
 
 .doc-tab-add {
@@ -658,11 +716,24 @@
   color: var(--text-dim);
   font-size: 16px;
   line-height: 1;
+  flex: 0 0 auto;
 }
 
-.doc-tab-add:hover {
+.doc-tab-add:hover:not(:disabled):not(.is-disabled) {
   background: var(--bg-hover);
   color: var(--text);
+}
+
+.doc-tab-add:disabled,
+.doc-tab-add.is-disabled,
+.doc-tab-add[aria-disabled='true'] {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.doc-tab-add:focus-visible {
+  outline: 1px solid var(--accent, #3b82f6);
+  outline-offset: 0;
 }
 
 .area-mode-strip {
