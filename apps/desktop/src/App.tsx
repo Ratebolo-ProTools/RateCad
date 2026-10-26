@@ -106,6 +106,7 @@ import {
   createUntitledBus,
   getSessionTitle,
   markSessionDirty,
+  persistedContentFingerprint,
   replaceSessionDocument,
   setSessionFilePath,
   setSessionHoveredId,
@@ -131,7 +132,16 @@ import {
   persistActiveSessionMirrors,
   prepareSessionDeactivation,
 } from './documentSessionSwitch';
-import { serializeDocument, tryParseDocument } from '@ratecad/io';
+import {
+  applySuccessfulSaveToSession,
+  beginSaveTransaction,
+  canQuickSaveToExistingPath,
+  describeSaveAsCollision,
+  findSaveAsCollision,
+  resolveFileOpsPlatform,
+  resolveOpenRequest,
+} from './documentFileOps';
+import { serializeDocument } from '@ratecad/io';
 import {
   appendInputBuffer,
   CadCommandEngine,
@@ -605,6 +615,8 @@ export function App() {
   );
   /** Bumps when the session list or active tab changes (tab strip refresh). */
   const [sessionListVersion, setSessionListVersion] = useState(0);
+  /** Prevent concurrent saves for the same session / overlapping writes. */
+  const saveInFlightRef = useRef<Set<string>>(new Set());
   const rafPanRef = useRef<number | null>(null);
   const pendingPanRef = useRef<{ dx: number; dy: number } | null>(null);
   const commandLineRef = useRef('');
@@ -1805,112 +1817,136 @@ export function App() {
     panHistoryPushedRef.current = false;
   }, [cancelActiveTransientWork, flushActiveSessionMirrors]);
 
-  const newDrawing = useCallback(async () => {
-    if (!(await confirmDiscardIfNeeded())) return;
-    const ds = documentSessionRef.current;
-    if (ds) {
-      setSuppressDirty(true);
-      replaceSessionDocument(
-        ds,
-        ensureLayouts(createEmptyDocument('Untitled Drawing')),
-        { filePath: null, dirty: false },
-      );
-      markDirty(false);
-      setSuppressDirty(false);
-      setProjectPath(null);
-      syncDocumentSessionAfterReplace(ds);
-      setStatusExtra(null);
-      return;
-    }
-    setSuppressDirty(true);
-    busRef.current.reset(
-      ensureLayouts(createEmptyDocument('Untitled Drawing')),
-    );
-    workspaceModeRef.current = 'MODEL_SPACE';
-    setWorkspaceMode('MODEL_SPACE');
-    setActiveViewportId(null);
-    setSelectedViewportId(null);
-    setSelectedPaperEntityIds([]);
-    markDirty(false);
-    setSuppressDirty(false);
-    setProjectPath(null);
-    syncSession(createToolSession('select'));
-    syncCamera(createCamera());
-    viewHistoryRef.current.clear();
-    setStatusExtra(null);
-  }, [
-    confirmDiscardIfNeeded,
-    markDirty,
-    setProjectPath,
-    setSuppressDirty,
-    syncCamera,
-    syncDocumentSessionAfterReplace,
-    syncSession,
-  ]);
+  /**
+   * P3-B4A — Application Menu / QAT / Ctrl+N share the tab + New flow.
+   * Never replaces an existing session.
+   */
+  const newDrawing = useCallback(() => {
+    createNewDocumentTab();
+  }, [createNewDocumentTab]);
+
+  const syncUiAfterTargetedSave = useCallback(
+    (session: DocumentSession) => {
+      setSessionListVersion((n) => n + 1);
+      if (documentSessionRef.current?.id !== session.id) return;
+      filePathRef.current = session.filePath;
+      dirtyRef.current = session.dirty;
+      setFilePath(session.filePath);
+      setDirty(session.dirty);
+      setDoc(ensureLayouts(session.bus.getDocument()));
+    },
+    [],
+  );
 
   const saveDrawing = useCallback(
     async (forceDialog = false) => {
+      const store = sessionStoreRef.current;
+      const target = documentSessionRef.current;
+      if (!target || target.disposed) return;
+
+      const tx = beginSaveTransaction(target, forceDialog);
+      if (saveInFlightRef.current.has(tx.sessionId)) {
+        setStatusExtra('Save already in progress for this drawing');
+        return;
+      }
+      saveInFlightRef.current.add(tx.sessionId);
+
+      const platform = resolveFileOpsPlatform(window.ratecadDesktop);
       const api = window.ratecadDesktop;
-      const contents = serializeDocument(busRef.current.getDocument());
-      const defaultName = `${busRef.current.getDocument().meta.name || 'Untitled'}.ratecad`;
+      // Serialize from the captured session — not whatever becomes active later.
+      const contents = serializeDocument(target.bus.getDocument());
+      const fingerprint = persistedContentFingerprint(target.bus.getDocument());
       setStatusExtra('Saving…');
 
       const finishLocalSave = (savedPath: string) => {
-        setProjectPath(savedPath);
-        const name = basename(savedPath).replace(/\.ratecad$/i, '');
-        setSuppressDirty(true);
-        busRef.current.updateWithoutHistory((d) => ({
-          ...d,
-          meta: { ...d.meta, name, updatedAt: new Date().toISOString() },
-        }));
-        markDirty(false);
-        setSuppressDirty(false);
-        rememberRecentDrawing(savedPath, contents);
-        setStatusExtra(`Saved ${basename(savedPath)}`);
-      };
-
-      // Fast path: existing path and not Save As
-      if (api?.quickSave && (!filePathRef.current || forceDialog === false) && filePathRef.current) {
-        const result = await api.saveDrawing({
-          contents,
-          filePath: filePathRef.current,
-          forceDialog: false,
-        });
-        if (result.filePath) {
-          finishLocalSave(result.filePath);
+        const session = getSession(store, tx.sessionId);
+        if (!session || session.disposed) {
+          setStatusExtra('Save finished but drawing tab is no longer open');
           return;
         }
-      }
-
-      if (!api?.saveDrawing && !api?.quickSave) {
-        const blob = new Blob([contents], { type: 'application/json' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = defaultName;
-        a.click();
-        URL.revokeObjectURL(url);
-        finishLocalSave(defaultName);
-        return;
-      }
+        const conflict = findSaveAsCollision(
+          store,
+          savedPath,
+          tx.sessionId,
+          platform,
+        );
+        if (conflict) {
+          setStatusExtra(describeSaveAsCollision(conflict));
+          return;
+        }
+        const result = applySuccessfulSaveToSession(
+          session,
+          savedPath,
+          fingerprint,
+        );
+        rememberRecentDrawing(savedPath, contents);
+        syncUiAfterTargetedSave(session);
+        setStatusExtra(
+          result.clearedDirty
+            ? `Saved ${basename(savedPath)}`
+            : `Saved ${basename(savedPath)} · further edits remain unsaved`,
+        );
+      };
 
       try {
-        // Prefer native dialog (with main-process timeout → Documents fallback)
+        const canQuick =
+          !forceDialog && canQuickSaveToExistingPath(target, platform);
+
+        if (api?.saveDrawing && canQuick && target.filePath) {
+          const result = await api.saveDrawing({
+            contents,
+            filePath: target.filePath,
+            forceDialog: false,
+          });
+          if (result.filePath) {
+            finishLocalSave(result.filePath);
+            return;
+          }
+          if (result.error) {
+            setStatusExtra(`Save failed: ${result.error}`);
+            return;
+          }
+        }
+
+        // Browser: download-only — no persistent writable path.
+        if (!api?.saveDrawing && !api?.quickSave) {
+          const blob = new Blob([contents], { type: 'application/json' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = tx.defaultName;
+          a.click();
+          URL.revokeObjectURL(url);
+          // Soft identity for tab title only (not reliable for duplicate merge).
+          finishLocalSave(tx.defaultName);
+          return;
+        }
+
         if (api?.saveDrawing) {
           const result = await api.saveDrawing({
             contents,
-            filePath: forceDialog ? null : filePathRef.current,
-            defaultPath: defaultName,
-            forceDialog: forceDialog || !filePathRef.current,
+            filePath: forceDialog ? null : target.filePath,
+            defaultPath: tx.defaultName,
+            forceDialog:
+              forceDialog || !canQuickSaveToExistingPath(target, platform),
           });
           if (result.canceled) {
             setStatusExtra('Save canceled');
             return;
           }
           if (result.error) {
-            // Fall through to quickSave
             setStatusExtra(`Dialog: ${result.error}`);
           } else if (result.filePath) {
+            const conflict = findSaveAsCollision(
+              store,
+              result.filePath,
+              tx.sessionId,
+              platform,
+            );
+            if (conflict) {
+              setStatusExtra(describeSaveAsCollision(conflict));
+              return;
+            }
             finishLocalSave(result.filePath);
             return;
           }
@@ -1919,9 +1955,19 @@ export function App() {
         if (api?.quickSave) {
           const quick = await api.quickSave({
             contents,
-            preferredName: defaultName,
+            preferredName: tx.defaultName,
           });
           if (quick.filePath) {
+            const conflict = findSaveAsCollision(
+              store,
+              quick.filePath,
+              tx.sessionId,
+              platform,
+            );
+            if (conflict) {
+              setStatusExtra(describeSaveAsCollision(conflict));
+              return;
+            }
             finishLocalSave(quick.filePath);
             return;
           }
@@ -1931,53 +1977,53 @@ export function App() {
         setStatusExtra(
           `Save failed: ${err instanceof Error ? err.message : 'unknown'}`,
         );
+      } finally {
+        saveInFlightRef.current.delete(tx.sessionId);
       }
     },
-    [markDirty, rememberRecentDrawing, setProjectPath, setSuppressDirty],
+    [rememberRecentDrawing, syncUiAfterTargetedSave],
+  );
+
+  /** P3-B4A — open validated contents into a new tab (or activate duplicate). */
+  const openContentsInSession = useCallback(
+    (contents: string, path?: string | null) => {
+      const store = sessionStoreRef.current;
+      const platform = resolveFileOpsPlatform(window.ratecadDesktop);
+      const resolved = resolveOpenRequest(
+        store,
+        contents,
+        path ?? null,
+        platform,
+      );
+      if (resolved.kind === 'invalid') {
+        setStatusExtra(`Invalid file: ${resolved.error}`);
+        return;
+      }
+      if (resolved.kind === 'activate-existing') {
+        switchToDocumentSession(resolved.session.id);
+        setStatusExtra(
+          `Already open — activated ${getSessionTitle(resolved.session)}`,
+        );
+        if (path) rememberRecentDrawing(path, contents);
+        return;
+      }
+
+      const session = createAndRegisterSession(store, {
+        document: ensureLayouts(resolved.document),
+        filePath: resolved.filePath,
+        dirty: false,
+        trackDirtyFromBus: false,
+      });
+      switchToDocumentSession(session.id);
+      if (path) rememberRecentDrawing(path, contents);
+      setStatusExtra(path ? `Opened ${basename(path)}` : 'Opened drawing');
+    },
+    [rememberRecentDrawing, switchToDocumentSession],
   );
 
   const openDrawing = useCallback(async () => {
-    if (!(await confirmDiscardIfNeeded())) return;
+    // Multi-document Open never discards siblings or replaces the active tab.
     const api = window.ratecadDesktop;
-
-    const applyOpened = (contents: string, path?: string) => {
-      const parsed = tryParseDocument(contents);
-      if (!parsed.ok) {
-        setStatusExtra(`Invalid file: ${parsed.error}`);
-        return;
-      }
-      const opened = ensureLayouts(parsed.document);
-      const ds = documentSessionRef.current;
-      if (ds) {
-        setSuppressDirty(true);
-        replaceSessionDocument(ds, opened, {
-          filePath: path ?? null,
-          dirty: false,
-        });
-        markDirty(false);
-        setSuppressDirty(false);
-        setProjectPath(path ?? null);
-        syncDocumentSessionAfterReplace(ds);
-      } else {
-        setSuppressDirty(true);
-        busRef.current.reset(opened);
-        setProjectPath(path ?? null);
-        markDirty(false);
-        setSuppressDirty(false);
-        syncSession(createToolSession('select'));
-        syncCamera(createCamera());
-        modelCameraRef.current = createCamera();
-        viewHistoryRef.current.clear();
-        workspaceModeRef.current =
-          opened.activeLayoutId == null ? 'MODEL_SPACE' : 'PAPER_SPACE';
-        setWorkspaceMode(workspaceModeRef.current);
-        setActiveViewportId(null);
-        setSelectedViewportId(null);
-        setSelectedPaperEntityIds([]);
-      }
-      if (path) rememberRecentDrawing(path, contents);
-      setStatusExtra(path ? `Opened ${basename(path)}` : 'Opened drawing');
-    };
 
     const fileInputFallback = () => {
       const input = document.createElement('input');
@@ -1988,7 +2034,8 @@ export function App() {
         if (!file) return;
         try {
           const text = await file.text();
-          applyOpened(text, file.name);
+          // Browser: file.name is not a reliable absolute identity.
+          openContentsInSession(text, file.name);
         } catch (err) {
           setStatusExtra(
             `Open failed: ${err instanceof Error ? err.message : 'read error'}`,
@@ -2025,62 +2072,19 @@ export function App() {
         setStatusExtra('Open failed: empty file');
         return;
       }
-      applyOpened(result.contents, result.filePath);
+      openContentsInSession(result.contents, result.filePath ?? null);
     } catch (err) {
       setStatusExtra(
         `Open failed: ${err instanceof Error ? err.message : 'unknown'} — file picker`,
       );
       fileInputFallback();
     }
-  }, [
-    confirmDiscardIfNeeded,
-    markDirty,
-    rememberRecentDrawing,
-    setProjectPath,
-    setSuppressDirty,
-    syncDocumentSessionAfterReplace,
-  ]);
+  }, [openContentsInSession]);
 
   const openRecentDrawing = useCallback(
     async (entry: RecentDrawing) => {
-      if (!(await confirmDiscardIfNeeded())) return;
-      const applyOpened = (contents: string, path?: string) => {
-        const parsed = tryParseDocument(contents);
-        if (!parsed.ok) {
-          setStatusExtra(`Invalid file: ${parsed.error}`);
-          return;
-        }
-        const opened = ensureLayouts(parsed.document);
-        const ds = documentSessionRef.current;
-        if (ds) {
-          setSuppressDirty(true);
-          replaceSessionDocument(ds, opened, {
-            filePath: path ?? null,
-            dirty: false,
-          });
-          markDirty(false);
-          setSuppressDirty(false);
-          setProjectPath(path ?? null);
-          syncDocumentSessionAfterReplace(ds);
-        } else {
-          setSuppressDirty(true);
-          busRef.current.reset(opened);
-          setProjectPath(path ?? null);
-          markDirty(false);
-          setSuppressDirty(false);
-          syncSession(createToolSession('select'));
-          syncCamera(createCamera());
-          modelCameraRef.current = createCamera();
-          viewHistoryRef.current.clear();
-          workspaceModeRef.current =
-            opened.activeLayoutId == null ? 'MODEL_SPACE' : 'PAPER_SPACE';
-          setWorkspaceMode(workspaceModeRef.current);
-          setActiveViewportId(null);
-          setSelectedViewportId(null);
-          setSelectedPaperEntityIds([]);
-        }
-        rememberRecentDrawing(path ?? entry.path, contents);
-        setStatusExtra(`Opened ${basename(path ?? entry.path)}`);
+      const apply = (contents: string, path?: string) => {
+        openContentsInSession(contents, path ?? entry.path);
       };
 
       const api = window.ratecadDesktop;
@@ -2089,19 +2093,19 @@ export function App() {
           const result = await api.openDrawingPath(entry.path);
           if (result.error) {
             if (entry.contents) {
-              applyOpened(entry.contents, entry.path);
+              apply(entry.contents, entry.path);
               return;
             }
             setStatusExtra(`Open failed: ${result.error}`);
             return;
           }
           if (result.contents) {
-            applyOpened(result.contents, result.filePath ?? entry.path);
+            apply(result.contents, result.filePath ?? entry.path);
             return;
           }
         } catch (err) {
           if (entry.contents) {
-            applyOpened(entry.contents, entry.path);
+            apply(entry.contents, entry.path);
             return;
           }
           setStatusExtra(
@@ -2112,7 +2116,7 @@ export function App() {
       }
 
       if (entry.contents) {
-        applyOpened(entry.contents, entry.path);
+        apply(entry.contents, entry.path);
         return;
       }
 
@@ -2120,14 +2124,7 @@ export function App() {
         `Recent file unavailable — use Open to select ${entry.name}`,
       );
     },
-    [
-      confirmDiscardIfNeeded,
-      markDirty,
-      rememberRecentDrawing,
-      setProjectPath,
-      setSuppressDirty,
-      syncDocumentSessionAfterReplace,
-    ],
+    [openContentsInSession],
   );
 
   const exitApp = useCallback(async () => {

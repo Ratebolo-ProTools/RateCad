@@ -1,5 +1,5 @@
 /**
- * DocumentSession architecture classification (P3-B1 → P3-B3B).
+ * DocumentSession architecture classification (P3-B1 → P3-B4A).
  *
  * Document-specific (must be per session):
  *   DrawingDocument (via CommandBus), CommandBus undo/redo,
@@ -16,8 +16,9 @@
  *   createDefaultEngineRegistry() factories, IO serialize/parse,
  *   geometry/viewport pure helpers, command class definitions.
  *
- * P3-B3B rebinds App React mirrors / canvas / command UI on tab switch.
- * Close / save / discard multi-file workflows remain P3-B4.
+ * P3-B3B: App mirror rebind on tab switch.
+ * P3-B4A: session-aware New / Open / Save / Save As / Recent.
+ * Close / Close All remain P3-B4B.
  */
 
 export const DOCUMENT_SPECIFIC_STATE = [
@@ -61,9 +62,30 @@ export const SHARED_IMMUTABLE_SERVICES = [
 /** P3-B3B completed App mirror rebind on UI switch. */
 export const REMAINING_FOR_P3_B3B_UI_SWITCH = [] as const;
 
-/** Remaining work after P3-B3B (not started until approved). */
+/**
+ * P3-B4A completed session-aware file ops.
+ * Remaining close workflows (not started until P3-B4B approved).
+ */
 export const REMAINING_FOR_P3_B4 = [
   'closeTabWithSaveDiscardPrompt',
   'multiDocumentCloseWorkflows',
   'closeLastDrawingPolicy',
+  'closeAllDrawings',
 ] as const;
+
+export const P3_B4A_FILE_OPS = [
+  'sessionAwareNew',
+  'sessionAwareOpen',
+  'sessionAwareSave',
+  'sessionAwareSaveAs',
+  'duplicateFileActivation',
+  'saveAsCollisionReject',
+  'recentDrawingsSessionOpen',
+] as const;
+
+/**
+ * Browser limitation: file picker / download expose bare filenames only.
+ * Those are not used as canonical identities for duplicate merging.
+ */
+export const BROWSER_FILE_IDENTITY_LIMITATION =
+  'Browser environments do not provide stable absolute paths; duplicate-open detection and Save As collision checks apply only to reliable (absolute) Electron paths.';

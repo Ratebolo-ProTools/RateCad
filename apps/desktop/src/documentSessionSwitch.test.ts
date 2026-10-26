@@ -302,7 +302,7 @@ describe('P3-B3B multi-document switching', () => {
     const session = createAndRegisterSession(store, { bindMinimalEngine: true });
     session.bus.execute(new CreateLineCommand({ x: 0, y: 0 }, { x: 1, y: 0 }));
     expect(session.dirty).toBe(true);
-    // Application Menu → New still replaces within the active session.
+    // replaceSessionDocument remains for Exit soft-close; New uses a new tab (P3-B4A).
     withDirtySuppressed(session, () => {
       session.bus.reset(
         ensureLayouts(createEmptyDocument('Untitled Drawing')),
