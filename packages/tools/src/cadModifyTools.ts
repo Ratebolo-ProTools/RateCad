@@ -20,7 +20,7 @@ import {
 import {
   angleBetween,
   distance,
-  extendEntity,
+  extendEntityMulti,
   formatLength,
   mirrorEntity,
   offsetEntity,
@@ -420,7 +420,10 @@ export function handleExtendPointerMove(
     };
   }
   void snapPoint;
-  const result = extendEntity(target, boundary, input.world);
+  // Shared multi pathway (same as ExtendEntityCommand / engine EXTEND).
+  const result = extendEntityMulti(target, [boundary], input.world, {
+    edgeMode: 'extend',
+  });
   if (!result.ok) {
     return {
       ...session,

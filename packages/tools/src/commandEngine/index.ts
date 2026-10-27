@@ -6,6 +6,7 @@ import { lineCommand } from './commands/line.js';
 import { copyCommand, moveCommand } from './commands/moveCopy.js';
 import { rectangleCommand } from './commands/rectangle.js';
 import { trimCommand } from './commands/trim.js';
+import { extendCommand } from './commands/extend.js';
 import { filletCommand } from './commands/fillet.js';
 import {
   chpropCommand,
@@ -82,6 +83,7 @@ export function createDefaultEngineRegistry(): CadEngineRegistry {
     areaCommand,
     eraseCommand,
     trimCommand,
+    extendCommand,
     filletCommand,
     propertiesCommand,
     chpropCommand,
@@ -101,10 +103,6 @@ export function createDefaultEngineRegistry(): CadEngineRegistry {
     toolBridge('polyline', 'POLYLINE', ['PL', 'PLINE'], 'polyline', 'Draw a polyline', {
       category: 'Draw',
       keywords: ['polyline', 'pline', 'path', 'arc'],
-    }),
-    toolBridge('extend', 'EXTEND', ['EX'], 'extend', 'Extend objects', {
-      category: 'Modify',
-      keywords: ['extend', 'lengthen'],
     }),
     toolBridge('offset', 'OFFSET', ['O'], 'offset', 'Offset objects', {
       category: 'Modify',

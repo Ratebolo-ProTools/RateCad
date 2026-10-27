@@ -1267,6 +1267,254 @@ function rayHitsBoundaryLocal(
   return best?.point ?? null;
 }
 
+/** True when origin already lies on a boundary (within HIT_EPS). */
+function originTouchesBoundary(
+  origin: Vec2,
+  boundaries: Entity[],
+  excludeId?: EntityId,
+): boolean {
+  for (const boundary of boundaries) {
+    if (excludeId && boundary.id === excludeId) continue;
+    if (boundary.type === 'circle') {
+      const d = distance(origin, boundary.geometry.center);
+      if (Math.abs(d - boundary.geometry.radius) < HIT_EPS) return true;
+      continue;
+    }
+    for (const seg of cuttingSegments(boundary)) {
+      if (distance(origin, closestPointOnSegment(origin, seg.a, seg.b)) < HIT_EPS) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function noExtendIntersectionReason(
+  origin: Vec2,
+  direction: Vec2,
+  other: Vec2,
+  boundaries: Entity[],
+  edgeMode: EdgeMode,
+  excludeId?: EntityId,
+): string {
+  const n = normalize(direction);
+  if (!n) return 'Degenerate target segment';
+  if (originTouchesBoundary(origin, boundaries, excludeId)) {
+    return 'Already intersecting boundary — nothing to extend';
+  }
+
+  let sawBehind = false;
+  let onlyParallel = true;
+  let anyBoundary = false;
+  for (const boundary of boundaries) {
+    if (excludeId && boundary.id === excludeId) continue;
+    anyBoundary = true;
+    if (boundary.type === 'circle') {
+      onlyParallel = false;
+      const behind = rayHitsBoundaryLocal(origin, { x: -direction.x, y: -direction.y }, boundary, edgeMode);
+      if (behind) sawBehind = true;
+      continue;
+    }
+    for (const seg of cuttingSegments(boundary)) {
+      if (!segmentsAreParallel(origin, add(origin, direction), seg.a, seg.b)) {
+        onlyParallel = false;
+      }
+      if (segmentsAreCollinear(origin, other, seg.a, seg.b)) {
+        return 'Collinear boundary — no transverse extension';
+      }
+    }
+    const behind = rayHitsBoundaryLocal(
+      origin,
+      { x: -direction.x, y: -direction.y },
+      boundary,
+      edgeMode,
+    );
+    if (behind) sawBehind = true;
+  }
+  if (!anyBoundary) return 'No boundary edges';
+  if (onlyParallel) return 'Parallel boundary — no intersection';
+  if (sawBehind) {
+    return 'Boundary lies behind selected endpoint — choose the other end or another boundary';
+  }
+  if (edgeMode === 'no-extend') {
+    return 'No intersection with finite boundary (Edge Extend off)';
+  }
+  return 'No extension intersection with boundary';
+}
+
+export type OpenSegmentExtendPlan =
+  | {
+      ok: true;
+      extendStart: boolean;
+      origin: Vec2;
+      other: Vec2;
+      hit: Vec2;
+      direction: Vec2;
+    }
+  | { ok: false; reason: string };
+
+/**
+ * Plan a line/wall extend from the same ray + nearest-boundary logic used for
+ * commit and preview (single source of truth).
+ *
+ * P4-B3 edge semantics: `edgeMode: 'no-extend'` = finite boundary only;
+ * `edgeMode: 'extend'` = natural (infinite) boundary line — already supported
+ * by rayHitsBoundaryLocal; UI Edge-mode option remains a P4-B4 concern.
+ */
+export function planOpenSegmentExtend(
+  start: Vec2,
+  end: Vec2,
+  pickPoint: Vec2,
+  boundaries: Entity[],
+  edgeMode: EdgeMode = 'extend',
+  excludeId?: EntityId,
+): OpenSegmentExtendPlan {
+  if (!isFiniteVec2(start) || !isFiniteVec2(end) || !isFiniteVec2(pickPoint)) {
+    return { ok: false, reason: 'Invalid pick point' };
+  }
+  if (distance(start, end) <= HIT_EPS) {
+    return { ok: false, reason: 'Degenerate target segment' };
+  }
+  if (!boundaries.length) {
+    return { ok: false, reason: 'No boundary edges' };
+  }
+
+  const distStart = distance(pickPoint, start);
+  const distEnd = distance(pickPoint, end);
+  const extendStart = distStart <= distEnd;
+  const origin = extendStart ? start : end;
+  const other = extendStart ? end : start;
+  // Outward direction from the selected endpoint (away from the other end).
+  const direction = extendStart ? sub(start, end) : sub(end, start);
+  if (!(Math.hypot(direction.x, direction.y) > EPS)) {
+    return { ok: false, reason: 'Degenerate target segment' };
+  }
+
+  let nearest: Vec2 | null = null;
+  let nearestDist = Number.POSITIVE_INFINITY;
+  for (const boundary of boundaries) {
+    if (excludeId && boundary.id === excludeId) continue;
+    const hit = rayHitsBoundaryLocal(origin, direction, boundary, edgeMode);
+    if (!hit || !isFiniteVec2(hit)) continue;
+    const d = distance(origin, hit);
+    // Reject zero-length / collapsing onto the opposite endpoint.
+    if (d > HIT_EPS && d < nearestDist && distance(hit, other) > HIT_EPS) {
+      nearestDist = d;
+      nearest = hit;
+    }
+  }
+  if (!nearest) {
+    return {
+      ok: false,
+      reason: noExtendIntersectionReason(
+        origin,
+        direction,
+        other,
+        boundaries,
+        edgeMode,
+        excludeId,
+      ),
+    };
+  }
+  return {
+    ok: true,
+    extendStart,
+    origin: { ...origin },
+    other: { ...other },
+    hit: { ...nearest },
+    direction: { ...direction },
+  };
+}
+
+export type PolylineExtendPlan =
+  | {
+      ok: true;
+      extendStart: boolean;
+      origin: Vec2;
+      hit: Vec2;
+      vertices: Vec2[];
+    }
+  | { ok: false; reason: string };
+
+export function planPolylineExtend(
+  vertices: Vec2[],
+  closed: boolean,
+  pickPoint: Vec2,
+  boundaries: Entity[],
+  edgeMode: EdgeMode = 'extend',
+  excludeId?: EntityId,
+): PolylineExtendPlan {
+  if (closed) return { ok: false, reason: 'Closed polyline cannot be extended' };
+  if (vertices.length < 2) return { ok: false, reason: 'Invalid polyline' };
+  if (!isFiniteVec2(pickPoint)) return { ok: false, reason: 'Invalid pick point' };
+  if (!boundaries.length) return { ok: false, reason: 'No boundary edges' };
+
+  const first = vertices[0]!;
+  const last = vertices[vertices.length - 1]!;
+  if (!isFiniteVec2(first) || !isFiniteVec2(last)) {
+    return { ok: false, reason: 'Invalid polyline' };
+  }
+  const extendStart = distance(pickPoint, first) <= distance(pickPoint, last);
+  const origin = extendStart ? first : last;
+  const next = extendStart ? vertices[1]! : vertices[vertices.length - 2]!;
+  const direction = sub(origin, next);
+  const other = next;
+  if (!(Math.hypot(direction.x, direction.y) > EPS)) {
+    return { ok: false, reason: 'Degenerate terminal segment' };
+  }
+
+  let nearest: Vec2 | null = null;
+  let nearestDist = Number.POSITIVE_INFINITY;
+  for (const boundary of boundaries) {
+    if (excludeId && boundary.id === excludeId) continue;
+    const hit = rayHitsBoundaryLocal(origin, direction, boundary, edgeMode);
+    if (!hit || !isFiniteVec2(hit)) continue;
+    const d = distance(origin, hit);
+    if (d > HIT_EPS && d < nearestDist && distance(hit, other) > HIT_EPS) {
+      nearestDist = d;
+      nearest = hit;
+    }
+  }
+  if (!nearest) {
+    return {
+      ok: false,
+      reason: noExtendIntersectionReason(
+        origin,
+        direction,
+        other,
+        boundaries,
+        edgeMode,
+        excludeId,
+      ),
+    };
+  }
+
+  // Replace only the terminal vertex; preserve interior order and properties.
+  const nextVerts = extendStart
+    ? [{ ...nearest }, ...vertices.slice(1).map((p) => ({ ...p }))]
+    : [...vertices.slice(0, -1).map((p) => ({ ...p })), { ...nearest }];
+  // Drop accidental duplicate at the joint after extension.
+  const cleaned: Vec2[] = [];
+  for (const p of nextVerts) {
+    if (
+      cleaned.length === 0 ||
+      distance(cleaned[cleaned.length - 1]!, p) > HIT_EPS
+    ) {
+      cleaned.push(p);
+    }
+  }
+  if (cleaned.length < 2) {
+    return { ok: false, reason: 'Extension would produce degenerate polyline' };
+  }
+  return {
+    ok: true,
+    extendStart,
+    origin: { ...origin },
+    hit: { ...nearest },
+    vertices: cleaned,
+  };
+}
+
 export function extendEntityMulti(
   target: Entity,
   boundaries: Entity[],
@@ -1280,34 +1528,23 @@ export function extendEntityMulti(
 
   if (target.type === 'line' || target.type === 'wall') {
     const { start, end } = target.geometry;
-    const distStart = distance(pickPoint, start);
-    const distEnd = distance(pickPoint, end);
-    const extendStart = distStart <= distEnd;
-    const origin = extendStart ? start : end;
-    const other = extendStart ? end : start;
-    const dir = extendStart ? sub(start, end) : sub(end, start);
-
-    let nearest: Vec2 | null = null;
-    let nearestDist = Number.POSITIVE_INFINITY;
-    for (const boundary of boundaries) {
-      if (boundary.id === target.id) continue;
-      const hit = rayHitsBoundaryLocal(origin, dir, boundary, edgeMode);
-      if (!hit) continue;
-      const d = distance(origin, hit);
-      if (d > EPS && d < nearestDist && distance(hit, other) > EPS) {
-        nearestDist = d;
-        nearest = hit;
-      }
-    }
-    if (!nearest) return fail('No extension intersection with boundary');
+    const plan = planOpenSegmentExtend(
+      start,
+      end,
+      pickPoint,
+      boundaries,
+      edgeMode,
+      target.id,
+    );
+    if (!plan.ok) return fail(plan.reason);
     if (target.type === 'wall') {
       return ok([
         {
           ...target,
           geometry: {
             ...target.geometry,
-            start: extendStart ? { ...nearest } : { ...start },
-            end: extendStart ? { ...end } : { ...nearest },
+            start: plan.extendStart ? { ...plan.hit } : { ...start },
+            end: plan.extendStart ? { ...end } : { ...plan.hit },
           },
         },
       ]);
@@ -1316,44 +1553,54 @@ export function extendEntityMulti(
       {
         ...target,
         geometry: {
-          start: extendStart ? { ...nearest } : { ...start },
-          end: extendStart ? { ...end } : { ...nearest },
+          start: plan.extendStart ? { ...plan.hit } : { ...start },
+          end: plan.extendStart ? { ...end } : { ...plan.hit },
         },
       },
     ]);
   }
 
   if (target.type === 'polyline') {
-    if (target.geometry.closed) return fail('Closed polyline cannot be extended');
-    const v = target.geometry.vertices;
-    if (v.length < 2) return fail('Invalid polyline');
-    const first = v[0]!;
-    const last = v[v.length - 1]!;
-    const extendStart = distance(pickPoint, first) <= distance(pickPoint, last);
-    const origin = extendStart ? first : last;
-    const next = extendStart ? v[1]! : v[v.length - 2]!;
-    const dir = sub(origin, next);
-
-    let nearest: Vec2 | null = null;
-    let nearestDist = Number.POSITIVE_INFINITY;
-    for (const boundary of boundaries) {
-      if (boundary.id === target.id) continue;
-      const hit = rayHitsBoundaryLocal(origin, dir, boundary, edgeMode);
-      if (!hit) continue;
-      const d = distance(origin, hit);
-      if (d > EPS && d < nearestDist) {
-        nearestDist = d;
-        nearest = hit;
-      }
-    }
-    if (!nearest) return fail('No extension intersection with boundary');
-    const vertices = extendStart
-      ? [{ ...nearest }, ...v.slice(1).map((p) => ({ ...p }))]
-      : [...v.slice(0, -1).map((p) => ({ ...p })), { ...nearest }];
-    return ok([{ ...target, geometry: { ...target.geometry, vertices } }]);
+    const plan = planPolylineExtend(
+      target.geometry.vertices,
+      target.geometry.closed,
+      pickPoint,
+      boundaries,
+      edgeMode,
+      target.id,
+    );
+    if (!plan.ok) return fail(plan.reason);
+    return ok([
+      {
+        ...target,
+        geometry: { ...target.geometry, vertices: plan.vertices },
+      },
+    ]);
   }
 
   return fail(`${target.type} extend not supported`);
+}
+
+/**
+ * Preview entity for EXTEND — same plan path as commit (line/wall/polyline).
+ * Returns cyan preview of the extended entity, or null when the operation is invalid.
+ */
+export function extendPreviewMulti(
+  target: Entity,
+  boundaries: Entity[],
+  pickPoint: Vec2,
+  options: TrimExtendOptions = {},
+): Entity | null {
+  const result = extendEntityMulti(target, boundaries, pickPoint, options);
+  if (!result.ok || !result.entities[0]) return null;
+  const e = result.entities[0]!;
+  return {
+    ...e,
+    properties: {
+      ...(e.properties as Record<string, unknown>),
+      color: '#7eb6ff',
+    },
+  } as Entity;
 }
 
 /**

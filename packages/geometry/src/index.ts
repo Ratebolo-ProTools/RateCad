@@ -201,6 +201,10 @@ export type {
   TrimMode,
   TrimPick,
 } from './trimExtendEngine.js';
+export type {
+  OpenSegmentExtendPlan,
+  PolylineExtendPlan,
+} from './trimExtendEngine.js';
 export {
   applyTrimExtend,
   buildIntervals,
@@ -212,11 +216,14 @@ export {
   defaultTrimSettings,
   entitiesCrossedByFence,
   extendEntityMulti,
+  extendPreviewMulti,
   fencePickPoint,
   intersectInfiniteLineSegment,
   intersectInfiniteLines,
   nearbyCutters,
+  planOpenSegmentExtend,
   planOpenSegmentTrim,
+  planPolylineExtend,
   resolvePickInterval,
   segmentsAreCollinear,
   segmentsAreParallel,

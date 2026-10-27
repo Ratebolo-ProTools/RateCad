@@ -22,6 +22,7 @@ import {
   validateEntityGeometry,
 } from './transform.js';
 import {
+  extendEntityMulti,
   trimEntityMulti,
   trimRemovalPreviewMulti,
   type EdgeMode,
@@ -277,24 +278,11 @@ export function extendEntity(
   boundary: Entity,
   pickPoint: Vec2,
 ): ModifyResult {
-  if (!isFiniteVec2(pickPoint)) return fail('Invalid pick point');
-  switch (target.type) {
-    case 'line':
-      return extendLineEntity(target, boundary, pickPoint);
-    case 'polyline':
-      return extendPolylineEntity(target, boundary, pickPoint);
-    case 'rectangle':
-      return fail('Rectangle extend not supported — explode or use lines');
-    case 'circle':
-    case 'dimension':
-    case 'text':
-    case 'leader':
-    case 'wall':
-    case 'door':
-    case 'window':
-    case 'room':
-      return fail(`${target.type} extend not supported`);
-  }
+  // Preview/commit parity: same extendEntityMulti pathway as ExtendEntityCommand.
+  // Legacy single-boundary helpers remain exported for direct unit tests.
+  return extendEntityMulti(target, [boundary], pickPoint, {
+    edgeMode: 'extend',
+  });
 }
 
 // ---------------------------------------------------------------------------
