@@ -53,7 +53,10 @@ describe('P4-B3 EXTEND engine workflows', () => {
     engine.start('EX');
     expect(engine.isRunning()).toBe(true);
     expect(engine.getUiState().commandName).toBe('EXTEND');
-    expect(engine.getUiState().prompt.toLowerCase()).toMatch(/boundary/);
+    // P4-B4 default Quick mode prompts for targets (boundaries = all geometry).
+    expect(engine.getUiState().prompt.toLowerCase()).toMatch(
+      /object to extend|boundary/,
+    );
   });
 
   it('18/19: Undo / Redo restore extended geometry', () => {
@@ -70,9 +73,8 @@ describe('P4-B3 EXTEND engine workflows', () => {
       host(bus),
     );
     engine.start('EXTEND');
-    engine.submitPoint({ x: 8, y: 0 }); // boundary
-    engine.submitText(''); // confirm boundaries
-    engine.submitPoint({ x: 3, y: 0 }); // extend end
+    // Quick mode: all entities are boundaries — click target near end
+    engine.submitPoint({ x: 3, y: 0 });
     const after = getEntity(bus.getDocument(), tid);
     if (after?.type === 'line') {
       expect(after.geometry.end.x).toBeCloseTo(8);
@@ -104,8 +106,7 @@ describe('P4-B3 EXTEND engine workflows', () => {
       host(bus),
     );
     engine.start('EX');
-    engine.submitPoint({ x: 6, y: 0 });
-    engine.submitText('');
+    // Quick mode — click each target near its end
     engine.submitPoint({ x: 2, y: 0 });
     engine.submitPoint({ x: 2, y: 2 });
     const la = getEntity(bus.getDocument(), a.getEntityId());
@@ -138,7 +139,9 @@ describe('P4-B3 EXTEND engine workflows', () => {
     );
     engine.start('extend');
     expect(engine.getUiState().commandName).toBe('EXTEND');
-    expect(engine.getUiState().prompt.toLowerCase()).toMatch(/boundary/);
+    expect(engine.getUiState().prompt.toLowerCase()).toMatch(
+      /object to extend|boundary/,
+    );
   });
 
   it('failed extend creates no geometry change', () => {
@@ -154,8 +157,6 @@ describe('P4-B3 EXTEND engine workflows', () => {
       host(bus),
     );
     engine.start('EXTEND');
-    engine.submitPoint({ x: 2, y: 2 });
-    engine.submitText('');
     engine.submitPoint({ x: 4, y: 0 }); // parallel — reject
     const after = getEntity(bus.getDocument(), target.getEntityId());
     if (after?.type === 'line') {
@@ -183,8 +184,6 @@ describe('P4-B3 EXTEND engine workflows', () => {
       host(bus),
     );
     engine.start('EX');
-    engine.submitPoint({ x: 0, y: 5 });
-    engine.submitText('');
     engine.submitPoint({ x: 0, y: 2 });
     const after = getEntity(bus.getDocument(), poly.getEntityId());
     expect(after?.type).toBe('polyline');

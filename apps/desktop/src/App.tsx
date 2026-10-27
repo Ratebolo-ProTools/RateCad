@@ -3942,7 +3942,7 @@ export function App() {
       setCursorWorld(paper);
       const eng = engineRef.current;
       if (eng?.isRunning()) {
-        eng.onPointerMove(paper);
+        eng.onPointerMove(paper, { shiftKey: event.shiftKey });
         refreshEngineUi();
         bumpVpDrag();
       }
@@ -3987,7 +3987,7 @@ export function App() {
     }
     if (eng?.isRunning()) {
       const snap = snapWorld(world);
-      eng.onPointerMove(snap.point);
+      eng.onPointerMove(snap.point, { shiftKey: event.shiftKey });
       syncSession({
         ...sessionRef.current,
         lastSnap: snap,

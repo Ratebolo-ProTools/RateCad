@@ -641,12 +641,21 @@ export class CadCommandEngine {
     this.applyResult(result);
   }
 
-  onPointerMove(point: Vec2): void {
+  onPointerMove(
+    point: Vec2,
+    modifiers?: { shiftKey?: boolean },
+  ): void {
     const onMove = this.running?.command.onMove;
     if (!this.running || !onMove) return;
     const r = this.running;
     if (r.prompt.inputType !== 'point' && r.prompt.inputType !== 'distance') {
       return;
+    }
+    // Mirror submitPoint: expose Shift to onMove for TRIM↔EXTEND hover preview.
+    if (modifiers?.shiftKey) {
+      r.state.shiftKey = true;
+    } else {
+      delete r.state.shiftKey;
     }
     const update = onMove(
       point,

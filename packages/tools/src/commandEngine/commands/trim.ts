@@ -14,8 +14,10 @@ import {
 } from '@ratecad/core';
 import {
   applyTrimExtend,
+  canExtendEntity,
   canTrimEntity,
   entitiesCrossedByFence,
+  extendPreviewMulti,
   fencePickPoint,
   trimEntityMulti,
   trimRemovalPreviewMulti,
@@ -907,6 +909,45 @@ export const trimCommand: CadEngineCommand = {
       };
     }
 
+    const shiftExtend =
+      !!(state as { shiftKey?: boolean }).shiftKey || s.shiftExtend;
+    const cutters = resolveCutters(s);
+
+    // Shift+hover → temporary EXTEND preview (same planners as commit).
+    if (shiftExtend) {
+      const target = pickEntityAt(s.bus, point);
+      if (!target || !canExtendEntity(target)) {
+        return {
+          preview: null,
+          previewEntities: null,
+          hideEntityIds: [],
+          dynamic: { label: `${statusPrefix(s)} · SHIFT=EXTEND` },
+          status: `${statusPrefix(s)}: Shift — select object to extend`,
+        };
+      }
+      const boundaries = cutters.filter((c) => c.id !== target.id);
+      const preview = extendPreviewMulti(target, boundaries, point, {
+        edgeMode: s.edgeMode === 'no-extend' ? 'no-extend' : 'extend',
+        projectMode: s.projectMode,
+      });
+      if (!preview) {
+        return {
+          preview: null,
+          previewEntities: null,
+          hideEntityIds: [],
+          dynamic: { label: `${statusPrefix(s)} · SHIFT=EXTEND` },
+          status: `${statusPrefix(s)}: Shift — no valid extension`,
+        };
+      }
+      return {
+        preview: null,
+        previewEntities: [preview],
+        hideEntityIds: [target.id],
+        dynamic: { label: `${statusPrefix(s)} · SHIFT=EXTEND` },
+        status: `${statusPrefix(s)}: Shift — click to extend`,
+      };
+    }
+
     const target = pickEntityAt(s.bus, point);
     if (!target || !canTrimEntity(target)) {
       return {
@@ -918,7 +959,6 @@ export const trimCommand: CadEngineCommand = {
       };
     }
 
-    const cutters = resolveCutters(s);
     const result = applyTrimExtend(
       target,
       cutters,

@@ -31,8 +31,7 @@ describe('P4-B3 multi-document EXTEND isolation', () => {
     const bBefore = structuredClone(b.bus.getDocument());
 
     a.engine!.start('EXTEND');
-    a.engine!.submitPoint({ x: 5, y: 0 });
-    a.engine!.submitText('');
+    // Quick mode — click target near end (all geometry acts as boundaries)
     a.engine!.submitPoint({ x: 2, y: 0 });
 
     const trimmed = getEntity(a.bus.getDocument(), lineA.getEntityId());
@@ -54,8 +53,6 @@ describe('P4-B3 multi-document EXTEND isolation', () => {
     session.bus.execute(boundary);
     session.bus.execute(target);
     session.engine!.start('EXTEND');
-    session.engine!.submitPoint({ x: 7, y: 0 });
-    session.engine!.submitText('');
     session.engine!.submitPoint({ x: 2, y: 0 });
 
     const json = serializeDocument(session.bus.getDocument());
