@@ -613,9 +613,27 @@ export const trimCommand: CadEngineCommand = {
               break;
             }
           }
-        } else if (e.type === 'polyline' || e.type === 'rectangle') {
-          // Approximate via entity presence in box using pick at box center projection
-          hit = true; // refined below via trim attempt with pick at box center
+        } else if (e.type === 'polyline') {
+          const v = e.geometry.vertices;
+          for (let i = 0; i < v.length - (e.geometry.closed ? 0 : 1); i += 1) {
+            const a = v[i]!;
+            const b = v[(i + 1) % v.length]!;
+            const sx0 = Math.min(a.x, b.x);
+            const sx1 = Math.max(a.x, b.x);
+            const sy0 = Math.min(a.y, b.y);
+            const sy1 = Math.max(a.y, b.y);
+            if (!(sx1 < minX || sx0 > maxX || sy1 < minY || sy0 > maxY)) {
+              hit = true;
+              break;
+            }
+          }
+        } else if (e.type === 'rectangle') {
+          const { corner1: c1, corner2: c2 } = e.geometry;
+          const rx0 = Math.min(c1.x, c2.x);
+          const rx1 = Math.max(c1.x, c2.x);
+          const ry0 = Math.min(c1.y, c2.y);
+          const ry1 = Math.max(c1.y, c2.y);
+          hit = !(rx1 < minX || rx0 > maxX || ry1 < minY || ry0 > maxY);
         }
         if (!hit && e.type !== 'polyline' && e.type !== 'rectangle') continue;
         const live = getEntity(s.bus.getDocument(), e.id);

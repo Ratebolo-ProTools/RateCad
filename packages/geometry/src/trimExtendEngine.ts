@@ -23,8 +23,17 @@ export type ModifyResult =
   | { ok: true; entities: Entity[] }
   | { ok: false; reason: string };
 
+/** Absolute geometric epsilon (degenerate lengths, parallel test). */
 const EPS = 1e-9;
+/** Hit / vertex de-dupe distance in world units. */
 const HIT_EPS = 1e-6;
+/**
+ * Interior parameter band on a segment for trim split points.
+ * Exact endpoints (t=0/1) do not split a single open segment, but values
+ * extremely close to the ends still count as near-endpoint intersections.
+ */
+const PARAM_INTERIOR_LO = EPS;
+const PARAM_INTERIOR_HI = 1 - EPS;
 
 export type TrimExtendOperation = 'trim' | 'extend';
 export type TrimMode = 'quick' | 'standard';
@@ -71,7 +80,37 @@ function pushUniqueHit(hits: Vec2[], p: Vec2, start: Vec2, end: Vec2): void {
   if (!isFiniteVec2(p)) return;
   if (hits.some((h) => distance(h, p) < HIT_EPS)) return;
   const t = projectParam(p, start, end);
-  if (t > EPS && t < 1 - EPS) hits.push(p);
+  // Exact endpoints do not create a new interval on a lone segment; near-end hits do.
+  if (t > PARAM_INTERIOR_LO && t < PARAM_INTERIOR_HI) hits.push(p);
+}
+
+/** True when two segments are parallel (including opposite direction). */
+export function segmentsAreParallel(
+  a1: Vec2,
+  a2: Vec2,
+  b1: Vec2,
+  b2: Vec2,
+): boolean {
+  const r = sub(a2, a1);
+  const s = sub(b2, b1);
+  return Math.abs(cross(r, s)) < EPS;
+}
+
+/** True when segments are collinear (parallel and share the same supporting line). */
+export function segmentsAreCollinear(
+  a1: Vec2,
+  a2: Vec2,
+  b1: Vec2,
+  b2: Vec2,
+): boolean {
+  if (!segmentsAreParallel(a1, a2, b1, b2)) return false;
+  const r = sub(a2, a1);
+  const len2 = r.x * r.x + r.y * r.y;
+  if (len2 < EPS * EPS) {
+    // Degenerate a — treat as collinear if b passes near a1
+    return distance(a1, closestPointOnSegment(a1, b1, b2)) < HIT_EPS;
+  }
+  return Math.abs(cross(sub(b1, a1), r)) < EPS * Math.sqrt(len2);
 }
 
 /** Infinite line through a1→a2 vs segment b1→b2 (u in [0,1]). */
@@ -235,13 +274,29 @@ export function buildIntervals(
   return out;
 }
 
-/** Which interval contains pickT (closest if on a boundary). */
+/**
+ * Which interval contains pickT.
+ * When the pick lies on a shared boundary between two intervals, choose the
+ * interval whose midpoint is closer — avoids snapping to the wrong side of a cut.
+ */
 export function resolvePickInterval(
   intervals: CurveInterval[],
   pickT: number,
 ): number {
   if (intervals.length === 0) return -1;
   const t = Math.max(0, Math.min(1, pickT));
+
+  // Exact / near boundary between intervals → midpoint rule
+  for (let i = 0; i < intervals.length - 1; i += 1) {
+    const boundary = intervals[i]!.t1;
+    if (Math.abs(t - boundary) <= HIT_EPS) {
+      const leftMid = (intervals[i]!.t0 + intervals[i]!.t1) / 2;
+      const rightMid =
+        (intervals[i + 1]!.t0 + intervals[i + 1]!.t1) / 2;
+      return Math.abs(t - leftMid) <= Math.abs(t - rightMid) ? i : i + 1;
+    }
+  }
+
   for (let i = 0; i < intervals.length; i += 1) {
     const iv = intervals[i]!;
     if (t >= iv.t0 - EPS && t <= iv.t1 + EPS) return i;
@@ -368,16 +423,110 @@ function cutterNearBox(
 // Line / wall trim
 // ---------------------------------------------------------------------------
 
-function trimOpenSegment(
+type OpenSegmentTrimPlan =
+  | {
+      ok: true;
+      parts: Array<{ start: Vec2; end: Vec2 }>;
+      removed: { start: Vec2; end: Vec2 };
+      removeIndex: number;
+      intervals: CurveInterval[];
+    }
+  | { ok: false; reason: string };
+
+function noIntersectionReason(
+  start: Vec2,
+  end: Vec2,
+  cutters: Entity[],
+): string {
+  if (distance(start, end) <= HIT_EPS) {
+    return 'Degenerate target segment';
+  }
+  for (const cutter of cutters) {
+    if (cutter.type === 'circle') continue;
+    for (const seg of cuttingSegments(cutter)) {
+      if (segmentsAreCollinear(start, end, seg.a, seg.b)) {
+        return 'Collinear or overlapping cutting edge — no transverse intersection';
+      }
+    }
+  }
+  const onlyParallel = cutters.every(
+    (c) =>
+      c.type !== 'circle' &&
+      cuttingSegments(c).every((seg) =>
+        segmentsAreParallel(start, end, seg.a, seg.b),
+      ),
+  );
+  if (onlyParallel && cutters.length > 0) {
+    return 'Parallel cutting edge — no intersection';
+  }
+  return 'No intersection with cutting edge';
+}
+
+/** True when cutters only meet the target at its endpoints (no interior split). */
+function hasEndpointOnlyIntersection(
+  start: Vec2,
+  end: Vec2,
+  cutters: Entity[],
+  edgeMode: EdgeMode,
+  excludeId?: EntityId,
+): boolean {
+  let sawEndpoint = false;
+  for (const cutter of cutters) {
+    if (excludeId && cutter.id === excludeId) continue;
+    if (cutter.type === 'circle') {
+      for (const endPt of [start, end]) {
+        const d = distance(endPt, cutter.geometry.center);
+        if (Math.abs(d - cutter.geometry.radius) < HIT_EPS) sawEndpoint = true;
+      }
+      const pts =
+        edgeMode === 'extend'
+          ? intersectLineCircle(start, end, cutter.geometry.center, cutter.geometry.radius)
+          : intersectSegmentCircle(
+              start,
+              end,
+              cutter.geometry.center,
+              cutter.geometry.radius,
+            );
+      for (const p of pts) {
+        const t = projectParam(p, start, end);
+        if (t > PARAM_INTERIOR_LO && t < PARAM_INTERIOR_HI) return false;
+        if (t >= -EPS && t <= 1 + EPS) sawEndpoint = true;
+      }
+      continue;
+    }
+    for (const seg of cuttingSegments(cutter)) {
+      const p =
+        edgeMode === 'extend'
+          ? intersectInfiniteLineSegment(seg.a, seg.b, start, end)
+          : intersectSegments(start, end, seg.a, seg.b);
+      if (!p) continue;
+      const t = projectParam(p, start, end);
+      if (t > PARAM_INTERIOR_LO && t < PARAM_INTERIOR_HI) return false;
+      if (t >= -EPS && t <= 1 + EPS) sawEndpoint = true;
+    }
+  }
+  return sawEndpoint;
+}
+
+/**
+ * Plan a line/wall trim from the same intersection + pick logic used for commit
+ * and preview (single source of truth).
+ */
+export function planOpenSegmentTrim(
   start: Vec2,
   end: Vec2,
   pickPoint: Vec2,
   cutters: Entity[],
-  edgeMode: EdgeMode,
+  edgeMode: EdgeMode = 'no-extend',
   excludeId?: EntityId,
-):
-  | { ok: true; parts: Array<{ start: Vec2; end: Vec2 }> }
-  | { ok: false; reason: string } {
+): OpenSegmentTrimPlan {
+  if (!isFiniteVec2(start) || !isFiniteVec2(end) || !isFiniteVec2(pickPoint)) {
+    return { ok: false, reason: 'Invalid pick point' };
+  }
+  if (distance(start, end) <= HIT_EPS) {
+    return { ok: false, reason: 'Degenerate target segment' };
+  }
+
   const hits = collectIntersectionsWithCutters(
     start,
     end,
@@ -385,9 +534,27 @@ function trimOpenSegment(
     edgeMode,
     excludeId,
   );
-  if (hits.length === 0) return { ok: false, reason: 'No intersection with cutting edge' };
+  if (hits.length === 0) {
+    // Distinguish true misses from endpoint-only contacts (excluded as non-splitting).
+    if (hasEndpointOnlyIntersection(start, end, cutters, edgeMode, excludeId)) {
+      return {
+        ok: false,
+        reason:
+          'Intersection only at endpoint — no trimmable interior segment',
+      };
+    }
+    return { ok: false, reason: noIntersectionReason(start, end, cutters) };
+  }
 
   const sorted = sortHitsAlongSegment(start, end, hits);
+  if (sorted.length === 0) {
+    return {
+      ok: false,
+      reason:
+        'Intersection only at endpoint — no trimmable interior segment',
+    };
+  }
+
   const intervals = buildIntervals(
     start,
     end,
@@ -397,6 +564,11 @@ function trimOpenSegment(
   const pickT = projectParam(pick, start, end);
   const removeI = resolvePickInterval(intervals, pickT);
   if (removeI < 0) return { ok: false, reason: 'Pick point not on segment' };
+
+  const removedIv = intervals[removeI]!;
+  if (distance(removedIv.a, removedIv.b) <= HIT_EPS) {
+    return { ok: false, reason: 'Trim would produce zero-length removal' };
+  }
 
   const keep: Array<{ start: Vec2; end: Vec2 }> = [];
   for (let i = 0; i < intervals.length; i += 1) {
@@ -409,7 +581,35 @@ function trimOpenSegment(
   if (keep.length === 0) {
     return { ok: false, reason: 'Trim would remove entire segment' };
   }
-  return { ok: true, parts: keep };
+  return {
+    ok: true,
+    parts: keep,
+    removed: { start: { ...removedIv.a }, end: { ...removedIv.b } },
+    removeIndex: removeI,
+    intervals,
+  };
+}
+
+function trimOpenSegment(
+  start: Vec2,
+  end: Vec2,
+  pickPoint: Vec2,
+  cutters: Entity[],
+  edgeMode: EdgeMode,
+  excludeId?: EntityId,
+):
+  | { ok: true; parts: Array<{ start: Vec2; end: Vec2 }> }
+  | { ok: false; reason: string } {
+  const plan = planOpenSegmentTrim(
+    start,
+    end,
+    pickPoint,
+    cutters,
+    edgeMode,
+    excludeId,
+  );
+  if (!plan.ok) return plan;
+  return { ok: true, parts: plan.parts };
 }
 
 function trimLineLike(
@@ -422,6 +622,14 @@ function trimLineLike(
   const pool = eligibleCutters(cutters, entity.id, allowSelf);
   const near = nearbyCutters(entity, pool, 1e-3, edgeMode);
   const { start, end } = entity.geometry;
+  // Spatial prefilter can drop distant parallel/collinear cutters — diagnose against pool.
+  if (near.length === 0) {
+    return fail(
+      pool.length === 0
+        ? 'No cutting edges'
+        : noIntersectionReason(start, end, pool),
+    );
+  }
   const result = trimOpenSegment(
     start,
     end,
@@ -538,101 +746,167 @@ function trimPolylineMulti(
   const pool = eligibleCutters(cutters, pline.id, allowSelf);
   const near = nearbyCutters(pline, pool, 1e-3, edgeMode);
 
-  // Collect all intersections along the whole polyline, parameterized by arc length s
+  // Collect intersections along the polyline as arc-length parameters.
+  // Segment *endpoints* are included when they map to an interior arc-length
+  // (vertex cuts between segments) — critical for polylines meeting cutters at joints.
   const hitS: number[] = [];
   const pushS = (s: number) => {
-    if (s <= EPS || s >= total - EPS) return;
-    if (hitS.some((h) => Math.abs(h - s) < HIT_EPS)) return;
-    hitS.push(s);
+    let ss = s;
+    if (closed) {
+      // Normalize into [0, total); seam 0/total is one location
+      ss = ((ss % total) + total) % total;
+      if (ss < EPS || ss > total - EPS) {
+        // Seam hit — store once as 0
+        ss = 0;
+      }
+    } else if (ss <= EPS || ss >= total - EPS) {
+      // Open polyline: overall endpoints do not create a split by themselves
+      return;
+    }
+    if (hitS.some((h) => Math.abs(h - ss) < HIT_EPS || (closed && (Math.abs(h - ss) < HIT_EPS || Math.abs(h - ss + total) < HIT_EPS || Math.abs(h - ss - total) < HIT_EPS)))) {
+      return;
+    }
+    hitS.push(ss);
   };
 
   let acc = 0;
   for (let i = 0; i < segCount; i += 1) {
     const a = verts[i]!;
     const b = verts[(i + 1) % verts.length]!;
-    const hits = collectIntersectionsWithCutters(
-      a,
-      b,
-      near,
-      edgeMode,
-      allowSelf ? undefined : pline.id,
-    );
+    // Inclusive endpoint collection on each segment, then pushS filters overall ends.
+    const hits: Vec2[] = [];
+    for (const cutter of near) {
+      if (!allowSelf && cutter.id === pline.id) continue;
+      for (const p of collectIntersectionsOnSegment(a, b, cutter, edgeMode)) {
+        if (!hits.some((h) => distance(h, p) < HIT_EPS)) hits.push(p);
+      }
+      // Also accept exact segment-endpoint intersections (vertex joints)
+      if (cutter.type !== 'circle') {
+        for (const seg of cuttingSegments(cutter)) {
+          for (const endPt of [a, b]) {
+            const onCutter =
+              distance(endPt, closestPointOnSegment(endPt, seg.a, seg.b)) <
+              HIT_EPS;
+            if (onCutter && !hits.some((h) => distance(h, endPt) < HIT_EPS)) {
+              hits.push({ ...endPt });
+            }
+          }
+        }
+      } else {
+        for (const endPt of [a, b]) {
+          const d = distance(endPt, cutter.geometry.center);
+          if (Math.abs(d - cutter.geometry.radius) < HIT_EPS) {
+            if (!hits.some((h) => distance(h, endPt) < HIT_EPS)) {
+              hits.push({ ...endPt });
+            }
+          }
+        }
+      }
+    }
     for (const p of hits) {
-      const t = projectParam(p, a, b);
-      if (t > EPS && t < 1 - EPS) pushS(acc + lengths[i]! * t);
+      const t = Math.max(0, Math.min(1, projectParam(p, a, b)));
+      pushS(acc + lengths[i]! * t);
     }
     acc += lengths[i]!;
   }
 
-  if (hitS.length === 0) return fail('No intersection with cutting edge');
+  if (hitS.length === 0) {
+    // Diagnose against pool so distant parallel/collinear cutters are still explained.
+    const a0 = verts[0]!;
+    const b0 = verts[1]!;
+    const diag = near.length > 0 ? near : pool;
+    return fail(
+      diag.length === 0
+        ? 'No cutting edges'
+        : noIntersectionReason(a0, b0, diag),
+    );
+  }
   hitS.sort((a, b) => a - b);
 
   const pick = closestPolylineParam(verts, closed, lengths, pickPoint);
 
   if (closed) {
-    // Intervals wrap; remove the interval containing pick, open the polyline
-    const bounds = [...hitS];
-    // Find interval between consecutive hits (wrapping) that contains pick.s
+    // Like circle trim: a closed loop needs ≥2 cuts to remove one arc and leave an open chain.
+    if (hitS.length < 2) {
+      return fail(
+        'Closed polyline trim requires at least two intersection points',
+      );
+    }
     type Civ = { s0: number; s1: number };
     const intervals: Civ[] = [];
-    for (let i = 0; i < bounds.length; i += 1) {
-      const s0 = bounds[i]!;
-      const s1 = i + 1 < bounds.length ? bounds[i + 1]! : bounds[0]! + total;
-      intervals.push({ s0, s1 });
+    for (let i = 0; i < hitS.length; i += 1) {
+      const s0 = hitS[i]!;
+      const s1 = i + 1 < hitS.length ? hitS[i + 1]! : hitS[0]! + total;
+      if (s1 - s0 > HIT_EPS) intervals.push({ s0, s1 });
     }
+    if (intervals.length === 0) {
+      return fail('Closed polyline trim produced no intervals');
+    }
+
     let removeI = 0;
+    let bestMidD = Number.POSITIVE_INFINITY;
     for (let i = 0; i < intervals.length; i += 1) {
-      let ps = pick.s;
       const iv = intervals[i]!;
+      let ps = pick.s;
       if (iv.s1 > total && ps < iv.s0) ps += total;
+      const mid = (iv.s0 + iv.s1) / 2;
       if (ps >= iv.s0 - EPS && ps <= iv.s1 + EPS) {
-        removeI = i;
-        break;
+        const d = Math.abs(ps - mid);
+        // Prefer tighter midpoint match when pick sits on a shared cut
+        if (d < bestMidD) {
+          bestMidD = d;
+          removeI = i;
+        }
       }
     }
+
     const rem = intervals[removeI]!;
+    // Remaining open chain: walk forward from rem.s1 → rem.s0 (wrapping)
     const startS = rem.s1 >= total ? rem.s1 - total : rem.s1;
     const endS = rem.s0;
-    // Build open chain from startS walking to endS along remaining arc
-    const chain: Vec2[] = [pointAtPolylineS(verts, closed, lengths, startS)];
-    // Walk vertices strictly between startS and endS along the keep direction
-    let walk = startS;
-    const keepLen = rem.s1 - rem.s0; // removed length
-    const remainLen = total - (rem.s1 - rem.s0);
-    void keepLen;
-    // Simpler: sample by walking segments from startS to endS (forward remaining)
-    const samples: number[] = [startS];
-    for (const hs of hitS) {
-      // include original vertices between
-    }
-    void samples;
-    // Vertex walk: from point at startS, include subsequent verts until endS
-    let seg = 0;
-    let sAcc = 0;
-    while (seg < segCount && sAcc + lengths[seg]! < startS - EPS) {
-      sAcc += lengths[seg]!;
-      seg += 1;
-    }
-    // Advance to end
-    const endTarget = endS <= startS ? endS + total : endS;
-    let curS = startS;
-    for (let step = 0; step < segCount + 2; step += 1) {
-      const nextVertS = (() => {
-        let a = 0;
-        for (let i = 0; i < segCount; i += 1) {
-          a += lengths[i]!;
-          if (a > curS + EPS) return a;
+    const endTarget = endS <= startS + EPS ? endS + total : endS;
+
+    const chain: Vec2[] = [
+      pointAtPolylineS(verts, closed, lengths, startS),
+    ];
+    // Vertices whose arc-length falls strictly inside the keep span, in walk order
+    const midVerts: Array<{ s: number; p: Vec2 }> = [];
+    let vAcc = 0;
+    for (let si = 0; si < segCount; si += 1) {
+      vAcc += lengths[si]!;
+      if (vAcc >= total - EPS) continue; // seam == s0
+      for (const cand of [vAcc, vAcc + total]) {
+        if (cand > startS + EPS && cand < endTarget - EPS) {
+          midVerts.push({
+            s: cand,
+            p: { ...verts[(si + 1) % verts.length]! },
+          });
         }
-        return total;
-      })();
-      if (nextVertS >= endTarget - EPS) break;
-      chain.push(pointAtPolylineS(verts, closed, lengths, nextVertS % total));
-      curS = nextVertS;
+      }
     }
-    chain.push(pointAtPolylineS(verts, closed, lengths, endS));
+    midVerts.sort((a, b) => a.s - b.s);
+    for (const mv of midVerts) {
+      if (distance(chain[chain.length - 1]!, mv.p) > HIT_EPS) {
+        chain.push(mv.p);
+      }
+    }
+    const endPt = pointAtPolylineS(verts, closed, lengths, endS);
+    if (distance(chain[chain.length - 1]!, endPt) > HIT_EPS) {
+      chain.push(endPt);
+    }
     const cleaned = dedupeVerts(chain);
     if (cleaned.length < 2) return fail('Trim produced no geometry');
-    return ok([{ ...pline, geometry: { vertices: cleaned, closed: false } }]);
+    if (distance(cleaned[0]!, cleaned[cleaned.length - 1]!) <= HIT_EPS) {
+      return fail('Closed polyline trim produced degenerate open chain');
+    }
+    return ok([
+      {
+        ...pline,
+        properties: { ...pline.properties },
+        metadata: { ...(pline.metadata ?? {}) },
+        geometry: { vertices: cleaned, closed: false },
+      },
+    ]);
   }
 
   // Open polyline: intervals [0, h0], [h0,h1], ..., [hn, total]
@@ -696,6 +970,8 @@ function makePline(
     ...src,
     id: (index === 0 ? src.id : `${src.id}#trim${index}`) as Entity['id'],
     geometry: { vertices, closed: false },
+    properties: { ...src.properties },
+    metadata: { ...(src.metadata ?? {}) },
   };
 }
 
@@ -822,12 +1098,16 @@ function trimCircleMulti(
     }
   }
 
-  if (hits.length < 1) return fail('No intersection with cutting edge');
+  if (hits.length < 1) {
+    return fail('No intersection with cutting edge');
+  }
 
-  // Need at least 1 hit; with 1 hit circle cannot become a proper open arc from one cut
-  // AutoCAD typically needs 2 intersections to trim a circle into an arc.
+  // Native ARC entity is not available — a safe open arc requires ≥2 cuts.
+  // Single-hit trim would be ambiguous / malformed; reject without modifying the circle.
   if (hits.length === 1) {
-    return fail('Circle trim requires at least two intersection points');
+    return fail(
+      'Circle trim requires at least two intersection points (native ARC not available)',
+    );
   }
 
   // Sort hits by angle
@@ -869,7 +1149,18 @@ function trimCircleMulti(
   const remainEnd = angled[rem.i0]!.ang;
 
   const verts = sampleArc(center, radius, remainStart, remainEnd, true);
-  if (verts.length < 2) return fail('Circle trim produced empty arc');
+  const cleaned = dedupeVerts(verts);
+  if (cleaned.length < 2) return fail('Circle trim produced empty arc');
+  if (distance(cleaned[0]!, cleaned[cleaned.length - 1]!) <= HIT_EPS) {
+    return fail('Circle trim produced degenerate polyline');
+  }
+  if (
+    !Number.isFinite(remainStart) ||
+    !Number.isFinite(remainEnd) ||
+    !(radius > EPS)
+  ) {
+    return fail('Circle trim produced invalid arc metadata');
+  }
 
   const arcEntity: Entity = {
     id: circle.id,
@@ -877,21 +1168,26 @@ function trimCircleMulti(
     layerId: circle.layerId,
     visible: circle.visible,
     locked: circle.locked,
-    geometry: { vertices: verts, closed: false },
+    geometry: { vertices: cleaned, closed: false },
     properties: { ...circle.properties },
     metadata: {
       ...(circle.metadata ?? {}),
+      // Representation note: not a native ArcEntity — open polyline + arc meta.
       arc: {
         center: { ...center },
         radius,
         startAngle: remainStart,
         endAngle: remainEnd,
         fromCircle: true,
+        approximate: true,
       },
     },
   };
   void startAng;
   void endAng;
+  if (!validateEntityGeometry(arcEntity)) {
+    return fail('Circle trim produced invalid geometry');
+  }
   return ok([arcEntity]);
 }
 
@@ -1076,7 +1372,10 @@ export function applyTrimExtend(
   return trimEntityMulti(target, edges, pick.worldPoint, options);
 }
 
-/** Preview segment(s) that would be removed by a trim. */
+/**
+ * Preview segment that would be removed by a trim.
+ * Uses the same planOpenSegmentTrim path as commit for line/wall targets.
+ */
 export function trimRemovalPreviewMulti(
   target: Entity,
   cutters: Entity[],
@@ -1087,29 +1386,24 @@ export function trimRemovalPreviewMulti(
   const edgeMode = options.edgeMode ?? 'no-extend';
   const allowSelf = options.allowSelfAsCutter ?? true;
   const pool = eligibleCutters(cutters, target.id, allowSelf);
+  const near = nearbyCutters(target, pool, 1e-3, edgeMode);
   const { start, end } = target.geometry;
-  const hits = collectIntersectionsWithCutters(
+  const plan = planOpenSegmentTrim(
     start,
     end,
-    nearbyCutters(target, pool, 1e-3, edgeMode),
+    pickPoint,
+    near,
     edgeMode,
     allowSelf ? undefined : target.id,
   );
-  if (hits.length === 0) return null;
-  const sorted = sortHitsAlongSegment(start, end, hits);
-  const intervals = buildIntervals(
-    start,
-    end,
-    sorted.map((h) => h.t),
-  );
-  const pickT = projectParam(closestPointOnSegment(pickPoint, start, end), start, end);
-  const removeI = resolvePickInterval(intervals, pickT);
-  if (removeI < 0) return null;
-  const iv = intervals[removeI]!;
+  if (!plan.ok) return null;
   return {
     ...target,
     type: 'line',
-    geometry: { start: { ...iv.a }, end: { ...iv.b } },
+    geometry: {
+      start: { ...plan.removed.start },
+      end: { ...plan.removed.end },
+    },
     properties: { ...target.properties, color: '#ff6b6b' },
   };
 }
