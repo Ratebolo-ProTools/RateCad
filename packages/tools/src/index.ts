@@ -93,6 +93,13 @@ import {
   isDegenerateRectangle,
   rectangleStatus,
 } from './rectangleConstraints.js';
+import {
+  cleanPolylineVertices,
+  isPolylineCloseOption,
+  isPolylineUndoOption,
+  polylineDrawStatus,
+  validatePolylineClose,
+} from './polylineClose.js';
 
 export type {
   AreaToolMode,
@@ -143,6 +150,17 @@ export {
   rectangleStatus,
   setRectangleConstraints,
 } from './rectangleConstraints.js';
+export {
+  POLYLINE_CLOSE_MIN_AREA,
+  POLYLINE_VERTEX_EPS,
+  canClosePolyline,
+  cleanPolylineVertices,
+  isPolylineCloseOption,
+  isPolylineUndoOption,
+  polylineDrawStatus,
+  validatePolylineClose,
+  type PolylineCloseValidation,
+} from './polylineClose.js';
 export {
   CadCommandEngine,
   CadCommandHistory,
@@ -489,19 +507,13 @@ export function handleToolPointerDown(
 
   if (session.activeTool === 'polyline') {
     const verts = [...session.vertices, point];
+    // Double-click finishes an OPEN polyline (never closed via pointer alone).
     if ((input.detail ?? 1) >= 2 && session.vertices.length >= 1) {
-      const cleaned = [
-        ...(session.vertices.length >= 2 ? session.vertices : verts),
-      ];
-      if (
-        cleaned.length >= 2 &&
-        distance(cleaned[cleaned.length - 1]!, cleaned[cleaned.length - 2]!) <
-          1e-9
-      ) {
-        cleaned.pop();
-      }
+      const source =
+        session.vertices.length >= 2 ? session.vertices : verts;
+      const cleaned = cleanPolylineVertices(source, { forClosed: false });
       if (cleaned.length >= 2) {
-        bus.execute(new CreatePolylineCommand(cleaned));
+        bus.execute(new CreatePolylineCommand(cleaned, undefined, false));
       }
       return {
         ...cancelTool(session),
@@ -516,10 +528,7 @@ export function handleToolPointerDown(
       vertices: verts,
       preview: null,
       lastSnap: snap,
-      statusMessage:
-        verts.length === 1
-          ? 'Polyline: specify next point (double-click/Enter to finish)'
-          : `Polyline: ${verts.length} points — next or Enter`,
+      statusMessage: polylineDrawStatus(verts.length),
     };
   }
 
@@ -856,18 +865,102 @@ export function handleToolPointerUp(
   return session;
 }
 
+export type FinishPolylineOptions = {
+  /** When true, validate and commit a closed polyline. Default open. */
+  closed?: boolean;
+};
+
+/**
+ * Finish the active polyline tool session.
+ * - closed:false (default) — open polyline (≥2 cleaned vertices)
+ * - closed:true — closed polyline (≥3 distinct non-degenerate vertices);
+ *   on failure, keeps the session and vertices (no document mutation)
+ */
 export function finishPolyline(
   session: ToolSession,
   bus: CommandBus,
+  options?: FinishPolylineOptions,
 ): ToolSession {
-  if (session.activeTool !== 'polyline' || session.vertices.length < 2) {
+  if (session.activeTool !== 'polyline') {
     return cancelTool(session);
   }
-  bus.execute(new CreatePolylineCommand(session.vertices));
+  const wantClosed = options?.closed === true;
+
+  if (wantClosed) {
+    const check = validatePolylineClose(session.vertices);
+    if (!check.ok) {
+      return {
+        ...session,
+        statusMessage: check.reason,
+        preview: session.preview,
+      };
+    }
+    bus.execute(new CreatePolylineCommand(check.vertices, undefined, true));
+    return {
+      ...cancelTool(session),
+      statusMessage: 'Polyline closed',
+    };
+  }
+
+  const cleaned = cleanPolylineVertices(session.vertices, { forClosed: false });
+  if (cleaned.length < 2) {
+    return cancelTool(session);
+  }
+  bus.execute(new CreatePolylineCommand(cleaned, undefined, false));
   return {
     ...cancelTool(session),
     statusMessage: toolStatus('polyline'),
   };
+}
+
+/** Remove the last vertex during an active polyline draw (U / UNDO option). */
+export function undoPolylineVertex(session: ToolSession): ToolSession {
+  if (session.activeTool !== 'polyline' || session.vertices.length === 0) {
+    return session;
+  }
+  const vertices = session.vertices.slice(0, -1);
+  return {
+    ...session,
+    vertices,
+    anchor: vertices[vertices.length - 1] ?? null,
+    preview: null,
+    mode: vertices.length > 0 ? 'draw' : 'idle',
+    statusMessage: polylineDrawStatus(vertices.length),
+  };
+}
+
+/**
+ * Apply a PL option token (C/CLOSE or U/UNDO) while the polyline tool is active.
+ * Returns null when the text is not a PL option (caller should fall through).
+ */
+export function applyPolylineOption(
+  session: ToolSession,
+  bus: CommandBus,
+  text: string,
+): ToolSession | null {
+  if (session.activeTool !== 'polyline') return null;
+  if (isPolylineCloseOption(text)) {
+    // No vertices yet → do not preempt global C→CIRCLE.
+    if (session.vertices.length === 0) return null;
+    return finishPolyline(session, bus, { closed: true });
+  }
+  if (isPolylineUndoOption(text)) {
+    if (session.vertices.length === 0) return null;
+    return undoPolylineVertex(session);
+  }
+  return null;
+}
+
+/** True when PL Close should preempt the global C→CIRCLE alias. */
+export function shouldPolylineClosePreemptAlias(
+  session: ToolSession,
+  text: string,
+): boolean {
+  return (
+    session.activeTool === 'polyline' &&
+    isPolylineCloseOption(text) &&
+    session.vertices.length >= 1
+  );
 }
 
 /** Commit numeric keyboard entry for offset / rotate / scale. */

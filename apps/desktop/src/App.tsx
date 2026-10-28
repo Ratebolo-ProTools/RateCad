@@ -194,6 +194,7 @@ import {
   createBoundaryFromArea,
   createDefaultEngineRegistry,
   createToolSession,
+  applyPolylineOption,
   finishAreaPoints,
   finishAreaSession,
   finishPolyline,
@@ -1655,7 +1656,30 @@ export function App() {
   const submitCommandLine = useCallback(() => {
     const eng = engineRef.current;
     if (!eng) return;
-    eng.setBuffer(commandLineRef.current);
+    const raw = commandLineRef.current;
+    const buf = raw.trim();
+    const s = sessionRef.current;
+    // P4-C2: PL session Close/Undo options preempt global aliases (e.g. C→CIRCLE).
+    if (
+      s.activeTool === 'polyline' &&
+      !eng.isRunning() &&
+      buf.length > 0
+    ) {
+      const applied = applyPolylineOption(s, busRef.current, buf);
+      if (applied) {
+        syncSession(applied);
+        clearCommandLine();
+        eng.setBuffer('');
+        setRectLengthText('');
+        setRectWidthText('');
+        refreshEngineUi();
+        setCommandFeedback(applied.statusMessage);
+        setDoc(busRef.current.getDocument());
+        // Successful close/open finish clears vertices; keep sticky PL tool like Enter.
+        return;
+      }
+    }
+    eng.setBuffer(raw);
     eng.confirm('enter');
     setRectLengthText('');
     setRectWidthText('');
@@ -1663,7 +1687,7 @@ export function App() {
     const ui = eng.getUiState();
     if (ui.message) setCommandFeedback(ui.message);
     else if (ui.commandName) setCommandFeedback(ui.commandName);
-  }, [refreshEngineUi]);
+  }, [clearCommandLine, refreshEngineUi, syncSession]);
 
   const applyRectangleDimensions = useCallback(
     (lengthRaw: string, widthRaw: string) => {
@@ -3275,9 +3299,26 @@ export function App() {
             setCommandFeedback(finished.statusMessage);
             return;
           }
-          if (s.activeTool === 'polyline' && s.vertices.length >= 2) {
-            syncSession(finishPolyline(s, busRef.current));
-            return;
+          // P4-C2: PL options (C/CLOSE/U) or open finish before engine aliases.
+          if (s.activeTool === 'polyline') {
+            const plBuf = commandLineRef.current.trim();
+            if (plBuf.length > 0) {
+              const applied = applyPolylineOption(s, busRef.current, plBuf);
+              if (applied) {
+                syncSession(applied);
+                clearCommandLine();
+                eng?.setBuffer('');
+                refreshEngineUi();
+                setCommandFeedback(applied.statusMessage);
+                setDoc(busRef.current.getDocument());
+                return;
+              }
+            }
+            if (s.vertices.length >= 2 && plBuf.length === 0) {
+              syncSession(finishPolyline(s, busRef.current));
+              setCommandFeedback('Polyline');
+              return;
+            }
           }
         }
         if (eng) {
