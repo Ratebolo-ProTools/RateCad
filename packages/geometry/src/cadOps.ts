@@ -16,6 +16,7 @@ import {
   scalePoint,
 } from './intersect.js';
 import { add, distance, scale, sub } from './math.js';
+import { syncArcPolylineMetadata } from './arcMetadata.js';
 import {
   cloneEntityWithNewId,
   isFiniteVec2,
@@ -516,6 +517,11 @@ export function mirrorEntity(
         id: newId,
         geometry: { ...entity.geometry, vertices },
       };
+      next = syncArcPolylineMetadata(next, {
+        mapPoint: map,
+        reverseOrientation: true,
+        radiusScale: 1,
+      });
       break;
     }
     case 'dimension': {
@@ -654,6 +660,11 @@ export function rotateEntity(
           vertices: entity.geometry.vertices.map(map),
         },
       };
+      next = syncArcPolylineMetadata(next, {
+        mapPoint: map,
+        angleDelta: radians,
+        radiusScale: 1,
+      });
       break;
     case 'dimension':
       next = {
@@ -761,6 +772,11 @@ export function scaleEntity(
           vertices: entity.geometry.vertices.map(map),
         },
       };
+      next = syncArcPolylineMetadata(next, {
+        mapPoint: map,
+        angleDelta: 0,
+        radiusScale: factor,
+      });
       break;
     case 'dimension':
       next = {

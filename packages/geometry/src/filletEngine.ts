@@ -20,6 +20,22 @@ import { isFiniteVec2, validateEntityGeometry } from './transform.js';
 const EPS = 1e-9;
 const HIT_EPS = 1e-6;
 const ANGLE_EPS = 1e-6;
+/**
+ * P4-C5 — radius-zero sharp-corner safety (DEF-P4C4-01).
+ *
+ * Policy (scale-aware, deterministic):
+ * - Required extension beyond each source segment to the infinite-line
+ *   intersection must be ≤ MAX_EXT_RATIO × max(segment lengths).
+ * - Floor the allowed extension by a relative coordinate magnitude term so
+ *   tiny drawings still work, without a fixed world-unit cap.
+ * - Separately reject ill-conditioned near-parallel line directions when
+ *   |sin(φ)| is below a relative threshold AND the intersection already
+ *   demands more than one segment-length of extension.
+ *
+ * Valid shallow corners with bounded extensions still succeed.
+ */
+const MAX_SHARP_EXT_RATIO = 50;
+const MIN_DIR_SIN_FOR_FAR_EXT = 1e-3;
 
 export interface FilletOptions {
   radius: number;
@@ -516,6 +532,72 @@ export function filletLineLine(
   };
 }
 
+/**
+ * Distance beyond the finite segment needed to reach point X on the infinite line.
+ * Zero when X already lies on the segment (within EPS).
+ */
+function extensionBeyondSegment(a: Vec2, b: Vec2, X: Vec2): number {
+  const len = distance(a, b);
+  if (len < EPS) return distance(a, X);
+  const t = projectParam(X, a, b);
+  if (t >= -EPS && t <= 1 + EPS) return 0;
+  if (t < 0) return distance(X, a);
+  return distance(X, b);
+}
+
+function sharpCornerExtensionBudget(edge1: LinearEdge, edge2: LinearEdge, X: Vec2): {
+  ok: true;
+  maxExt: number;
+  ext1: number;
+  ext2: number;
+} | { ok: false; reason: string } {
+  const len1 = distance(edge1.a, edge1.b);
+  const len2 = distance(edge2.a, edge2.b);
+  if (len1 < EPS || len2 < EPS) {
+    return { ok: false, reason: 'Degenerate line' };
+  }
+  const refLen = Math.max(len1, len2);
+  let coordMag = refLen;
+  for (const p of [edge1.a, edge1.b, edge2.a, edge2.b, X]) {
+    coordMag = Math.max(coordMag, Math.abs(p.x), Math.abs(p.y));
+  }
+  const maxExt = Math.max(refLen * MAX_SHARP_EXT_RATIO, coordMag * 1e-6, EPS);
+
+  const dir1 = normalize(sub(edge1.b, edge1.a));
+  const dir2 = normalize(sub(edge2.b, edge2.a));
+  if (!dir1 || !dir2) {
+    return { ok: false, reason: 'Degenerate line' };
+  }
+  const sinPhi = Math.abs(cross(dir1, dir2)); // |sin| of direction angle
+  const ext1 = extensionBeyondSegment(edge1.a, edge1.b, X);
+  const ext2 = extensionBeyondSegment(edge2.a, edge2.b, X);
+
+  if (
+    sinPhi < MIN_DIR_SIN_FOR_FAR_EXT &&
+    Math.max(ext1, ext2) > refLen
+  ) {
+    return {
+      ok: false,
+      reason:
+        'Lines are nearly parallel — intersection is numerically unstable for FILLET',
+    };
+  }
+
+  if (ext1 > maxExt || ext2 > maxExt) {
+    return {
+      ok: false,
+      reason:
+        'Fillet intersection requires an unreasonable extension — adjust geometry or radius',
+    };
+  }
+
+  if (!Number.isFinite(X.x) || !Number.isFinite(X.y)) {
+    return { ok: false, reason: 'Invalid fillet intersection' };
+  }
+
+  return { ok: true, maxExt, ext1, ext2 };
+}
+
 function sharpCorner(
   edge1: LinearEdge,
   edge2: LinearEdge,
@@ -525,6 +607,9 @@ function sharpCorner(
   trim: boolean,
 ): FilletComputeResult {
   if (!trim) return fail('Radius 0 with Trim OFF does nothing');
+
+  const safety = sharpCornerExtensionBudget(edge1, edge2, X);
+  if (!safety.ok) return fail(safety.reason);
 
   if (edge1.source.id === edge2.source.id && edge1.source.type === 'polyline') {
     const pl = edge1.source;

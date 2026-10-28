@@ -43,6 +43,16 @@ export {
   vecDelta,
 } from './transform.js';
 
+export type { ArcPolylineMeta, ArcMetaMapOptions } from './arcMetadata.js';
+export {
+  arcMetaConsistentWithVertices,
+  arcMetaTolerance,
+  normalizeAngleRad,
+  readArcPolylineMeta,
+  stripArcPolylineMeta,
+  syncArcPolylineMetadata,
+} from './arcMetadata.js';
+
 export {
   formatAngleDegrees,
   formatLengthInUnits,

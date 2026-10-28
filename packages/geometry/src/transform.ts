@@ -5,6 +5,7 @@ import type {
   EntityId,
   Vec2,
 } from '@ratecad/core';
+import { syncArcPolylineMetadata } from './arcMetadata.js';
 import { distance } from './math.js';
 import { cross, normalize, pointOnSegment, rotatePoint } from './intersect.js';
 
@@ -51,13 +52,20 @@ export function translateEntity(entity: Entity, delta: Vec2): Entity | null {
       };
     case 'polyline': {
       if (entity.geometry.vertices.length < 2) return null;
-      return {
+      const moved: Entity = {
         ...entity,
         geometry: {
           ...entity.geometry,
-          vertices: entity.geometry.vertices.map((v) => translatePoint(v, delta)),
+          vertices: entity.geometry.vertices.map((v) =>
+            translatePoint(v, delta),
+          ),
         },
       };
+      return syncArcPolylineMetadata(moved, {
+        mapPoint: (p) => translatePoint(p, delta),
+        angleDelta: 0,
+        radiusScale: 1,
+      });
     }
     case 'dimension':
       return {
