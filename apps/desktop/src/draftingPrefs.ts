@@ -17,12 +17,19 @@ const STORAGE_KEY = 'ratecad.draftingPrefs';
 export type DraftingPrefs = {
   crosshairSize: CrosshairSize;
   pickboxSize: PickboxSize;
+  /** Right Document / Layers / Properties sidebar. Default is minimized. */
+  propertiesSidebarExpanded: boolean;
 };
 
 export const DEFAULT_DRAFTING_PREFS: DraftingPrefs = {
   crosshairSize: DEFAULT_CROSSHAIR_SIZE,
   pickboxSize: DEFAULT_PICKBOX_SIZE,
+  propertiesSidebarExpanded: false,
 };
+
+function readSidebarExpanded(value: unknown): boolean {
+  return value === true;
+}
 
 export function loadDraftingPrefs(): DraftingPrefs {
   try {
@@ -32,6 +39,9 @@ export function loadDraftingPrefs(): DraftingPrefs {
     return {
       crosshairSize: normalizeCrosshairSize(parsed.crosshairSize),
       pickboxSize: normalizePickboxSize(parsed.pickboxSize),
+      propertiesSidebarExpanded: readSidebarExpanded(
+        parsed.propertiesSidebarExpanded,
+      ),
     };
   } catch {
     return { ...DEFAULT_DRAFTING_PREFS };
@@ -45,6 +55,7 @@ export function saveDraftingPrefs(prefs: DraftingPrefs): void {
       JSON.stringify({
         crosshairSize: normalizeCrosshairSize(prefs.crosshairSize),
         pickboxSize: normalizePickboxSize(prefs.pickboxSize),
+        propertiesSidebarExpanded: prefs.propertiesSidebarExpanded === true,
       }),
     );
   } catch {
@@ -61,6 +72,8 @@ export function updateDraftingPrefs(
       patch.crosshairSize ?? cur.crosshairSize,
     ),
     pickboxSize: normalizePickboxSize(patch.pickboxSize ?? cur.pickboxSize),
+    propertiesSidebarExpanded:
+      patch.propertiesSidebarExpanded ?? cur.propertiesSidebarExpanded,
   };
   saveDraftingPrefs(next);
   return next;

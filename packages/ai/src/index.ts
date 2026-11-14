@@ -652,6 +652,35 @@ export function parseAiPropertyIntent(text: string): AiPropertyIntent {
   };
 }
 
+export type {
+  CompiledEntitySummary,
+  DrawingIntent,
+  ParsedDrawPrompt,
+} from './drawingIntent.js';
+export { parseDrawPrompt, type ParseDrawResult } from './parseDrawPrompt.js';
+export {
+  compileDrawIntent,
+  type CompileDrawResult,
+  type CompiledDraw,
+  type DrawCompileContext,
+} from './compileDrawIntent.js';
+export {
+  applyPreparedDraw,
+  previewDrawPrompt,
+  type ApplyDrawResult,
+  type DrawPreviewResult,
+  type PreparedDraw,
+  type PreparedPrompt,
+} from './executeDrawPrompt.js';
+export { describeEntity, describeSelection } from './entitySummary.js';
+export {
+  classifyCadPrompt,
+  previewModifyPrompt,
+  MODIFY_OPERATIONS,
+  type ModifyOperation,
+  type PreparedModify,
+} from './modifyPreview.js';
+
 export function proposeAiPropertyCommand(text: string): {
   summary: string;
   commandAlias: 'CHPROP' | 'SETBYLAYER' | 'MATCHPROP' | 'PROPERTIES';

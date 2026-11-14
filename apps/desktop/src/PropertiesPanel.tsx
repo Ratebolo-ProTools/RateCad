@@ -194,7 +194,7 @@ export function PropertiesPanel({ doc, bus, compact, fmtLen }: Props) {
             : 'BY_LAYER';
 
   return (
-    <section className={`panel-section properties-engine${compact ? ' compact' : ''}`}>
+    <section className={`panel-section properties-engine current-properties${compact ? ' compact' : ''}`}>
       <h2 className="panel-title">{title}</h2>
 
       <div className="prop-row">

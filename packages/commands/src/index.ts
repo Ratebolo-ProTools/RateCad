@@ -4,6 +4,7 @@ export type {
   CommandListener,
 } from './bus.js';
 export { CommandBus } from './bus.js';
+export { BatchCommand } from './batchCommand.js';
 export {
   CreateCircleCommand,
   CreateLineCommand,

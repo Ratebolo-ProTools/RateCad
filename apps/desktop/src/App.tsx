@@ -99,6 +99,7 @@ import { LayoutPropertiesPanel } from './LayoutPropertiesPanel';
 import { UnitsDialog } from './UnitsDialog';
 import { DimStyleManager } from './DimStyleManager';
 import { AreaModeStrip, Ribbon } from './Ribbon';
+import { AiPromptPanel } from './AiPromptPanel';
 import type { RecentDrawing } from './ApplicationMenu';
 import {
   bindSessionEngine,
@@ -262,6 +263,11 @@ import {
   type ViewportGripRole,
 } from '@ratecad/viewport';
 import { loadDraftingPrefs, updateDraftingPrefs } from './draftingPrefs';
+import {
+  PropertiesCollapseBar,
+  PropertiesRail,
+  type SidebarSection,
+} from './PropertiesSidebarChrome';
 import { ViewportOverlays } from './ViewportOverlays';
 import './styles/app.css';
 
@@ -591,6 +597,23 @@ function describeEntity(
   }
 }
 
+function scrollSidebarSection(target: SidebarSection) {
+  const selector =
+    target === 'document'
+      ? '.document-section'
+      : target === 'layers'
+        ? '.layers-section'
+        : '.current-properties, .properties-engine';
+  const el = document.querySelector(selector);
+  const body = el?.closest('.right-panel-body');
+  if (!el || !(body instanceof HTMLElement)) return;
+  const top =
+    el.getBoundingClientRect().top -
+    body.getBoundingClientRect().top +
+    body.scrollTop;
+  body.scrollTo({ top: Math.max(0, top) });
+}
+
 export function App() {
   const busRef = useRef<CommandBus>(createBus());
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -755,13 +778,47 @@ export function App() {
   );
   const [pointerOverCanvas, setPointerOverCanvas] = useState(false);
   const [draftingPrefs, setDraftingPrefs] = useState(() => loadDraftingPrefs());
+  const propertiesExpanded = draftingPrefs.propertiesSidebarExpanded;
+  const sidebarScrollRef = useRef<SidebarSection | null>(null);
   const pickboxPxRef = useRef(pickboxHalfPx(draftingPrefs.pickboxSize));
   useEffect(() => {
     pickboxPxRef.current = pickboxHalfPx(draftingPrefs.pickboxSize);
   }, [draftingPrefs.pickboxSize]);
+  const setPropertiesExpanded = useCallback((expanded: boolean) => {
+    setDraftingPrefs(updateDraftingPrefs({ propertiesSidebarExpanded: expanded }));
+  }, []);
+  const openSidebarSection = useCallback(
+    (target: SidebarSection) => {
+      sidebarScrollRef.current = target;
+      if (propertiesExpanded) {
+        scrollSidebarSection(target);
+        sidebarScrollRef.current = null;
+        return;
+      }
+      setPropertiesExpanded(true);
+    },
+    [propertiesExpanded, setPropertiesExpanded],
+  );
+  useEffect(() => {
+    if (!propertiesExpanded) return;
+    const target = sidebarScrollRef.current;
+    if (!target) return;
+    sidebarScrollRef.current = null;
+    const frame = requestAnimationFrame(() => scrollSidebarSection(target));
+    return () => cancelAnimationFrame(frame);
+  }, [propertiesExpanded]);
   const [size, setSize] = useState({ width: 800, height: 600 });
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
+  const [aiPanelOpen, setAiPanelOpen] = useState(true);
+  const [aiSeed, setAiSeed] = useState('');
+  const [aiSeedNonce, setAiSeedNonce] = useState(0);
+  const openAiPromptRef = useRef<(text: string) => void>(() => undefined);
+  openAiPromptRef.current = (text: string) => {
+    setAiSeed(text);
+    setAiSeedNonce((nonce) => nonce + 1);
+    setAiPanelOpen(true);
+  };
   const [filePath, setFilePath] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
   const [statusExtra, setStatusExtra] = useState<string | null>(null);
@@ -1485,7 +1542,7 @@ export function App() {
       },
       onNaturalLanguage: (text: string) => {
         if (!activeDs()) return;
-        setCommandFeedback(`AI (NL): ${text}`);
+        openAiPromptRef.current(text);
       },
       getWorkspaceMode: () => workspaceModeRef.current,
       enterMspace: () => {
@@ -4520,16 +4577,8 @@ export function App() {
         onTogglePolar={togglePolar}
         onToggleGrid={toggleGrid}
         onActivateAreaMode={activateAreaMode}
-        onScrollToLayers={() => {
-          const el = document.querySelector('.layers-section');
-          el?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-        }}
-        onScrollToProperties={() => {
-          const el =
-            document.querySelector('.properties-engine') ??
-            document.querySelector('.right-panel');
-          el?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-        }}
+        onScrollToLayers={() => openSidebarSection('layers')}
+        onScrollToProperties={() => openSidebarSection('properties')}
         onZoomExtents={() => {
           void runEngineCommand('ZE');
         }}
@@ -4561,6 +4610,8 @@ export function App() {
         recentDrawings={recentDrawings}
         onOpenRecent={(entry) => void openRecentDrawing(entry)}
         onExit={() => void exitApp()}
+        aiOpen={aiPanelOpen}
+        onToggleAi={() => setAiPanelOpen((open) => !open)}
       />
 
       {session.activeTool === 'area' ? (
@@ -4609,7 +4660,11 @@ export function App() {
         </div>
       ) : null}
 
-      <div className="workspace">
+      <div
+        className={`workspace${aiPanelOpen ? ' ai-open' : ''}${
+          propertiesExpanded ? ' props-expanded' : ''
+        }`}
+      >
         <main className="viewport-wrap" ref={wrapRef}>
           <canvas
             ref={canvasRef}
@@ -5021,8 +5076,34 @@ export function App() {
           ) : null}
         </main>
 
-        <aside className="right-panel" aria-label="Properties">
-          <section className="panel-section">
+        <AiPromptPanel
+          document={doc}
+          workspaceMode={workspaceMode}
+          commandBus={busRef.current}
+          sessionId={activeSessionId}
+          seed={aiSeed}
+          seedNonce={aiSeedNonce}
+          open={aiPanelOpen}
+          onClose={() => setAiPanelOpen(false)}
+        />
+        <aside
+          className={
+            propertiesExpanded ? 'right-panel' : 'right-panel is-collapsed'
+          }
+          aria-label="Properties"
+        >
+          {propertiesExpanded ? (
+            <PropertiesCollapseBar
+              onCollapse={() => setPropertiesExpanded(false)}
+            />
+          ) : (
+            <PropertiesRail
+              onExpand={() => setPropertiesExpanded(true)}
+              onOpenSection={openSidebarSection}
+            />
+          )}
+          <div className="right-panel-body" hidden={!propertiesExpanded}>
+          <section className="panel-section document-section">
             <h2 className="panel-title">Document</h2>
             <div className="prop-row">
               <label>Name</label>
@@ -5492,6 +5573,7 @@ export function App() {
                   </>
                 ) : null}
           </section>
+          </div>
         </aside>
       </div>
 

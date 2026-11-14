@@ -122,6 +122,8 @@ export type RibbonProps = {
   recentDrawings: RecentDrawing[];
   onOpenRecent: (entry: RecentDrawing) => void;
   onExit: () => void;
+  aiOpen: boolean;
+  onToggleAi: () => void;
 };
 
 function Icon({ children }: { children: ReactNode }) {
@@ -689,6 +691,17 @@ export function Ribbon(props: RibbonProps) {
             onClick={props.onRedo}
           >
             {Icons.redo}
+          </button>
+          <span className="qat-sep" />
+          <button
+            type="button"
+            className={`qat-btn ai-qat${props.aiOpen ? ' active' : ''}`}
+            data-testid="btn-ai-assistant"
+            title="AI Engineer"
+            aria-pressed={props.aiOpen}
+            onClick={props.onToggleAi}
+          >
+            AI
           </button>
         </div>
 
