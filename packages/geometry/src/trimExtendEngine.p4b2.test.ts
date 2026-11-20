@@ -352,30 +352,26 @@ describe('P4-B2 preview/commit + circle safety', () => {
     }
   });
 
-  it('circle: single hit rejected; dual hit yields arc-meta polyline', () => {
+  it('circle trim is refused for one hit and for two hits', () => {
     const c = circle('c', { x: 0, y: 0 }, 5);
+    c.properties.color = '#00ff00';
     const one = trimEntityMulti(
       c,
       [line('t', { x: 5, y: -1 }, { x: 5, y: 1 })],
       { x: 5, y: 0 },
     );
     expect(one.ok).toBe(false);
-    if (!one.ok) expect(one.reason).toMatch(/native ARC/i);
+    if (!one.ok) expect(one.reason).toMatch(/unsupported until native ARC/i);
 
     const two = trimEntityMulti(
       c,
       [line('v', { x: 0, y: -10 }, { x: 0, y: 10 })],
       { x: 5, y: 0 },
     );
-    expect(two.ok).toBe(true);
-    if (!two.ok) return;
-    expect(two.entities[0]?.type).toBe('polyline');
-    const meta = two.entities[0]?.metadata?.arc as
-      | { radius: number; approximate?: boolean; fromCircle?: boolean }
-      | undefined;
-    expect(meta?.radius).toBeCloseTo(5);
-    expect(meta?.fromCircle).toBe(true);
-    expect(meta?.approximate).toBe(true);
-    expect(two.entities[0]?.properties.color).toBe('#00ff00');
+    expect(two.ok).toBe(false);
+    if (!two.ok) expect(two.reason).toMatch(/unsupported until native ARC/i);
+    expect(c.type).toBe('circle');
+    expect(c.geometry).toEqual({ center: { x: 0, y: 0 }, radius: 5 });
+    expect(c.properties.color).toBe('#00ff00');
   });
 });

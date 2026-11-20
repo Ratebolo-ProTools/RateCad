@@ -17,9 +17,10 @@ describe('DrawingDocument', () => {
 
   it('creates an empty document with default layers and units', () => {
     const doc = createEmptyDocument('Test');
-    expect(doc.schemaVersion).toBe(10);
+    expect(doc.schemaVersion).toBe(11);
     expect(doc.meta.name).toBe('Test');
     expect(doc.entities).toEqual([]);
+    expect(doc.blockDefinitions).toEqual([]);
     expect(doc.layouts.length).toBeGreaterThanOrEqual(1);
     expect(doc.layouts[0]!.name).toBe('Layout1');
     expect(doc.activeLayoutId).toBeNull();

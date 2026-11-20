@@ -129,6 +129,8 @@ function entityPrefix(type: Entity['type']): string {
       return 'window';
     case 'room':
       return 'room';
+    case 'block':
+      return 'block';
   }
 }
 

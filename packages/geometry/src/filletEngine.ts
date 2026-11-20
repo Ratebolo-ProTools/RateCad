@@ -930,6 +930,9 @@ export function computeFillet(
   options: FilletOptions,
   arcId: EntityId,
 ): FilletComputeResult {
+  if (first.entity.type === 'block' || second.entity.type === 'block') {
+    return fail('Block references cannot be filleted');
+  }
   if (first.entity.type === 'circle' && second.entity.type === 'circle') {
     return fail('Circle–circle fillet is not supported in this version');
   }

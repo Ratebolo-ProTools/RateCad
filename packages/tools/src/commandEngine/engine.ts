@@ -674,6 +674,78 @@ export class CadCommandEngine {
     if (update.status) r.status = update.status;
   }
 
+  /** TRIM uses this so a click and a freehand drag stay distinct. */
+  wantsPointerStroke(): boolean {
+    const running = this.running;
+    if (!running?.command.acceptsPointerStroke) return false;
+    return running.command.acceptsPointerStroke(running.prompt);
+  }
+
+  beginStroke(point: Vec2, modifiers?: { shiftKey?: boolean }): void {
+    const running = this.running;
+    if (!running) return;
+    this.applyPointerModifiers(running.state, modifiers);
+    running.command.onStrokeStart?.(
+      point,
+      running.prompt,
+      this.ctx(running.lastPoint),
+      running.state,
+    );
+  }
+
+  updateStroke(point: Vec2, modifiers?: { shiftKey?: boolean }): void {
+    const running = this.running;
+    const onStrokeMove = running?.command.onStrokeMove;
+    if (!running || !onStrokeMove) return;
+    this.applyPointerModifiers(running.state, modifiers);
+    const update = onStrokeMove(
+      point,
+      running.prompt,
+      this.ctx(running.lastPoint),
+      running.state,
+    );
+    if (update.preview !== undefined) running.preview = update.preview;
+    if (update.previewEntities !== undefined) {
+      running.previewEntities = update.previewEntities;
+    }
+    if (update.hideEntityIds !== undefined) {
+      running.hideEntityIds = update.hideEntityIds;
+    }
+    if (update.dynamic !== undefined) running.dynamic = update.dynamic;
+    if (update.status) running.status = update.status;
+  }
+
+  endStroke(
+    point: Vec2,
+    dragging: boolean,
+    modifiers?: { shiftKey?: boolean },
+  ): void {
+    const running = this.running;
+    if (!running) return;
+    if (!dragging || !running.command.onStrokeEnd) {
+      const state = running.state as { freehand?: Vec2[] };
+      state.freehand = [];
+      this.submitPoint(point, modifiers);
+      return;
+    }
+    this.applyPointerModifiers(running.state, modifiers);
+    const result = running.command.onStrokeEnd(
+      point,
+      running.prompt,
+      this.ctx(running.lastPoint),
+      running.state,
+    );
+    this.applyResult(result, point);
+  }
+
+  private applyPointerModifiers(
+    state: Record<string, unknown>,
+    modifiers?: { shiftKey?: boolean },
+  ): void {
+    if (modifiers?.shiftKey) state.shiftKey = true;
+    else delete state.shiftKey;
+  }
+
   private applyResult(
     result: ReturnType<CadEngineCommand['onPoint']>,
     lastPoint?: Vec2,

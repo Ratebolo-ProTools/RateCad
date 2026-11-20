@@ -6,6 +6,15 @@ export type {
 export { CommandBus } from './bus.js';
 export { BatchCommand } from './batchCommand.js';
 export {
+  CreateBlockCommand,
+  InsertBlockCommand,
+  buildCreateBlock,
+  buildInsertBlock,
+  previewBlockReference,
+  type CreateBlockPlan,
+  type InsertBlockInput,
+} from './blockCommands.js';
+export {
   CreateCircleCommand,
   CreateLineCommand,
   CreatePolylineCommand,

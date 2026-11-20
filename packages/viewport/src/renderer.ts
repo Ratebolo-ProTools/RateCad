@@ -8,6 +8,7 @@ import type {
   LeaderEntity,
   TextEntity,
   Vec2,
+  BlockReferenceEntity,
   ViewportId,
   WallEntity,
   WindowEntity,
@@ -23,8 +24,11 @@ import {
   annotativeScreenPx,
 } from '@ratecad/core';
 import {
+  blockCircleWorldPoints,
   dimensionLayout,
   distance,
+  rectangleLocalCorners,
+  transformBlockPoint,
   doorLayout,
   formatAngleDegrees,
   formatDimensionLength,
@@ -513,6 +517,215 @@ function strokeLeader(
   ctx.fillText(entity.geometry.content, tp.x + 4, tp.y);
 }
 
+function strokeWorldChain(
+  ctx: CanvasRenderingContext2D,
+  points: Vec2[],
+  camera: Camera,
+  width: number,
+  height: number,
+  closed: boolean,
+): void {
+  if (points.length === 0) return;
+  ctx.beginPath();
+  const first = worldToScreen(points[0]!, camera, width, height);
+  ctx.moveTo(first.x, first.y);
+  for (let i = 1; i < points.length; i += 1) {
+    const point = worldToScreen(points[i]!, camera, width, height);
+    ctx.lineTo(point.x, point.y);
+  }
+  if (closed && points.length > 2) ctx.closePath();
+  ctx.stroke();
+}
+
+function strokeBlockText(
+  ctx: CanvasRenderingContext2D,
+  reference: BlockReferenceEntity,
+  position: Vec2,
+  rotation: number,
+  textHeight: number,
+  content: string,
+  camera: Camera,
+  width: number,
+  height: number,
+  color: string,
+): void {
+  const origin = transformBlockPoint(position, reference);
+  const right = transformBlockPoint(
+    {
+      x: position.x + Math.cos(rotation),
+      y: position.y + Math.sin(rotation),
+    },
+    reference,
+  );
+  const down = transformBlockPoint(
+    {
+      x: position.x + Math.sin(rotation),
+      y: position.y - Math.cos(rotation),
+    },
+    reference,
+  );
+  const o = worldToScreen(origin, camera, width, height);
+  const r = worldToScreen(right, camera, width, height);
+  const d = worldToScreen(down, camera, width, height);
+  ctx.save();
+  ctx.transform(r.x - o.x, r.y - o.y, d.x - o.x, d.y - o.y, o.x, o.y);
+  ctx.font = `${textHeight}px "IBM Plex Sans", system-ui, sans-serif`;
+  ctx.fillStyle = color;
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillText(content, 0, 0);
+  ctx.restore();
+}
+
+function strokeBlockReference(
+  ctx: CanvasRenderingContext2D,
+  reference: BlockReferenceEntity,
+  doc: DrawingDocument,
+  camera: Camera,
+  width: number,
+  height: number,
+  color: string,
+  lineWidth: number,
+  unifiedColor: boolean,
+): void {
+  const definition = doc.blockDefinitions.find(
+    (item) => item.id === reference.geometry.definitionId,
+  );
+  ctx.lineWidth = lineWidth;
+  if (!definition) {
+    const p = reference.geometry.position;
+    ctx.strokeStyle = color;
+    strokeWorldChain(
+      ctx,
+      [
+        { x: p.x - 0.25, y: p.y - 0.25 },
+        { x: p.x + 0.25, y: p.y + 0.25 },
+      ],
+      camera,
+      width,
+      height,
+      false,
+    );
+    strokeWorldChain(
+      ctx,
+      [
+        { x: p.x - 0.25, y: p.y + 0.25 },
+        { x: p.x + 0.25, y: p.y - 0.25 },
+      ],
+      camera,
+      width,
+      height,
+      false,
+    );
+    return;
+  }
+
+  for (const content of definition.entities) {
+    const paint = unifiedColor
+      ? color
+      : resolveEffectiveAppearance(content, doc, color).colorHex;
+    ctx.strokeStyle = paint;
+    ctx.fillStyle = paint;
+    if (!unifiedColor) {
+      const appearance = resolveEffectiveAppearance(content, doc, color);
+      ctx.setLineDash(
+        appearance.linetypePattern.map((value) =>
+          Math.max(0.5, Math.abs(value) * camera.zoom),
+        ),
+      );
+    }
+    switch (content.type) {
+      case 'line':
+        strokeWorldChain(
+          ctx,
+          [
+            transformBlockPoint(content.geometry.start, reference),
+            transformBlockPoint(content.geometry.end, reference),
+          ],
+          camera,
+          width,
+          height,
+          false,
+        );
+        break;
+      case 'rectangle':
+        strokeWorldChain(
+          ctx,
+          rectangleLocalCorners(
+            content.geometry.corner1,
+            content.geometry.corner2,
+          ).map((corner) => transformBlockPoint(corner, reference)),
+          camera,
+          width,
+          height,
+          true,
+        );
+        break;
+      case 'circle':
+        strokeWorldChain(
+          ctx,
+          blockCircleWorldPoints(
+            content.geometry.center,
+            content.geometry.radius,
+            reference,
+          ),
+          camera,
+          width,
+          height,
+          true,
+        );
+        break;
+      case 'polyline':
+        strokeWorldChain(
+          ctx,
+          content.geometry.vertices.map((vertex) =>
+            transformBlockPoint(vertex, reference),
+          ),
+          camera,
+          width,
+          height,
+          content.geometry.closed,
+        );
+        break;
+      case 'text':
+        strokeBlockText(
+          ctx,
+          reference,
+          content.geometry.position,
+          content.geometry.rotation,
+          content.geometry.height,
+          content.geometry.content,
+          camera,
+          width,
+          height,
+          paint,
+        );
+        break;
+      case 'leader': {
+        const points = [content.geometry.arrow, ...content.geometry.vertices].map(
+          (vertex) => transformBlockPoint(vertex, reference),
+        );
+        strokeWorldChain(ctx, points, camera, width, height, false);
+        const last =
+          content.geometry.vertices[content.geometry.vertices.length - 1] ??
+          content.geometry.arrow;
+        strokeBlockText(
+          ctx,
+          reference,
+          last,
+          0,
+          content.geometry.textHeight,
+          content.geometry.content,
+          camera,
+          width,
+          height,
+          paint,
+        );
+        break;
+      }
+    }
+  }
+}
+
 function strokeEntity(
   ctx: CanvasRenderingContext2D,
   entity: Entity,
@@ -525,6 +738,7 @@ function strokeEntity(
   dashPatternWorld: number[] = [],
   alpha = 1,
   annotCtx?: AnnotationRenderContext,
+  unifiedColor = false,
 ): void {
   ctx.save();
   ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
@@ -778,6 +992,19 @@ function strokeEntity(
       ctx.restore();
       break;
     }
+    case 'block':
+      strokeBlockReference(
+        ctx,
+        entity,
+        doc,
+        camera,
+        width,
+        height,
+        color,
+        lineWidth,
+        unifiedColor,
+      );
+      break;
   }
   ctx.restore();
 }
@@ -992,6 +1219,25 @@ function drawSnapIndicator(
       ctx.stroke();
       break;
     }
+    case 'intersection': {
+      ctx.beginPath();
+      ctx.moveTo(p.x - 6, p.y - 6);
+      ctx.lineTo(p.x + 6, p.y + 6);
+      ctx.moveTo(p.x + 6, p.y - 6);
+      ctx.lineTo(p.x - 6, p.y + 6);
+      ctx.stroke();
+      break;
+    }
+    case 'nearest': {
+      ctx.beginPath();
+      ctx.moveTo(p.x, p.y - 7);
+      ctx.lineTo(p.x + 6, p.y);
+      ctx.lineTo(p.x, p.y + 7);
+      ctx.lineTo(p.x - 6, p.y);
+      ctx.closePath();
+      ctx.stroke();
+      break;
+    }
     case 'grid': {
       ctx.beginPath();
       ctx.moveTo(p.x - 5, p.y);
@@ -1083,6 +1329,7 @@ function drawModelEntities(
       isSelected || isHovered ? [] : effective.linetypePattern,
       isSelected || isHovered ? 1 : effective.alpha,
       options.annotCtx ?? { space: 'model' },
+      isSelected || isHovered,
     );
     if (isSelected && !options.skipGrips) {
       autoGrips.push(...getSelectionGrips([entity], doc.entities));
@@ -1259,7 +1506,20 @@ export function renderDocument(
     ctx.save();
     ctx.setLineDash([5, 4]);
     for (const entity of options.previewEntities) {
-      strokeEntity(ctx, entity, doc, camera, width, height, theme.preview, 1.5);
+      strokeEntity(
+        ctx,
+        entity,
+        doc,
+        camera,
+        width,
+        height,
+        theme.preview,
+        1.5,
+        [],
+        1,
+        undefined,
+        true,
+      );
     }
     ctx.restore();
   }

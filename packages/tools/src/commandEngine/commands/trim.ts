@@ -1,5 +1,6 @@
 import type { CommandBus } from '@ratecad/commands';
 import {
+  BatchCommand,
   DeleteEntitiesCommand,
   ExtendEntityCommand,
   TrimEntityCommand,
@@ -13,9 +14,13 @@ import {
   type Vec2,
 } from '@ratecad/core';
 import {
+  CIRCLE_TRIM_UNSUPPORTED,
   applyTrimExtend,
   canExtendEntity,
   canTrimEntity,
+  crossingTrimPick,
+  distance,
+  resolveRectSelectMode,
   entitiesCrossedByFence,
   extendPreviewMulti,
   fencePickPoint,
@@ -35,9 +40,12 @@ import type {
 type TrimPhase =
   | 'cutting-edges'
   | 'targets'
+  | 'hover-preview'
   | 'fence'
   | 'crossing'
+  | 'freehand'
   | 'erase'
+  | 'untrimmable'
   | 'mode'
   | 'edge'
   | 'project';
@@ -53,8 +61,14 @@ type TrimState = {
   useAllCutters: boolean;
   phase: TrimPhase;
   fence: Vec2[];
+  /** First empty click of a two-point fence. Not stored on the document. */
+  pendingFence: Vec2 | null;
+  /** In-progress freehand path. Not stored on the document. */
+  freehand: Vec2[];
+  hoveredEntityId: EntityId | null;
+  pickPosition: Vec2 | null;
   crossingCorner: Vec2 | null;
-  /** Successful trim count in this session (for in-command Undo). */
+  /** Successful trim operations in this session (a batch counts as one). */
   sessionTrimCount: number;
   shiftExtend: boolean;
 };
@@ -67,6 +81,7 @@ const TRIM_OPTIONS: CadCommandOption[] = [
   { id: 'project', label: 'Project', aliases: ['P', 'PROJECT'] },
   { id: 'edge', label: 'Edge', aliases: ['E', 'EDGE'] },
   { id: 'erase', label: 'Erase', aliases: ['ER', 'ERASE'] },
+  { id: 'untrimmable', label: 'Untrimmable', aliases: ['UT'] },
   { id: 'undo', label: 'Undo', aliases: ['U', 'UNDO'] },
 ];
 
@@ -77,7 +92,8 @@ function modeLabel(mode: TrimMode): string {
 function targetPrompt(s: TrimState): CadPromptDefinition {
   return {
     id: 'targets',
-    message: `Select object to trim or [Fence/Crossing/Mode/Project/Edge/Erase/Undo]:`,
+    message:
+      'Select object to trim, drag freehand, or [Fence/Crossing/Mode/Project/Edge/Erase/Untrimmable/Undo]:',
     inputType: 'point',
     options: TRIM_OPTIONS,
     optional: true,
@@ -100,6 +116,29 @@ function cuttingPrompt(): CadPromptDefinition {
 
 function statusPrefix(s: TrimState): string {
   return `TRIM — ${modeLabel(s.mode)}`;
+}
+
+/** Keep rejects and Undo on the prompt for the current phase. */
+function promptForPhase(s: TrimState): CadPromptDefinition {
+  if (s.phase === 'cutting-edges') return cuttingPrompt();
+  if (s.phase === 'fence') {
+    return {
+      id: 'fence',
+      message: 'Specify next fence point:',
+      inputType: 'point',
+      optional: true,
+    };
+  }
+  if (s.phase === 'crossing') {
+    return {
+      id: 'crossing',
+      message: s.crossingCorner
+        ? 'Specify opposite corner:'
+        : 'Specify first corner:',
+      inputType: 'point',
+    };
+  }
+  return targetPrompt(s);
 }
 
 function readSettings(bus: CommandBus): {
@@ -198,10 +237,23 @@ function runTrimOrExtend(
   pickPoint: Vec2,
   extend: boolean,
 ): ReturnType<CadEngineCommand['onPoint']> {
-  if (!isEntityModifiable(s.bus.getDocument(), target)) {
+  if (target.type === 'block') {
     return {
       kind: 'reject',
-      message: 'Locked layer — cannot trim',
+      message: extend
+        ? 'Block references cannot be extended'
+        : 'Block references cannot be trimmed',
+      prompt: targetPrompt(s),
+    };
+  }
+  if (!isEntityModifiable(s.bus.getDocument(), target)) {
+    const layer = s.bus.getDocument().layers.find((l) => l.id === target.layerId);
+    return {
+      kind: 'reject',
+      message:
+        layer && !layer.visible
+          ? 'Hidden layer — cannot trim'
+          : 'Locked layer — cannot trim',
       prompt: targetPrompt(s),
     };
   }
@@ -266,9 +318,21 @@ function runTrimOrExtend(
     allowSelfAsCutter: true,
   });
   if (!preview.ok) {
+    if (shouldEraseFailedTrim(s, preview.reason)) {
+      s.bus.execute(new DeleteEntitiesCommand([target.id]));
+      s.sessionTrimCount += 1;
+      return {
+        kind: 'continue',
+        prompt: targetPrompt(s),
+        status: `${statusPrefix(s)}: Erased untrimmable object`,
+        message: 'Object cannot be trimmed — erased',
+        preview: null,
+        dynamic: { label: statusPrefix(s) },
+      };
+    }
     return {
       kind: 'reject',
-      message: preview.reason,
+      message: trimFailureMessage(preview.reason),
       prompt: targetPrompt(s),
     };
   }
@@ -393,6 +457,23 @@ function handleOption(
         },
         status: `${statusPrefix(s)}: Project mode (2D uses None)`,
       };
+    case 'untrimmable':
+      s.phase = 'untrimmable';
+      return {
+        kind: 'continue',
+        prompt: {
+          id: 'untrimmable',
+          message: 'Erase objects that cannot be trimmed? [Yes/No] <No>:',
+          inputType: 'option',
+          options: [
+            { id: 'yes', label: 'Yes', aliases: ['Y', 'YES'] },
+            { id: 'no', label: 'No', aliases: ['N', 'NO'] },
+          ],
+          defaultValue: s.eraseUntrimmable ? 'Yes' : 'No',
+          optional: true,
+        },
+        status: `${statusPrefix(s)}: Erase non-trimmable objects`,
+      };
     case 'erase':
       s.phase = 'erase';
       return {
@@ -421,7 +502,7 @@ function handleOption(
       }
       return {
         kind: 'continue',
-        prompt: targetPrompt(s),
+        prompt: promptForPhase(s),
         status: `${statusPrefix(s)}: Undid last trim`,
         message: 'Undo',
       };
@@ -429,40 +510,111 @@ function handleOption(
       return {
         kind: 'reject',
         message: `Unknown option: ${optionId}`,
-        prompt: targetPrompt(s),
+        prompt: promptForPhase(s),
       };
   }
 }
 
-function finishFence(s: TrimState): ReturnType<CadEngineCommand['onText']> {
-  const cutters = resolveCutters(s);
-  const targets = entitiesCrossedByFence(
-    s.bus.getDocument().entities,
-    s.fence,
+function boundaryMiss(reason: string): boolean {
+  return /no intersection|no cutting|parallel|collinear|no valid trim/i.test(
+    reason,
   );
-  let count = 0;
-  for (const target of targets) {
-    if (!isEntityModifiable(s.bus.getDocument(), target)) continue;
-    const pick = fencePickPoint(target, s.fence);
-    if (!pick) continue;
-    // Refresh entity from doc (prior trims may have changed it)
-    const live = getEntity(s.bus.getDocument(), target.id);
-    if (!live) continue;
+}
+
+function trimFailureMessage(reason: string): string {
+  return boundaryMiss(reason) ? `No valid trim boundary. ${reason}` : reason;
+}
+
+function shouldEraseFailedTrim(s: TrimState, reason: string): boolean {
+  return s.mode === 'quick' && s.eraseUntrimmable && boundaryMiss(reason);
+}
+
+function ensureTrimState(state: Record<string, unknown>): TrimState {
+  const s = state as TrimState;
+  if (!s.mode) {
+    const cfg = readSettings(s.bus);
+    s.mode = cfg.mode;
+    s.edgeMode = cfg.edgeMode;
+    s.projectMode = cfg.projectMode;
+    s.eraseUntrimmable = cfg.eraseUntrimmable;
+    s.cuttingIds = [];
+    s.useAllCutters = s.mode === 'quick';
+    s.sessionTrimCount = 0;
+    s.fence = [];
+    s.phase = s.mode === 'standard' ? 'cutting-edges' : 'targets';
+  }
+  s.cuttingIds = s.cuttingIds ?? [];
+  s.fence = s.fence ?? [];
+  s.freehand = s.freehand ?? [];
+  s.pendingFence = s.pendingFence ?? null;
+  s.hoveredEntityId = s.hoveredEntityId ?? null;
+  s.sessionTrimCount = s.sessionTrimCount ?? 0;
+  return s;
+}
+
+/** One undo step for every object changed by a fence, crossing, or freehand pass. */
+function commitTrimBatch(
+  s: TrimState,
+  jobs: Array<{ target: Entity; pick: Vec2 }>,
+): number {
+  const cutters = resolveCutters(s);
+  const commands: Array<TrimEntityCommand | DeleteEntitiesCommand> = [];
+  const seen = new Set<EntityId>();
+  for (const job of jobs) {
+    if (seen.has(job.target.id)) continue;
+    seen.add(job.target.id);
+    const live = getEntity(s.bus.getDocument(), job.target.id) ?? job.target;
+    if (live.type === 'block') continue;
+    if (!isEntityModifiable(s.bus.getDocument(), live)) continue;
+    if (!canTrimEntity(live)) {
+      if (shouldEraseFailedTrim(s, 'No intersection with cutting edge')) {
+        commands.push(new DeleteEntitiesCommand([live.id]));
+      }
+      continue;
+    }
     try {
-      s.bus.execute(
-        new TrimEntityCommand(live, cutters, pick, {
+      commands.push(
+        new TrimEntityCommand(live, cutters, job.pick, {
           edgeMode: s.edgeMode,
           projectMode: s.projectMode,
         }),
       );
-      count += 1;
-      s.sessionTrimCount += 1;
-    } catch {
-      // skip failures
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : 'Trim failed';
+      if (shouldEraseFailedTrim(s, reason)) {
+        commands.push(new DeleteEntitiesCommand([live.id]));
+      }
     }
   }
+  if (!commands.length) return 0;
+  s.bus.execute(
+    commands.length === 1 ? commands[0]! : new BatchCommand(commands),
+  );
+  s.sessionTrimCount += 1;
+  return commands.length;
+}
+
+function finishFence(s: TrimState): ReturnType<CadEngineCommand['onText']> {
+  const targets = entitiesCrossedByFence(
+    s.bus.getDocument().entities,
+    s.fence,
+  );
+  const jobs: Array<{ target: Entity; pick: Vec2 }> = [];
+  for (const target of targets) {
+    const pick = fencePickPoint(target, s.fence);
+    if (!pick) continue;
+    jobs.push({ target, pick });
+  }
   s.fence = [];
-  return beginTargets(s, count ? `Fence trimmed ${count} object(s)` : 'Fence: nothing trimmed');
+  s.freehand = [];
+  s.pendingFence = null;
+  const count = commitTrimBatch(s, jobs);
+  return beginTargets(
+    s,
+    count
+      ? `Fence trimmed ${count} object(s)`
+      : 'No valid trim boundary. Fence: nothing trimmed',
+  );
 }
 
 /** TRIM — AutoCAD-style Quick / Standard with shared TrimExtendEngine. */
@@ -486,37 +638,23 @@ export const trimCommand: CadEngineCommand = {
     return {
       state: init,
       prompt: targetPrompt(init as TrimState),
-      status: 'TRIM — QUICK: Select object to trim:',
+      status: 'TRIM — QUICK: Click, drag freehand, or pick two empty points:',
     };
   },
   start: (_ctx) => {
     return {
       prompt: {
         id: 'targets',
-        message:
-          'Select object to trim or [Fence/Crossing/Mode/Project/Edge/Erase/Undo]:',
+        message: targetPrompt({} as TrimState).message,
         inputType: 'point',
         options: TRIM_OPTIONS,
         optional: true,
       },
-      status: 'TRIM — QUICK: Select object to trim:',
+      status: 'TRIM — QUICK: Click, drag freehand, or pick two empty points:',
     };
   },
   onPoint: (point, prompt, _ctx, state) => {
-    const s = state as TrimState;
-    // Lazy-init settings on first interaction
-    if (!s.mode) {
-      const cfg = readSettings(s.bus);
-      s.mode = cfg.mode;
-      s.edgeMode = cfg.edgeMode;
-      s.projectMode = cfg.projectMode;
-      s.eraseUntrimmable = cfg.eraseUntrimmable;
-      s.cuttingIds = s.cuttingIds ?? [];
-      s.useAllCutters = s.mode === 'quick';
-      s.sessionTrimCount = s.sessionTrimCount ?? 0;
-      s.fence = s.fence ?? [];
-      s.phase = s.mode === 'standard' ? 'cutting-edges' : 'targets';
-    }
+    const s = ensureTrimState(state);
 
     // Shift+click → extend (set by engine submitPoint modifiers when available)
     const extend = !!(state as { shiftKey?: boolean }).shiftKey || s.shiftExtend;
@@ -580,101 +718,34 @@ export const trimCommand: CadEngineCommand = {
       const a = s.crossingCorner;
       const b = point;
       s.crossingCorner = null;
-      const minX = Math.min(a.x, b.x);
-      const maxX = Math.max(a.x, b.x);
-      const minY = Math.min(a.y, b.y);
-      const maxY = Math.max(a.y, b.y);
-      const cutters = resolveCutters(s);
+      const mode = resolveRectSelectMode(a, b);
       const doc = s.bus.getDocument();
-      let count = 0;
+      const jobs: Array<{ target: Entity; pick: Vec2 }> = [];
+      let sawCircle = false;
       for (const e of doc.entities) {
         if (!canTrimEntity(e)) continue;
         if (!isEntityModifiable(doc, e)) continue;
-        // Crossing: AABB intersects box
-        const segs =
-          e.type === 'circle'
-            ? null
-            : e.type === 'line' || e.type === 'wall'
-              ? [{ a: e.geometry.start, b: e.geometry.end }]
-              : null;
-        let hit = false;
+        const pick = crossingTrimPick(e, a, b, mode);
+        if (!pick) continue;
         if (e.type === 'circle') {
-          const { center, radius } = e.geometry;
-          const cx = Math.max(minX, Math.min(maxX, center.x));
-          const cy = Math.max(minY, Math.min(maxY, center.y));
-          hit =
-            (center.x - cx) ** 2 + (center.y - cy) ** 2 <= radius * radius;
-        } else if (segs) {
-          for (const seg of segs) {
-            const sx0 = Math.min(seg.a.x, seg.b.x);
-            const sx1 = Math.max(seg.a.x, seg.b.x);
-            const sy0 = Math.min(seg.a.y, seg.b.y);
-            const sy1 = Math.max(seg.a.y, seg.b.y);
-            if (!(sx1 < minX || sx0 > maxX || sy1 < minY || sy0 > maxY)) {
-              hit = true;
-              break;
-            }
-          }
-        } else if (e.type === 'polyline') {
-          const v = e.geometry.vertices;
-          for (let i = 0; i < v.length - (e.geometry.closed ? 0 : 1); i += 1) {
-            const a = v[i]!;
-            const b = v[(i + 1) % v.length]!;
-            const sx0 = Math.min(a.x, b.x);
-            const sx1 = Math.max(a.x, b.x);
-            const sy0 = Math.min(a.y, b.y);
-            const sy1 = Math.max(a.y, b.y);
-            if (!(sx1 < minX || sx0 > maxX || sy1 < minY || sy0 > maxY)) {
-              hit = true;
-              break;
-            }
-          }
-        } else if (e.type === 'rectangle') {
-          const { corner1: c1, corner2: c2 } = e.geometry;
-          const rx0 = Math.min(c1.x, c2.x);
-          const rx1 = Math.max(c1.x, c2.x);
-          const ry0 = Math.min(c1.y, c2.y);
-          const ry1 = Math.max(c1.y, c2.y);
-          hit = !(rx1 < minX || rx0 > maxX || ry1 < minY || ry0 > maxY);
+          sawCircle = true;
+          continue;
         }
-        if (!hit && e.type !== 'polyline' && e.type !== 'rectangle') continue;
         const live = getEntity(s.bus.getDocument(), e.id);
-        if (!live) continue;
-        const pick = {
-          x: (minX + maxX) / 2,
-          y: (minY + maxY) / 2,
-        };
-        // Prefer a point on the entity near the box
-        const tryPick =
-          live.type === 'line' || live.type === 'wall'
-            ? {
-                x: Math.max(
-                  minX,
-                  Math.min(maxX, (live.geometry.start.x + live.geometry.end.x) / 2),
-                ),
-                y: Math.max(
-                  minY,
-                  Math.min(maxY, (live.geometry.start.y + live.geometry.end.y) / 2),
-                ),
-              }
-            : pick;
-        try {
-          s.bus.execute(
-            new TrimEntityCommand(live, cutters, tryPick, {
-              edgeMode: s.edgeMode,
-              projectMode: s.projectMode,
-            }),
-          );
-          count += 1;
-          s.sessionTrimCount += 1;
-        } catch {
-          // skip
-        }
+        if (!live || live.type === 'circle') continue;
+        jobs.push({ target: live, pick });
       }
-      return beginTargets(
-        s,
-        count ? `Crossing trimmed ${count} object(s)` : 'Crossing: nothing trimmed',
-      );
+      const count = commitTrimBatch(s, jobs);
+      const message = count
+        ? mode === 'window'
+          ? `Window trimmed ${count} object(s)`
+          : `Crossing trimmed ${count} object(s)`
+        : sawCircle
+          ? CIRCLE_TRIM_UNSUPPORTED
+          : mode === 'window'
+            ? 'Window: nothing fully inside'
+            : 'No valid trim boundary. Crossing: nothing trimmed';
+      return beginTargets(s, message);
     }
 
     if (prompt.id === 'erase' || s.phase === 'erase') {
@@ -718,30 +789,36 @@ export const trimCommand: CadEngineCommand = {
       };
     }
 
-    // Default: trim target
+    // Default: trim target. Two clicks in empty space define a fence.
     const target = pickEntityAt(s.bus, point);
     if (!target) {
-      return {
-        kind: 'reject',
-        message: 'Select object to trim',
-        prompt: targetPrompt(s),
-      };
+      if (extend) {
+        return {
+          kind: 'reject',
+          message: 'Select object to extend',
+          prompt: targetPrompt(s),
+        };
+      }
+      if (!s.pendingFence) {
+        s.pendingFence = point;
+        return {
+          kind: 'continue',
+          prompt: targetPrompt(s),
+          status: `${statusPrefix(s)}: Specify second fence point:`,
+          message: 'Two-point fence',
+          lastPoint: point,
+        };
+      }
+      const first = s.pendingFence;
+      s.pendingFence = null;
+      s.fence = [first, point];
+      return finishFence(s);
     }
+    s.pendingFence = null;
     return runTrimOrExtend(s, target, point, extend);
   },
   onText: (text, prompt, _ctx, state) => {
-    const s = state as TrimState;
-    if (!s.mode) {
-      const cfg = readSettings(s.bus);
-      Object.assign(s, {
-        ...cfg,
-        cuttingIds: [],
-        useAllCutters: cfg.mode === 'quick',
-        sessionTrimCount: 0,
-        fence: [],
-        phase: cfg.mode === 'standard' ? 'cutting-edges' : 'targets',
-      });
-    }
+    const s = ensureTrimState(state);
 
     const trimmed = text.trim();
     const upper = trimmed.toUpperCase();
@@ -756,6 +833,7 @@ export const trimCommand: CadEngineCommand = {
         'project',
         'edge',
         'erase',
+        'untrimmable',
         'undo',
       ].includes(trimmed)
     ) {
@@ -853,6 +931,24 @@ export const trimCommand: CadEngineCommand = {
       return handleOption(s, trimmed.toLowerCase());
     }
 
+    if (prompt.id === 'untrimmable') {
+      if (!trimmed || upper === 'N' || upper.startsWith('NO')) {
+        s.eraseUntrimmable = false;
+        persistTrimSettings(s);
+        return beginTargets(s, 'Erase non-trimmable objects: Off');
+      }
+      if (upper === 'Y' || upper.startsWith('YES')) {
+        s.eraseUntrimmable = true;
+        persistTrimSettings(s);
+        return beginTargets(s, 'Erase non-trimmable objects: On');
+      }
+      return {
+        kind: 'reject',
+        message: 'Enter Yes or No',
+        prompt,
+      };
+    }
+
     if (prompt.id === 'erase') {
       if (!trimmed) return beginTargets(s, 'Returned from Erase');
       if (trimmed === 'undo') return handleOption(s, 'undo');
@@ -872,19 +968,49 @@ export const trimCommand: CadEngineCommand = {
 
     return { kind: 'reject', message: 'Invalid input', prompt };
   },
-  onMove: (point, prompt, _ctx, state) => {
-    const s = state as TrimState;
-    if (!s.mode) {
-      const cfg = readSettings(s.bus);
-      Object.assign(s, {
-        ...cfg,
-        cuttingIds: [],
-        useAllCutters: cfg.mode === 'quick',
-        sessionTrimCount: 0,
-        fence: [],
-        phase: 'targets',
-      });
+  acceptsPointerStroke: (prompt) => prompt.id === 'targets',
+  onStrokeStart: (point, _prompt, _ctx, state) => {
+    const s = ensureTrimState(state);
+    s.freehand = [point];
+    s.phase = 'targets';
+  },
+  onStrokeMove: (point, _prompt, _ctx, state) => {
+    const s = ensureTrimState(state);
+    const last = s.freehand[s.freehand.length - 1];
+    if (!last || distance(last, point) > 1e-6) s.freehand.push(point);
+    s.phase = 'freehand';
+    const start = s.freehand[0] ?? point;
+    return {
+      preview: {
+        kind: 'polyline',
+        start,
+        end: point,
+        vertices: s.freehand,
+      },
+      previewEntities: null,
+      hideEntityIds: [],
+      dynamic: { label: `${statusPrefix(s)} · Freehand` },
+      status: `${statusPrefix(s)}: Freehand — release to trim`,
+    };
+  },
+  onStrokeEnd: (point, _prompt, _ctx, state) => {
+    const s = ensureTrimState(state);
+    const last = s.freehand[s.freehand.length - 1];
+    if (!last || distance(last, point) > 1e-6) s.freehand.push(point);
+    s.fence = s.freehand.length >= 2 ? [...s.freehand] : [];
+    s.freehand = [];
+    s.phase = 'targets';
+    if (s.fence.length < 2) {
+      return {
+        kind: 'reject',
+        message: 'Select object to trim',
+        prompt: targetPrompt(s),
+      };
     }
+    return finishFence(s);
+  },
+  onMove: (point, prompt, _ctx, state) => {
+    const s = ensureTrimState(state);
 
     if (prompt.id === 'fence' && s.fence.length) {
       return {
@@ -949,7 +1075,10 @@ export const trimCommand: CadEngineCommand = {
     }
 
     const target = pickEntityAt(s.bus, point);
+    s.pickPosition = point;
     if (!target || !canTrimEntity(target)) {
+      s.hoveredEntityId = null;
+      if (s.phase === 'hover-preview') s.phase = 'targets';
       return {
         preview: null,
         previewEntities: null,
@@ -958,6 +1087,8 @@ export const trimCommand: CadEngineCommand = {
         status: `${statusPrefix(s)}: Select object to trim`,
       };
     }
+    s.hoveredEntityId = target.id;
+    s.phase = 'hover-preview';
 
     const result = applyTrimExtend(
       target,
@@ -981,7 +1112,7 @@ export const trimCommand: CadEngineCommand = {
         previewEntities: removal ? [removal] : null,
         hideEntityIds: [],
         dynamic: { label: statusPrefix(s) },
-        status: `${statusPrefix(s)}: ${result.reason}`,
+        status: `${statusPrefix(s)}: ${trimFailureMessage(result.reason)}`,
       };
     }
 
@@ -1005,8 +1136,13 @@ export const trimCommand: CadEngineCommand = {
   onCancel: (state) => {
     const s = state as TrimState;
     s.fence = [];
+    s.freehand = [];
+    s.pendingFence = null;
+    s.hoveredEntityId = null;
+    s.pickPosition = null;
     s.crossingCorner = null;
-    s.bus.updateWithoutHistory((d) => setSelection(d, []));
+    s.phase = 'targets';
+    if (s.bus) s.bus.updateWithoutHistory((d) => setSelection(d, []));
   },
 };
 
@@ -1020,6 +1156,10 @@ export function initTrimCommandState(bus: CommandBus): Partial<TrimState> {
     useAllCutters: cfg.mode === 'quick',
     phase: cfg.mode === 'standard' ? 'cutting-edges' : 'targets',
     fence: [],
+    pendingFence: null,
+    freehand: [],
+    hoveredEntityId: null,
+    pickPosition: null,
     crossingCorner: null,
     sessionTrimCount: 0,
     shiftExtend: false,

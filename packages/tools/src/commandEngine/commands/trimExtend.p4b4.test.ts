@@ -152,8 +152,8 @@ describe('P4-B4 TRIM/EXTEND interaction', () => {
     const engine = makeEngine(bus);
     engine.start('TRIM');
     engine.submitText('crossing');
-    engine.submitPoint({ x: 6, y: -1 });
     engine.submitPoint({ x: 9, y: 1 });
+    engine.submitPoint({ x: 6, y: -1 });
     const afterTrim = getEntity(bus.getDocument(), target.getEntityId());
     if (afterTrim?.type === 'line') {
       expect(afterTrim.geometry.end.x).toBeCloseTo(5);

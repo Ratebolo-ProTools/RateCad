@@ -1021,174 +1021,23 @@ function trimRectangleMulti(
   return trimPolylineMulti(pline, cutters, pickPoint, edgeMode, allowSelf);
 }
 
-// ---------------------------------------------------------------------------
-// Circle trim → open polyline along remaining arc (exact center/radius in metadata)
-// RateCAD has no Arc entity yet; remaining geometry is an arc-backed polyline.
-// ---------------------------------------------------------------------------
+/** Shown when a circle would need an arc entity that the schema does not have. */
+export const CIRCLE_TRIM_UNSUPPORTED =
+  'Circle trim is unsupported until native ARC geometry is available';
 
-function angleOf(center: Vec2, p: Vec2): number {
-  return Math.atan2(p.y - center.y, p.x - center.x);
-}
-
-function normalizeAngle(a: number): number {
-  let x = a;
-  while (x < 0) x += Math.PI * 2;
-  while (x >= Math.PI * 2) x -= Math.PI * 2;
-  return x;
-}
-
-function sampleArc(
-  center: Vec2,
-  radius: number,
-  startAng: number,
-  endAng: number,
-  ccw: boolean,
-): Vec2[] {
-  let sweep = ccw
-    ? normalizeAngle(endAng - startAng)
-    : -normalizeAngle(startAng - endAng);
-  if (Math.abs(sweep) < EPS) sweep = ccw ? Math.PI * 2 - EPS : -(Math.PI * 2 - EPS);
-  if (!ccw && sweep > 0) sweep -= Math.PI * 2;
-  if (ccw && sweep < 0) sweep += Math.PI * 2;
-
-  const steps = Math.max(8, Math.ceil((Math.abs(sweep) / (Math.PI * 2)) * 64));
-  const verts: Vec2[] = [];
-  for (let i = 0; i <= steps; i += 1) {
-    const t = i / steps;
-    const ang = startAng + sweep * t;
-    verts.push({
-      x: center.x + radius * Math.cos(ang),
-      y: center.y + radius * Math.sin(ang),
-    });
-  }
-  return verts;
-}
-
+/**
+ * Circle trim is refused. Replacing a circle with a sampled polyline would
+ * drop exact radius geometry. The original circle is left unchanged.
+ */
 function trimCircleMulti(
   circle: Extract<Entity, { type: 'circle' }>,
-  cutters: Entity[],
-  pickPoint: Vec2,
-  edgeMode: EdgeMode,
-  allowSelf: boolean,
+  _cutters: Entity[],
+  _pickPoint: Vec2,
+  _edgeMode: EdgeMode,
+  _allowSelf: boolean,
 ): ModifyResult {
-  const { center, radius } = circle.geometry;
-  if (!(radius > EPS)) return fail('Invalid circle');
-
-  const pool = eligibleCutters(cutters, circle.id, allowSelf);
-  const near = nearbyCutters(circle, pool, 1e-3, edgeMode);
-  const hits: Vec2[] = [];
-
-  for (const cutter of near) {
-    if (!allowSelf && cutter.id === circle.id) continue;
-    if (cutter.type === 'circle') {
-      // Circle×circle — sample via line through centers or skip (rare for trim)
-      continue;
-    }
-    for (const seg of cuttingSegments(cutter)) {
-      const pts =
-        edgeMode === 'extend'
-          ? intersectLineCircle(seg.a, seg.b, center, radius).filter((p) => {
-              // Natural extension of cutter: intersection may be beyond segment
-              return isFiniteVec2(p);
-            })
-          : intersectSegmentCircle(seg.a, seg.b, center, radius);
-      for (const p of pts) {
-        if (!hits.some((h) => distance(h, p) < HIT_EPS)) hits.push(p);
-      }
-    }
-  }
-
-  if (hits.length < 1) {
-    return fail('No intersection with cutting edge');
-  }
-
-  // Native ARC entity is not available — a safe open arc requires ≥2 cuts.
-  // Single-hit trim would be ambiguous / malformed; reject without modifying the circle.
-  if (hits.length === 1) {
-    return fail(
-      'Circle trim requires at least two intersection points (native ARC not available)',
-    );
-  }
-
-  // Sort hits by angle
-  const angled = hits
-    .map((p) => ({ p, ang: normalizeAngle(angleOf(center, p)) }))
-    .sort((a, b) => a.ang - b.ang);
-
-  const pickAng = normalizeAngle(angleOf(center, pickPoint));
-
-  // Intervals between consecutive hits (wrapping)
-  type ArcIv = { i0: number; i1: number; a0: number; a1: number };
-  const intervals: ArcIv[] = [];
-  for (let i = 0; i < angled.length; i += 1) {
-    const j = (i + 1) % angled.length;
-    const a0 = angled[i]!.ang;
-    let a1 = angled[j]!.ang;
-    if (j === 0) a1 += Math.PI * 2;
-    intervals.push({ i0: i, i1: j, a0, a1 });
-  }
-
-  let removeI = 0;
-  for (let i = 0; i < intervals.length; i += 1) {
-    const iv = intervals[i]!;
-    let p = pickAng;
-    if (iv.i1 === 0 && p < iv.a0) p += Math.PI * 2;
-    if (p >= iv.a0 - EPS && p <= iv.a1 + EPS) {
-      removeI = i;
-      break;
-    }
-  }
-
-  // Remaining = everything except removeI — for a circle, removing one arc
-  // leaves one complementary arc (from remove.end to remove.start CCW).
-  const rem = intervals[removeI]!;
-  const startAng = rem.a1 >= Math.PI * 2 ? rem.a1 - Math.PI * 2 : rem.a1;
-  const endAng = rem.a0;
-  // Remaining goes from end of removed interval to start of removed (CCW)
-  const remainStart = angled[rem.i1]!.ang;
-  const remainEnd = angled[rem.i0]!.ang;
-
-  const verts = sampleArc(center, radius, remainStart, remainEnd, true);
-  const cleaned = dedupeVerts(verts);
-  if (cleaned.length < 2) return fail('Circle trim produced empty arc');
-  if (distance(cleaned[0]!, cleaned[cleaned.length - 1]!) <= HIT_EPS) {
-    return fail('Circle trim produced degenerate polyline');
-  }
-  if (
-    !Number.isFinite(remainStart) ||
-    !Number.isFinite(remainEnd) ||
-    !(radius > EPS)
-  ) {
-    return fail('Circle trim produced invalid arc metadata');
-  }
-
-  const arcEntity: Entity = {
-    id: circle.id,
-    type: 'polyline',
-    layerId: circle.layerId,
-    visible: circle.visible,
-    locked: circle.locked,
-    geometry: { vertices: cleaned, closed: false },
-    properties: { ...circle.properties },
-    metadata: {
-      ...(circle.metadata ?? {}),
-      // Representation note: not a native ArcEntity — open polyline + arc meta.
-      arc: {
-        center: { ...center },
-        radius,
-        startAngle: remainStart,
-        endAngle: remainEnd,
-        fromCircle: true,
-        approximate: true,
-      },
-    },
-  };
-  void startAng;
-  void endAng;
-  if (!validateEntityGeometry(arcEntity)) {
-    return fail('Circle trim produced invalid geometry');
-  }
-  return ok([arcEntity]);
+  if (!(circle.geometry.radius > EPS)) return fail('Invalid circle');
+  return fail(CIRCLE_TRIM_UNSUPPORTED);
 }
 
 // ---------------------------------------------------------------------------
@@ -1225,7 +1074,12 @@ export function trimEntityMulti(
     case 'door':
     case 'window':
     case 'room':
-      return fail(`Cannot trim ${target.type}`);
+    case 'block':
+      return fail(
+        target.type === 'block'
+          ? 'Block references cannot be trimmed'
+          : `Cannot trim ${target.type}`,
+      );
   }
 }
 
@@ -1578,7 +1432,11 @@ export function extendEntityMulti(
     ]);
   }
 
-  return fail(`${target.type} extend not supported`);
+  return fail(
+    target.type === 'block'
+      ? 'Block references cannot be extended'
+      : `${target.type} extend not supported`,
+  );
 }
 
 /**
@@ -1721,6 +1579,138 @@ export function fencePickPoint(entity: Entity, fence: Vec2[]): Vec2 | null {
     }
   }
   return null;
+}
+
+export type RectSelectMode = 'window' | 'crossing';
+
+/** Left-to-right is a window. Right-to-left is a crossing. */
+export function resolveRectSelectMode(
+  cornerA: Vec2,
+  cornerB: Vec2,
+): RectSelectMode {
+  return cornerB.x + EPS >= cornerA.x ? 'window' : 'crossing';
+}
+
+type AxisBox = { minX: number; minY: number; maxX: number; maxY: number };
+
+function axisBox(cornerA: Vec2, cornerB: Vec2): AxisBox {
+  return {
+    minX: Math.min(cornerA.x, cornerB.x),
+    maxX: Math.max(cornerA.x, cornerB.x),
+    minY: Math.min(cornerA.y, cornerB.y),
+    maxY: Math.max(cornerA.y, cornerB.y),
+  };
+}
+
+/**
+ * Parameter span of segment A→B that lies inside an axis-aligned rectangle.
+ * Uses Liang–Barsky, so a bounding-box overlap with no real intersection is empty.
+ */
+function segmentInsideRect(
+  a: Vec2,
+  b: Vec2,
+  box: AxisBox,
+): { t0: number; t1: number } | null {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  let t0 = 0;
+  let t1 = 1;
+  const p = [-dx, dx, -dy, dy];
+  const q = [a.x - box.minX, box.maxX - a.x, a.y - box.minY, box.maxY - a.y];
+  for (let i = 0; i < 4; i += 1) {
+    const pi = p[i]!;
+    const qi = q[i]!;
+    if (Math.abs(pi) <= EPS) {
+      if (qi < -HIT_EPS) return null;
+      continue;
+    }
+    const t = qi / pi;
+    if (pi < 0) {
+      if (t > t1) return null;
+      if (t > t0) t0 = t;
+    } else {
+      if (t < t0) return null;
+      if (t < t1) t1 = t;
+    }
+  }
+  if (t1 < t0 - EPS) return null;
+  return { t0: Math.max(0, t0), t1: Math.min(1, t1) };
+}
+
+function pointAt(a: Vec2, b: Vec2, t: number): Vec2 {
+  return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
+}
+
+function circleMeetsBox(
+  center: Vec2,
+  radius: number,
+  box: AxisBox,
+): boolean {
+  const cx = Math.max(box.minX, Math.min(box.maxX, center.x));
+  const cy = Math.max(box.minY, Math.min(box.maxY, center.y));
+  const dx = center.x - cx;
+  const dy = center.y - cy;
+  return dx * dx + dy * dy <= radius * radius + HIT_EPS;
+}
+
+/**
+ * Pick on the entity portion that a rectangle actually covers.
+ * Window mode requires every segment to lie inside the rectangle.
+ * Crossing mode accepts any real intersection or contained span, and when
+ * several spans qualify the one nearest the first corner is used.
+ */
+export function crossingTrimPick(
+  entity: Entity,
+  cornerA: Vec2,
+  cornerB: Vec2,
+  mode: RectSelectMode = 'crossing',
+): Vec2 | null {
+  if (!isFiniteVec2(cornerA) || !isFiniteVec2(cornerB)) return null;
+  const box = axisBox(cornerA, cornerB);
+  if (box.maxX - box.minX <= EPS && box.maxY - box.minY <= EPS) return null;
+
+  if (entity.type === 'circle') {
+    const { center, radius } = entity.geometry;
+    if (!(radius > EPS) || !circleMeetsBox(center, radius, box)) return null;
+    if (mode === 'window') {
+      const inside =
+        center.x - radius >= box.minX - HIT_EPS &&
+        center.x + radius <= box.maxX + HIT_EPS &&
+        center.y - radius >= box.minY - HIT_EPS &&
+        center.y + radius <= box.maxY + HIT_EPS;
+      if (!inside) return null;
+    }
+    const mid = {
+      x: (box.minX + box.maxX) / 2,
+      y: (box.minY + box.maxY) / 2,
+    };
+    const dx = mid.x - center.x;
+    const dy = mid.y - center.y;
+    const len = Math.hypot(dx, dy);
+    if (len < EPS) return { x: center.x + radius, y: center.y };
+    return { x: center.x + (dx / len) * radius, y: center.y + (dy / len) * radius };
+  }
+
+  const segs = cuttingSegments(entity);
+  if (!segs.length) return null;
+
+  if (mode === 'window') {
+    for (const seg of segs) {
+      const span = segmentInsideRect(seg.a, seg.b, box);
+      if (!span || span.t0 > HIT_EPS || span.t1 < 1 - HIT_EPS) return null;
+    }
+    return pointAt(segs[0]!.a, segs[0]!.b, 0.5);
+  }
+
+  let best: { pick: Vec2; dist: number } | null = null;
+  for (const seg of segs) {
+    const span = segmentInsideRect(seg.a, seg.b, box);
+    if (!span) continue;
+    const pick = pointAt(seg.a, seg.b, (span.t0 + span.t1) / 2);
+    const dist = (pick.x - cornerA.x) ** 2 + (pick.y - cornerA.y) ** 2;
+    if (!best || dist < best.dist) best = { pick, dist };
+  }
+  return best?.pick ?? null;
 }
 
 export function defaultTrimSettings(): {

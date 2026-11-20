@@ -15,7 +15,8 @@ export type GripRole =
   | 'corner'
   | 'center'
   | 'quadrant'
-  | 'vertex';
+  | 'vertex'
+  | 'insertion';
 
 export interface Grip {
   role: GripRole;
@@ -186,6 +187,15 @@ export function getEntityGrips(entity: Entity): Grip[] {
           point: { ...entity.geometry.labelPosition },
           entityId: entity.id,
           editTarget: { kind: 'room-label' as const },
+        },
+      ];
+    case 'block':
+      return [
+        {
+          role: 'insertion',
+          point: { ...entity.geometry.position },
+          entityId: entity.id,
+          editTarget: { kind: 'block-insertion' },
         },
       ];
   }

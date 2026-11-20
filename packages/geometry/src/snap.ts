@@ -1,4 +1,6 @@
 import type { DrawingDocument, Entity, Vec2 } from '@ratecad/core';
+import { blockContentLocalPoints, transformBlockPoint } from './blockTransform.js';
+import { closestPointOnSegment, intersectSegments } from './intersect.js';
 import { distance, midpoint, snapToGrid } from './math.js';
 
 /**
@@ -7,7 +9,13 @@ import { distance, midpoint, snapToGrid } from './math.js';
  * Cursor → Snap Engine → Snap Result → CAD Tool → Command → DrawingDocument
  */
 
-export type SnapKind = 'endpoint' | 'midpoint' | 'center' | 'grid';
+export type SnapKind =
+  | 'endpoint'
+  | 'midpoint'
+  | 'center'
+  | 'intersection'
+  | 'nearest'
+  | 'grid';
 
 export interface SnapCandidate {
   kind: SnapKind;
@@ -37,10 +45,15 @@ const KIND_PRIORITY: Record<SnapKind, number> = {
   endpoint: 0,
   midpoint: 1,
   center: 2,
-  grid: 3,
+  intersection: 3,
+  nearest: 4,
+  grid: 5,
 };
 
-function collectEntityCandidates(entity: Entity): SnapCandidate[] {
+function collectEntityCandidates(
+  entity: Entity,
+  doc: DrawingDocument,
+): SnapCandidate[] {
   const out: SnapCandidate[] = [];
   switch (entity.type) {
     case 'line': {
@@ -231,6 +244,40 @@ function collectEntityCandidates(entity: Entity): SnapCandidate[] {
         label: 'Room label',
       });
       break;
+    case 'block': {
+      out.push({
+        kind: 'endpoint',
+        point: { ...entity.geometry.position },
+        priority: KIND_PRIORITY.endpoint,
+        entityId: entity.id,
+        label: 'Insertion',
+      });
+      const definition = doc.blockDefinitions.find(
+        (item) => item.id === entity.geometry.definitionId,
+      );
+      if (!definition) break;
+      for (const content of definition.entities) {
+        if (content.type === 'circle') {
+          out.push({
+            kind: 'center',
+            point: transformBlockPoint(content.geometry.center, entity),
+            priority: KIND_PRIORITY.center,
+            entityId: entity.id,
+            label: 'Center',
+          });
+        }
+        for (const local of blockContentLocalPoints(content)) {
+          out.push({
+            kind: 'endpoint',
+            point: transformBlockPoint(local, entity),
+            priority: KIND_PRIORITY.endpoint,
+            entityId: entity.id,
+            label: 'Endpoint',
+          });
+        }
+      }
+      break;
+    }
   }
   return out;
 }
@@ -245,9 +292,88 @@ export function collectSnapCandidates(
     if (!entity.visible) continue;
     const layer = doc.layers.find((l) => l.id === entity.layerId);
     if (layer && !layer.visible) continue;
-    candidates.push(...collectEntityCandidates(entity));
+    candidates.push(...collectEntityCandidates(entity, doc));
   }
   return candidates;
+}
+
+function visibleSegments(
+  doc: DrawingDocument,
+): Array<{ a: Vec2; b: Vec2 }> {
+  const segments: Array<{ a: Vec2; b: Vec2 }> = [];
+  for (const entity of doc.entities) {
+    if (!entity.visible) continue;
+    const layer = doc.layers.find((l) => l.id === entity.layerId);
+    if (layer && !layer.visible) continue;
+    if (entity.type === 'line') {
+      segments.push({
+        a: entity.geometry.start,
+        b: entity.geometry.end,
+      });
+    } else if (entity.type === 'rectangle') {
+      const { corner1, corner2 } = entity.geometry;
+      const corners = [
+        { x: corner1.x, y: corner1.y },
+        { x: corner2.x, y: corner1.y },
+        { x: corner2.x, y: corner2.y },
+        { x: corner1.x, y: corner2.y },
+      ];
+      for (let i = 0; i < 4; i += 1) {
+        segments.push({ a: corners[i]!, b: corners[(i + 1) % 4]! });
+      }
+    } else if (entity.type === 'polyline') {
+      const verts = entity.geometry.vertices;
+      const count = entity.geometry.closed ? verts.length : verts.length - 1;
+      for (let i = 0; i < count; i += 1) {
+        segments.push({ a: verts[i]!, b: verts[(i + 1) % verts.length]! });
+      }
+    }
+  }
+  return segments;
+}
+
+function nearestOnSegments(
+  cursor: Vec2,
+  segments: Array<{ a: Vec2; b: Vec2 }>,
+  tolerance: number,
+): Vec2 | null {
+  let best: Vec2 | null = null;
+  let bestDist = tolerance;
+  for (const seg of segments) {
+    const point = closestPointOnSegment(cursor, seg.a, seg.b);
+    const d = distance(cursor, point);
+    if (d <= bestDist) {
+      best = point;
+      bestDist = d;
+    }
+  }
+  return best;
+}
+
+function intersectionCandidates(
+  segments: Array<{ a: Vec2; b: Vec2 }>,
+  cursor: Vec2,
+  tolerance: number,
+): SnapCandidate[] {
+  const out: SnapCandidate[] = [];
+  for (let i = 0; i < segments.length; i += 1) {
+    for (let j = i + 1; j < segments.length; j += 1) {
+      const hit = intersectSegments(
+        segments[i]!.a,
+        segments[i]!.b,
+        segments[j]!.a,
+        segments[j]!.b,
+      );
+      if (!hit || distance(cursor, hit) > tolerance) continue;
+      out.push({
+        kind: 'intersection',
+        point: hit,
+        priority: KIND_PRIORITY.intersection,
+        label: 'Intersection',
+      });
+    }
+  }
+  return out;
 }
 
 export function resolveSnap(
@@ -265,7 +391,11 @@ export function resolveSnap(
     };
   }
 
-  const objectCandidates = collectSnapCandidates(doc, options);
+  const segments = visibleSegments(doc);
+  const objectCandidates = [
+    ...collectSnapCandidates(doc, options),
+    ...intersectionCandidates(segments, cursor, options.tolerance),
+  ];
   let best: SnapCandidate | null = null;
   let bestDist = Number.POSITIVE_INFINITY;
 
@@ -289,6 +419,22 @@ export function resolveSnap(
       kind: best.kind,
       label: best.label,
       candidate: best,
+    };
+  }
+
+  const nearest = nearestOnSegments(cursor, segments, options.tolerance);
+  if (nearest) {
+    return {
+      point: nearest,
+      snapped: true,
+      kind: 'nearest',
+      label: 'Nearest',
+      candidate: {
+        kind: 'nearest',
+        point: nearest,
+        priority: KIND_PRIORITY.nearest,
+        label: 'Nearest',
+      },
     };
   }
 

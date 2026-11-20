@@ -197,6 +197,16 @@ export function scaleEntityToWorldUnit(
           area: entity.geometry.area * factor * factor,
         },
       };
+    case 'block':
+      return {
+        ...entity,
+        geometry: {
+          ...entity.geometry,
+          position: scaleVec(entity.geometry.position, factor),
+          scaleX: entity.geometry.scaleX * factor,
+          scaleY: entity.geometry.scaleY * factor,
+        },
+      };
     default:
       return entity;
   }

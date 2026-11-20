@@ -24,6 +24,8 @@ import {
   CopyDimensionStyleCommand,
   RenameDimensionStyleCommand,
   DeleteDimensionStyleCommand,
+  CreateBlockCommand,
+  InsertBlockCommand,
   SyncViewportLabelsCommand,
   UpdateDoorCommand,
   UpdateLayerCommand,
@@ -87,6 +89,7 @@ import {
   resolveSnap,
   SUPPORTED_LENGTH_UNITS,
   suggestedGridSize,
+  suggestBlockBasePoint,
   toMillimeters,
   wallLength,
 } from '@ratecad/geometry';
@@ -97,6 +100,8 @@ import {
 } from './ViewportPropertiesPanel';
 import { LayoutPropertiesPanel } from './LayoutPropertiesPanel';
 import { UnitsDialog } from './UnitsDialog';
+import { CreateBlockDialog } from './CreateBlockDialog';
+import { InsertBlockDialog } from './InsertBlockDialog';
 import { DimStyleManager } from './DimStyleManager';
 import { AreaModeStrip, Ribbon } from './Ribbon';
 import { AiPromptPanel } from './AiPromptPanel';
@@ -594,6 +599,24 @@ function describeEntity(
         },
       ];
     }
+    case 'block': {
+      const definition = doc.blockDefinitions.find(
+        (item) => item.id === entity.geometry.definitionId,
+      );
+      const degrees = (entity.geometry.rotation * 180) / Math.PI;
+      return [
+        ...common,
+        { label: 'Block', value: definition?.name ?? entity.geometry.definitionId },
+        { label: 'Definition', value: entity.geometry.definitionId },
+        {
+          label: 'Insertion',
+          value: `${fmtLen(doc, entity.geometry.position.x)}, ${fmtLen(doc, entity.geometry.position.y)}`,
+        },
+        { label: 'X scale', value: String(entity.geometry.scaleX) },
+        { label: 'Y scale', value: String(entity.geometry.scaleY) },
+        { label: 'Rotation', value: `${degrees.toFixed(2)}°` },
+      ];
+    }
   }
 }
 
@@ -647,6 +670,12 @@ export function App() {
   const workspaceModeRef = useRef<WorkspaceMode>('MODEL_SPACE');
   const activeViewportIdRef = useRef<ViewportId | null>(null);
   const isPanningRef = useRef(false);
+  /** Screen-space drag threshold so a TRIM click is not treated as freehand. */
+  const trimStrokeRef = useRef<{
+    x: number;
+    y: number;
+    dragging: boolean;
+  } | null>(null);
   const lastPointerRef = useRef<{ x: number; y: number } | null>(null);
   const spaceDownRef = useRef(false);
   const filePathRef = useRef<string | null>(null);
@@ -843,6 +872,19 @@ export function App() {
   const [showDimStyleDialog, setShowDimStyleDialog] = useState(false);
   const showUnitsDialogRef = useRef(false);
   const showDimStyleDialogRef = useRef(false);
+  const [blockDialog, setBlockDialog] = useState<null | 'create' | 'insert'>(null);
+  const [createBlockIds, setCreateBlockIds] = useState<string[]>([]);
+  const [createBlockBase, setCreateBlockBase] = useState({ x: 0, y: 0 });
+  const [blockPreview, setBlockPreview] = useState<Entity | null>(null);
+  const blockDialogOpenRef = useRef(false);
+  blockDialogOpenRef.current = blockDialog !== null;
+  const closeBlockDialog = useCallback(() => {
+    setBlockDialog(null);
+    setBlockPreview(null);
+  }, []);
+  const previewInsertBlock = useCallback((entity: Entity | null) => {
+    setBlockPreview(entity);
+  }, []);
   const [polarOn, setPolarOn] = useState(false);
   const [polarIncrement, setPolarIncrement] = useState(90);
   const [appMenuOpen, setAppMenuOpen] = useState(false);
@@ -1264,7 +1306,9 @@ export function App() {
       preview: inPaper ? null : engUi?.preview ?? sess.preview,
       previewEntities: inPaper
         ? null
-        : engUi?.previewEntities ?? sess.previewEntities,
+        : blockPreview
+          ? [...(engUi?.previewEntities ?? sess.previewEntities ?? []), blockPreview]
+          : engUi?.previewEntities ?? sess.previewEntities,
       selectionRect: inPaper ? null : sess.selectionRect,
       hideEntityIds: engUi?.hideEntityIds?.length
         ? engUi.hideEntityIds
@@ -1328,6 +1372,7 @@ export function App() {
     selectedViewportId,
     selectedPaperEntityIds,
     vpDragTick,
+    blockPreview,
   ]);
 
   const switchToModelTab = useCallback(() => {
@@ -3160,7 +3205,11 @@ export function App() {
         }
         return;
       }
-      if (showUnitsDialogRef.current || showDimStyleDialogRef.current) {
+      if (
+        showUnitsDialogRef.current ||
+        showDimStyleDialogRef.current ||
+        blockDialogOpenRef.current
+      ) {
         return;
       }
       if (bulkOpRef.current) {
@@ -3959,6 +4008,20 @@ export function App() {
       refreshEngineUi();
       return;
     }
+    if (
+      eng?.isRunning() &&
+      eng.wantsPointerStroke() &&
+      event.button === 0 &&
+      !event.shiftKey
+    ) {
+      const screen = getScreenFromEvent(event);
+      const snap = snapWorld(world);
+      eng.beginStroke(snap.point);
+      trimStrokeRef.current = { x: screen.x, y: screen.y, dragging: false };
+      canvas.setPointerCapture(event.pointerId);
+      refreshEngineUi();
+      return;
+    }
     if (eng?.isRunning()) {
       const snap = snapWorld(world);
       eng.submitPoint(snap.point, { shiftKey: event.shiftKey });
@@ -4083,6 +4146,26 @@ export function App() {
       }
       return;
     }
+    const trimStroke = trimStrokeRef.current;
+    if (trimStroke && eng?.isRunning()) {
+      const screen = getScreenFromEvent(event);
+      if (Math.hypot(screen.x - trimStroke.x, screen.y - trimStroke.y) >= 6) {
+        trimStroke.dragging = true;
+      }
+      const snap = snapWorld(world);
+      if (trimStroke.dragging) {
+        eng.updateStroke(snap.point, { shiftKey: event.shiftKey });
+      } else {
+        eng.onPointerMove(snap.point, { shiftKey: event.shiftKey });
+      }
+      syncSession({
+        ...sessionRef.current,
+        lastSnap: snap,
+        statusMessage: eng.getStatusMessage() ?? sessionRef.current.statusMessage,
+      });
+      refreshEngineUi();
+      return;
+    }
     if (eng?.isRunning()) {
       const snap = snapWorld(world);
       eng.onPointerMove(snap.point, { shiftKey: event.shiftKey });
@@ -4135,6 +4218,31 @@ export function App() {
   };
 
   const onPointerUp = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    const trimStroke = trimStrokeRef.current;
+    if (trimStroke) {
+      trimStrokeRef.current = null;
+      const canvasEl = canvasRef.current;
+      if (canvasEl?.hasPointerCapture(event.pointerId)) {
+        canvasEl.releasePointerCapture(event.pointerId);
+      }
+      const engStroke = engineRef.current;
+      if (event.button === 0 && engStroke?.isRunning()) {
+        const world = getWorldFromEvent(event);
+        const snap = snapWorld(world);
+        engStroke.endStroke(snap.point, trimStroke.dragging, {
+          shiftKey: event.shiftKey,
+        });
+        syncSession({
+          ...sessionRef.current,
+          lastSnap: snap,
+          statusMessage:
+            engStroke.getStatusMessage() ?? sessionRef.current.statusMessage,
+        });
+        refreshEngineUi();
+        setDoc(busRef.current.getDocument());
+      }
+      return;
+    }
     const wasPanning = isPanningRef.current;
     isPanningRef.current = false;
     panHistoryPushedRef.current = false;
@@ -4407,6 +4515,64 @@ export function App() {
           </div>
         </div>
       ) : null}
+      {blockDialog === 'create' ? (
+        <CreateBlockDialog
+          initialBase={createBlockBase}
+          onClose={closeBlockDialog}
+          onSubmit={(input) => {
+            try {
+              busRef.current.execute(
+                new CreateBlockCommand(
+                  createBlockIds,
+                  input.name,
+                  input.basePoint,
+                  workspaceModeRef.current,
+                ),
+              );
+              const created = `Created block ${input.name.trim()}`;
+              setCommandFeedback(created);
+              syncSession({
+                ...sessionRef.current,
+                statusMessage: created,
+              });
+              closeBlockDialog();
+              return null;
+            } catch (error) {
+              return error instanceof Error ? error.message : 'Could not create block';
+            }
+          }}
+        />
+      ) : null}
+      {blockDialog === 'insert' ? (
+        <InsertBlockDialog
+          document={doc}
+          onPreview={previewInsertBlock}
+          onClose={closeBlockDialog}
+          onSubmit={(input) => {
+            try {
+              busRef.current.execute(
+                new InsertBlockCommand({
+                  definitionId: input.definitionId,
+                  position: input.position,
+                  scaleX: input.scaleX,
+                  scaleY: input.scaleY,
+                  rotation: input.rotationRadians,
+                  workspaceMode: workspaceModeRef.current,
+                }),
+              );
+              setCommandFeedback('Inserted block');
+              syncSession({
+                ...sessionRef.current,
+                statusMessage: 'Inserted block',
+              });
+              closeBlockDialog();
+              return null;
+            } catch (error) {
+              return error instanceof Error ? error.message : 'Could not insert block';
+            }
+          }}
+        />
+      ) : null}
       {showUnitsDialog ? (
         <UnitsDialog
           initial={
@@ -4568,6 +4734,43 @@ export function App() {
         onRunCommand={runEngineCommand}
         onOpenUnits={() => setShowUnitsDialog(true)}
         onOpenDimStyle={() => setShowDimStyleDialog(true)}
+        onCreateBlock={() => {
+          const drawing = busRef.current.getDocument();
+          if (workspaceModeRef.current !== 'MODEL_SPACE') {
+            setCommandFeedback('Create Block works in model space only');
+            return;
+          }
+          const selected = drawing.entities.filter((entity) =>
+            drawing.selection.includes(entity.id),
+          );
+          if (selected.length === 0) {
+            setCommandFeedback('Select objects to create a block');
+            return;
+          }
+          const contents = selected.filter(
+            (entity): entity is Extract<Entity, { type: 'line' | 'rectangle' | 'circle' | 'polyline' | 'text' | 'leader' }> =>
+              entity.type === 'line' ||
+              entity.type === 'rectangle' ||
+              entity.type === 'circle' ||
+              entity.type === 'polyline' ||
+              entity.type === 'text' ||
+              entity.type === 'leader',
+          );
+          setCreateBlockIds(selected.map((entity) => entity.id));
+          setCreateBlockBase(
+            contents.length > 0 ? suggestBlockBasePoint(contents) : { x: 0, y: 0 },
+          );
+          setBlockPreview(null);
+          setBlockDialog('create');
+        }}
+        onInsertBlock={() => {
+          if (workspaceModeRef.current !== 'MODEL_SPACE') {
+            setCommandFeedback('Insert Block works in model space only');
+            return;
+          }
+          setBlockPreview(null);
+          setBlockDialog('insert');
+        }}
         onSetCurrentLayer={setCurrentLayer}
         onAddLayer={addLayer}
         onToggleLayerVisible={toggleLayerVisible}

@@ -41,6 +41,10 @@ export type {
   WallJustification,
   WindowEntity,
   AppearanceProperties,
+  BlockContentEntity,
+  BlockDefinition,
+  BlockDefinitionId,
+  BlockReferenceEntity,
   CurrentAppearance,
   Layout,
   LayoutId,
@@ -216,6 +220,16 @@ export {
   rgbToHex,
   scaleLinetypePattern,
 } from './appearance.js';
+
+export {
+  BLOCK_CONTENT_TYPES,
+  blockNameError,
+  findBlockByName,
+  isBlockContentEntity,
+  isBlockContentType,
+  normalizeBlockName,
+  type BlockContentType,
+} from './blocks.js';
 
 export {
   APP_VERSION,

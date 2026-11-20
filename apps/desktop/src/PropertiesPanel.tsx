@@ -403,6 +403,41 @@ export function PropertiesPanel({ doc, bus, compact, fmtLen }: Props) {
         </div>
       ) : null}
 
+      {selected.length === 1 && selected[0]!.type === 'block' ? (
+        <fieldset className="dialog-fieldset" data-testid="block-properties">
+          <legend>Block</legend>
+          {(() => {
+            const block = selected[0]!;
+            if (block.type !== 'block') return null;
+            const definition = doc.blockDefinitions.find(
+              (item) => item.id === block.geometry.definitionId,
+            );
+            const degrees = (block.geometry.rotation * 180) / Math.PI;
+            const rows: Array<{ label: string; value: string }> = [
+              { label: 'Block name', value: definition?.name ?? '—' },
+              { label: 'Definition ID', value: block.geometry.definitionId },
+              {
+                label: 'Insertion X',
+                value: fmtLen(block.geometry.position.x),
+              },
+              {
+                label: 'Insertion Y',
+                value: fmtLen(block.geometry.position.y),
+              },
+              { label: 'X scale', value: String(block.geometry.scaleX) },
+              { label: 'Y scale', value: String(block.geometry.scaleY) },
+              { label: 'Rotation', value: `${degrees.toFixed(2)}°` },
+            ];
+            return rows.map((row) => (
+              <div className="prop-row" key={row.label}>
+                <label>{row.label}</label>
+                <div className="value">{row.value}</div>
+              </div>
+            ));
+          })()}
+        </fieldset>
+      ) : null}
+
       {selected.length === 1 && !compact
         ? getPropertyDescriptors(selected[0]!)
             .filter((d) => d.category === 'geometry')

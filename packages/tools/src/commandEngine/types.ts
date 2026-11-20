@@ -228,5 +228,34 @@ export interface CadEngineCommand {
     dynamic?: CadDynamicInput | null;
     status?: string;
   };
+  /**
+   * When true for the current prompt, the host defers the click until pointer-up
+   * so a drag can become a freehand selection instead of a point pick.
+   */
+  acceptsPointerStroke?: (prompt: CadPromptDefinition) => boolean;
+  onStrokeStart?: (
+    point: Vec2,
+    prompt: CadPromptDefinition,
+    ctx: CadCommandContext,
+    state: Record<string, unknown>,
+  ) => void;
+  onStrokeMove?: (
+    point: Vec2,
+    prompt: CadPromptDefinition,
+    ctx: CadCommandContext,
+    state: Record<string, unknown>,
+  ) => {
+    preview?: PreviewGeometry | null;
+    previewEntities?: import('@ratecad/core').Entity[] | null;
+    hideEntityIds?: EntityId[];
+    dynamic?: CadDynamicInput | null;
+    status?: string;
+  };
+  onStrokeEnd?: (
+    point: Vec2,
+    prompt: CadPromptDefinition,
+    ctx: CadCommandContext,
+    state: Record<string, unknown>,
+  ) => CadCommandInputResult;
   onCancel?: (state: Record<string, unknown>) => void;
 }

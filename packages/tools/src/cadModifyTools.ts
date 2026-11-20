@@ -503,6 +503,13 @@ export function handleOffsetPointerDown(
 
   const source = getEntity(bus.getDocument(), session.refEntityId);
   if (!source) return { ...cancelTool(session), lastSnap: snap };
+  if (source.type === 'block') {
+    return {
+      ...session,
+      lastSnap: snap,
+      statusMessage: 'Offset does not modify block references',
+    };
+  }
   const locked = assertModifiable(bus, source, snap, session, 'offset');
   if (locked) return locked;
 

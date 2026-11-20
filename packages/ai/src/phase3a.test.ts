@@ -5,7 +5,7 @@ import {
   setSelection,
   type DrawingDocument,
 } from '@ratecad/core';
-import { describeSelection } from './entitySummary.js';
+import { describeEntity, describeSelection } from './entitySummary.js';
 import { applyPreparedDraw, previewDrawPrompt } from './executeDrawPrompt.js';
 import { parseDrawPrompt } from './parseDrawPrompt.js';
 
@@ -205,5 +205,73 @@ describe('phase 3A object identification', () => {
     expect(preview.error).toMatch(/STRETCH/);
     expect(preview.error).toMatch(/No geometry was created/);
     expect(bus.canUndo()).toBe(false);
+  });
+});
+
+describe('phase 3A with a block in the drawing', () => {
+  it('describes the block and still refuses to execute a modification', () => {
+    const doc = modelDoc();
+    doc.blockDefinitions = [
+      {
+        id: 'bdef-1',
+        name: 'Mark',
+        basePoint: { x: 0, y: 0 },
+        entities: [
+          {
+            id: 'line-local',
+            type: 'line',
+            layerId: doc.currentLayerId,
+            visible: true,
+            locked: false,
+            geometry: { start: { x: 0, y: 0 }, end: { x: 1, y: 0 } },
+            properties: {},
+          },
+        ],
+      },
+    ];
+    doc.entities = [
+      {
+        id: 'block-1',
+        type: 'block',
+        layerId: doc.currentLayerId,
+        visible: true,
+        locked: false,
+        geometry: {
+          definitionId: 'bdef-1',
+          position: { x: 4, y: 5 },
+          scaleX: 2,
+          scaleY: -1,
+          rotation: Math.PI / 2,
+        },
+        properties: {},
+      },
+    ];
+    doc.selection = ['block-1'];
+    const described = describeEntity(doc.entities[0]!, doc);
+    expect(described.detail).toMatch(/Block Mark/);
+    expect(described.detail).toMatch(/scale 2, -1/);
+    const draw = previewDrawPrompt('Draw a line from 0,0 to 10 ft,0', {
+      document: doc,
+      workspaceMode: 'MODEL_SPACE',
+    });
+    expect(draw.ok && draw.prepared.kind).toBe('draw');
+    const modify = previewDrawPrompt('Move the selected line 5 ft to the right', {
+      document: doc,
+      workspaceMode: 'MODEL_SPACE',
+    });
+    expect(doc.entities).toHaveLength(1);
+    expect(doc.blockDefinitions[0]!.entities[0]!.geometry).toEqual({
+      start: { x: 0, y: 0 },
+      end: { x: 1, y: 0 },
+    });
+    if (modify.ok && modify.prepared.kind === 'modify') {
+      expect(modify.prepared.canApply).toBe(false);
+      const applied = applyPreparedDraw(
+        new CommandBus(doc),
+        modify.prepared,
+        'MODEL_SPACE',
+      );
+      expect(applied.ok).toBe(false);
+    }
   });
 });

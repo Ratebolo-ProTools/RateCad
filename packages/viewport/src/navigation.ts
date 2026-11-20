@@ -114,7 +114,7 @@ function boundsForEntity(doc: DrawingDocument, entity: Entity): AABB | null {
     const host = getWall(doc, entity.geometry.hostWallId);
     return entityBoundsWithHost(entity, host);
   }
-  return entityBounds(entity);
+  return entityBounds(entity, doc.blockDefinitions);
 }
 
 /**

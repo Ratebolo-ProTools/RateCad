@@ -43,6 +43,12 @@ export function describeEntity(
         ? `${pointLabel(vertices[0]!, worldUnit, displayUnit)} → ${pointLabel(vertices[vertices.length - 1]!, worldUnit, displayUnit)}`
         : 'no vertices';
     detail = `${entity.geometry.closed ? 'Closed' : 'Open'} polyline, ${vertices.length} vertices, ${ends}`;
+  } else if (entity.type === 'block') {
+    const definition = document.blockDefinitions.find(
+      (item) => item.id === entity.geometry.definitionId,
+    );
+    const degrees = (entity.geometry.rotation * 180) / Math.PI;
+    detail = `Block ${definition?.name ?? entity.geometry.definitionId}, insertion ${pointLabel(entity.geometry.position, worldUnit, displayUnit)}, scale ${entity.geometry.scaleX}, ${entity.geometry.scaleY}, rotation ${degrees.toFixed(2)}°`;
   }
   return { id: entity.id, type: entity.type, layerName, detail };
 }

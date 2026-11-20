@@ -42,7 +42,8 @@ type ExtendPhase =
   | 'targets'
   | 'fence'
   | 'crossing'
-  | 'mode';
+  | 'mode'
+  | 'edge';
 
 type ExtendState = {
   bus: CommandBus;
@@ -63,6 +64,7 @@ const EXTEND_TARGET_OPTIONS: CadCommandOption[] = [
   { id: 'fence', label: 'Fence', aliases: ['F', 'FENCE'] },
   { id: 'crossing', label: 'Crossing', aliases: ['C', 'CROSSING'] },
   { id: 'mode', label: 'Mode', aliases: ['M', 'MODE'] },
+  { id: 'edge', label: 'Edge', aliases: ['E', 'EDGE'] },
   { id: 'undo', label: 'Undo', aliases: ['U', 'UNDO'] },
 ];
 
@@ -88,7 +90,7 @@ function targetPrompt(_s: ExtendState): CadPromptDefinition {
   return {
     id: 'targets',
     message:
-      'Select object to extend or [Fence/Crossing/Mode/Undo/Boundary]:',
+      'Select object to extend or [Fence/Crossing/Edge/Mode/Undo/Boundary]:',
     inputType: 'point',
     options: EXTEND_TARGET_OPTIONS,
     optional: true,
@@ -224,6 +226,13 @@ function runExtend(
   target: Entity,
   pickPoint: Vec2,
 ): ReturnType<CadEngineCommand['onPoint']> {
+  if (target.type === 'block') {
+    return {
+      kind: 'reject',
+      message: 'Block references cannot be extended',
+      prompt: targetPrompt(s),
+    };
+  }
   if (!canExtendEntity(target)) {
     return {
       kind: 'reject',
@@ -373,6 +382,24 @@ function handleOption(
           inputType: 'point',
         },
         status: `${statusPrefix(s)}: Crossing — specify opposite corners:`,
+        preview: null,
+      };
+    case 'edge':
+      s.phase = 'edge';
+      return {
+        kind: 'continue',
+        prompt: {
+          id: 'edge',
+          message: 'Enter an edge extension mode [Extend/No extend] <Extend>:',
+          inputType: 'option',
+          options: [
+            { id: 'extend', label: 'Extend', aliases: ['E', 'EXTEND'] },
+            { id: 'no-extend', label: 'No extend', aliases: ['N', 'NO'] },
+          ],
+          defaultValue: s.edgeMode === 'no-extend' ? 'No extend' : 'Extend',
+          optional: true,
+        },
+        status: `${statusPrefix(s)}: Edge`,
         preview: null,
       };
     case 'mode':
@@ -640,7 +667,7 @@ export const extendCommand: CadEngineCommand = {
     prompt: {
       id: 'targets',
       message:
-        'Select object to extend or [Fence/Crossing/Mode/Undo/Boundary]:',
+        'Select object to extend or [Fence/Crossing/Edge/Mode/Undo/Boundary]:',
       inputType: 'point',
       options: EXTEND_TARGET_OPTIONS,
       optional: true,
@@ -649,6 +676,13 @@ export const extendCommand: CadEngineCommand = {
   }),
   onPoint: (point, prompt, _ctx, state) => {
     const s = ensureState(state);
+    if (s.phase === 'edge' || prompt.id === 'edge') {
+      return {
+        kind: 'reject',
+        message: 'Enter Extend or No extend',
+        prompt,
+      };
+    }
     const shiftTrim = !!(state as { shiftKey?: boolean }).shiftKey;
 
     if (prompt.id === 'boundaries' || s.phase === 'boundaries') {
@@ -732,7 +766,7 @@ export const extendCommand: CadEngineCommand = {
     const upper = trimmed.toUpperCase();
 
     if (
-      ['boundary', 'fence', 'crossing', 'mode', 'undo'].includes(trimmed)
+      ['boundary', 'fence', 'crossing', 'mode', 'edge', 'undo'].includes(trimmed)
     ) {
       return handleOption(s, trimmed);
     }
@@ -763,6 +797,24 @@ export const extendCommand: CadEngineCommand = {
       return {
         kind: 'reject',
         message: 'Enter Quick or Standard',
+        prompt,
+      };
+    }
+
+    if (prompt.id === 'edge') {
+      if (!trimmed || upper === 'E' || upper === 'EXTEND') {
+        s.edgeMode = 'extend';
+        persistModeSettings(s);
+        return beginTargets(s, 'Edge: Extend');
+      }
+      if (upper === 'N' || upper.startsWith('NO')) {
+        s.edgeMode = 'no-extend';
+        persistModeSettings(s);
+        return beginTargets(s, 'Edge: No extend');
+      }
+      return {
+        kind: 'reject',
+        message: 'Enter Extend or No extend',
         prompt,
       };
     }

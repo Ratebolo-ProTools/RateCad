@@ -75,7 +75,7 @@ describe('UNITS / DIMSTYLE migration', () => {
 
     const opened = parseDocument(JSON.stringify(legacy));
     expect(opened.schemaVersion).toBe(SCHEMA_VERSION);
-    expect(opened.schemaVersion).toBe(10);
+    expect(opened.blockDefinitions).toEqual([]);
     expect(opened.settings.drawingUnits).toBeDefined();
     expect(opened.settings.drawingUnits.linearFormat).toBe('architectural');
     expect(opened.settings.dimensionStyles.length).toBeGreaterThanOrEqual(3);

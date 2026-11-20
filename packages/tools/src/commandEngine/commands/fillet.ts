@@ -398,6 +398,13 @@ export const filletCommand: CadEngineCommand = {
           prompt: secondPrompt(),
         };
       }
+      if (ent.type === 'block') {
+        return {
+          kind: 'reject',
+          message: 'Block references cannot be filleted',
+          prompt: secondPrompt(),
+        };
+      }
       return runFillet(
         s,
         s.first!.id,
@@ -414,6 +421,13 @@ export const filletCommand: CadEngineCommand = {
       return {
         kind: 'reject',
         message: 'Select first object',
+        prompt: firstPrompt(),
+      };
+    }
+    if (ent.type === 'block') {
+      return {
+        kind: 'reject',
+        message: 'Block references cannot be filleted',
         prompt: firstPrompt(),
       };
     }

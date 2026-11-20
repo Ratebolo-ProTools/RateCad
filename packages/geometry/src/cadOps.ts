@@ -82,6 +82,7 @@ export function entitySegments(entity: Entity): Array<{ a: Vec2; b: Vec2 }> {
     case 'door':
     case 'window':
     case 'room':
+    case 'block':
       return [];
     case 'wall':
       return [{ a: entity.geometry.start, b: entity.geometry.end }];
@@ -463,7 +464,12 @@ export function offsetEntity(
     case 'door':
     case 'window':
     case 'room':
-      return fail(`${entity.type} offset not supported`);
+    case 'block':
+      return fail(
+        entity.type === 'block'
+          ? 'Block references cannot be offset'
+          : `${entity.type} offset not supported`,
+      );
   }
 }
 
@@ -584,6 +590,9 @@ export function mirrorEntity(
       return null;
     case 'room':
       // Rooms follow walls — mirror walls instead.
+      return null;
+    case 'block':
+      // Stage A+B does not mirror references. The definition stays unchanged.
       return null;
   }
   return validateEntityGeometry(next) ? next : null;
@@ -722,6 +731,16 @@ export function rotateEntity(
         },
       };
       break;
+    case 'block':
+      next = {
+        ...entity,
+        geometry: {
+          ...entity.geometry,
+          position: map(entity.geometry.position),
+          rotation: entity.geometry.rotation + radians,
+        },
+      };
+      break;
   }
   return validateEntityGeometry(next) ? next : null;
 }
@@ -817,6 +836,17 @@ export function scaleEntity(
       // Scale is disabled for construction objects — thickness/height/width
       // must not silently scale into incorrect construction data.
       return null;
+    case 'block':
+      next = {
+        ...entity,
+        geometry: {
+          ...entity.geometry,
+          position: map(entity.geometry.position),
+          scaleX: entity.geometry.scaleX * factor,
+          scaleY: entity.geometry.scaleY * factor,
+        },
+      };
+      break;
   }
   return validateEntityGeometry(next) ? next : null;
 }

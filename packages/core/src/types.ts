@@ -263,6 +263,43 @@ export interface RoomEntity extends EntityBase {
   };
 }
 
+export type BlockDefinitionId = string;
+
+/** Geometry that may be stored inside a block definition. */
+export type BlockContentEntity =
+  | LineEntity
+  | RectangleEntity
+  | CircleEntity
+  | PolylineEntity
+  | TextEntity
+  | LeaderEntity;
+
+/**
+ * Reusable local-coordinate geometry shared by every reference.
+ * Content points are relative to `basePoint` (the creation base, stored as the local origin).
+ */
+export interface BlockDefinition {
+  id: BlockDefinitionId;
+  /** Unique among definitions. Compared case-insensitively. */
+  name: string;
+  basePoint: Vec2;
+  entities: BlockContentEntity[];
+}
+
+export interface BlockReferenceEntity extends EntityBase {
+  type: 'block';
+  geometry: {
+    definitionId: BlockDefinitionId;
+    /** World insertion point. */
+    position: Vec2;
+    scaleX: number;
+    scaleY: number;
+    /** Radians, counterclockwise from +X. */
+    rotation: number;
+  };
+  properties: AppearanceProperties;
+}
+
 export type Entity =
   | LineEntity
   | RectangleEntity
@@ -274,7 +311,8 @@ export type Entity =
   | WallEntity
   | DoorEntity
   | WindowEntity
-  | RoomEntity;
+  | RoomEntity
+  | BlockReferenceEntity;
 export type EntityType = Entity['type'];
 
 /**
@@ -386,6 +424,11 @@ export interface DrawingDocument {
    */
   entities: Entity[];
   /**
+   * Reusable block definitions. References in `entities` share these by id.
+   * Definitions are not drawn as loose model-space objects.
+   */
+  blockDefinitions: BlockDefinition[];
+  /**
    * Paper Space layouts (sheets). Always at least Layout1 after migration.
    * Model tab is not a layout — it is represented by activeLayoutId === null.
    */
@@ -410,7 +453,7 @@ export const DOORS_LAYER_ID = 'layer-doors' as LayerId;
 export const WINDOWS_LAYER_ID = 'layer-windows' as LayerId;
 export const ROOMS_LAYER_ID = 'layer-rooms' as LayerId;
 
-export const SCHEMA_VERSION = 10;
+export const SCHEMA_VERSION = 11;
 export const APP_VERSION = '0.10.0';
 
 export const DEFAULT_DIMENSION_STYLE: DimensionStyle = {

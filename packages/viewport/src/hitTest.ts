@@ -1,8 +1,17 @@
-import type { DrawingDocument, Entity, EntityId, Vec2, WallEntity } from '@ratecad/core';
+import type {
+  BlockDefinition,
+  DrawingDocument,
+  Entity,
+  EntityId,
+  Vec2,
+  WallEntity,
+} from '@ratecad/core';
 import {
   aabbFromPoints,
+  blockReferenceBounds,
   dimensionLayout,
   doorLayout,
+  hitTestBlockReference,
   pointInAABB,
   pointInPolygon,
   pointNearCircle,
@@ -184,6 +193,9 @@ export function hitTestEntity(
     }
     case 'room':
       return pointInPolygon(point, entity.geometry.polygon);
+    case 'block':
+      // Resolved in hitTestDocument, which has the shared definition.
+      return false;
   }
 }
 
@@ -204,6 +216,12 @@ export function hitTestDocument(
     if (!entity.visible) continue;
     const layer = doc.layers.find((l) => l.id === entity.layerId);
     if (layer && !layer.visible) continue;
+    if (entity.type === 'block') {
+      if (hitTestBlockReference(entity, doc.blockDefinitions, point, tolerance)) {
+        return entity.id;
+      }
+      continue;
+    }
     const host =
       entity.type === 'door' || entity.type === 'window'
         ? walls.get(entity.geometry.hostWallId)
@@ -227,6 +245,7 @@ export function hitTestDocument(
 
 export function entityBounds(
   entity: Entity,
+  definitions: readonly BlockDefinition[] = [],
 ): ReturnType<typeof aabbFromPoints> | null {
   switch (entity.type) {
     case 'line':
@@ -313,12 +332,15 @@ export function entityBounds(
       return null;
     case 'room':
       return aabbFromMany(entity.geometry.polygon);
+    case 'block':
+      return blockReferenceBounds(entity, definitions);
   }
 }
 
 export function entityBoundsWithHost(
   entity: Entity,
   hostWall?: WallEntity,
+  definitions: readonly BlockDefinition[] = [],
 ): ReturnType<typeof aabbFromPoints> | null {
   if (entity.type === 'door' && hostWall) {
     const layout = doorLayout(entity, hostWall);
@@ -340,7 +362,7 @@ export function entityBoundsWithHost(
       layout.innerB,
     ]);
   }
-  return entityBounds(entity);
+  return entityBounds(entity, definitions);
 }
 
 export function isPointNearEntityBounds(
@@ -416,7 +438,7 @@ export function selectByRectangle(
       entity.type === 'door' || entity.type === 'window'
         ? walls.get(entity.geometry.hostWallId)
         : undefined;
-    const bounds = entityBoundsWithHost(entity, host);
+    const bounds = entityBoundsWithHost(entity, host, doc.blockDefinitions);
     if (!bounds) continue;
     const hit =
       resolved === 'window'

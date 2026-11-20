@@ -1129,6 +1129,17 @@
   line-height: 1.4;
 }
 
+.dialog-error {
+  margin: 0 0 12px;
+  color: #ff8d8d;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.modal-panel.block-dialog {
+  width: min(440px, 94vw);
+}
+
 .dialog-fieldset {
   border: 1px solid var(--border);
   border-radius: 3px;

@@ -32,6 +32,42 @@ function host(bus: CommandBus): EngineHost {
 describe('P4-B3 EXTEND engine workflows', () => {
   beforeEach(() => resetIdCounter());
 
+  it('Edge No extend refuses an implied boundary and leaves geometry unchanged', () => {
+    const bus = new CommandBus(createEmptyDocument());
+    const boundary = new CreateLineCommand({ x: 8, y: 2 }, { x: 8, y: 4 });
+    const target = new CreateLineCommand({ x: 0, y: 0 }, { x: 3, y: 0 });
+    bus.execute(boundary);
+    bus.execute(target);
+    const tid = target.getEntityId();
+    const engine = new CadCommandEngine(
+      createDefaultEngineRegistry(),
+      bus,
+      host(bus),
+    );
+    engine.start('EXTEND');
+    engine.setBuffer('EDGE');
+    engine.confirm('enter');
+    engine.setBuffer('N');
+    engine.confirm('enter');
+    engine.submitPoint({ x: 3, y: 0 });
+    const after = getEntity(bus.getDocument(), tid);
+    expect(after?.type).toBe('line');
+    if (after?.type === 'line') {
+      expect(after.geometry.end.x).toBeCloseTo(3);
+    }
+    engine.setBuffer('EDGE');
+    engine.confirm('enter');
+    engine.setBuffer('E');
+    engine.confirm('enter');
+    engine.submitPoint({ x: 3, y: 0 });
+    const extended = getEntity(bus.getDocument(), tid);
+    expect(extended?.type).toBe('line');
+    if (extended?.type === 'line') {
+      expect(extended.geometry.end.x).toBeCloseTo(8);
+      expect(extended.geometry.start).toEqual({ x: 0, y: 0 });
+    }
+  });
+
   it('21/22: keyboard EX and EXTEND resolve and start engine command', () => {
     const reg = createDefaultEngineRegistry();
     for (const alias of ['EX', 'EXTEND', 'extend']) {

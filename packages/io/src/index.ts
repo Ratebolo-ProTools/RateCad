@@ -4,12 +4,18 @@ import {
   DEFAULT_DIMENSION_STYLE,
   DEFAULT_LAYER_ID,
   SCHEMA_VERSION,
+  blockNameError,
   createDefaultLayers,
   createDefaultLayout,
   drawingUnitsFromLegacy,
+  isBlockContentEntity,
+  isBlockContentType,
   migrateDimensionStylesFromLegacy,
+  normalizeBlockName,
   normalizeColorProperty,
   normalizeDrawingUnits,
+  type BlockContentEntity,
+  type BlockDefinition,
   type CurrentAppearance,
   type DrawingDocument,
   type Entity,
@@ -47,6 +53,7 @@ const ENTITY_TYPES = new Set([
   'door',
   'window',
   'room',
+  'block',
 ]);
 
 function isVec2(value: unknown): value is { x: number; y: number } {
@@ -211,9 +218,152 @@ function assertEntity(raw: unknown, index: number): Entity {
       }
       break;
     }
+    case 'block': {
+      if (
+        typeof g.definitionId !== 'string' ||
+        !g.definitionId ||
+        !isVec2(g.position) ||
+        typeof g.scaleX !== 'number' ||
+        !Number.isFinite(g.scaleX) ||
+        g.scaleX === 0 ||
+        typeof g.scaleY !== 'number' ||
+        !Number.isFinite(g.scaleY) ||
+        g.scaleY === 0 ||
+        typeof g.rotation !== 'number' ||
+        !Number.isFinite(g.rotation)
+      ) {
+        throw new RatecadParseError(`Entity ${e.id}: invalid block reference`);
+      }
+      break;
+    }
   }
 
   return raw as Entity;
+}
+
+function contentGeometryError(entity: BlockContentEntity): string | null {
+  if (entity.type === 'line') {
+    const dx = entity.geometry.end.x - entity.geometry.start.x;
+    const dy = entity.geometry.end.y - entity.geometry.start.y;
+    if (dx * dx + dy * dy <= 1e-24) return 'invalid line geometry';
+  }
+  if (entity.type === 'rectangle') {
+    const { corner1, corner2 } = entity.geometry;
+    if (
+      Math.abs(corner1.x - corner2.x) <= 1e-12 ||
+      Math.abs(corner1.y - corner2.y) <= 1e-12
+    ) {
+      return 'invalid rectangle geometry';
+    }
+  }
+  if (entity.type === 'circle' && !(entity.geometry.radius > 1e-12)) {
+    return 'invalid circle geometry';
+  }
+  return null;
+}
+
+function parseBlockDefinitions(fileSchema: number, raw: unknown): BlockDefinition[] {
+  if (fileSchema < 11) return [];
+  if (raw == null) return [];
+  if (!Array.isArray(raw)) {
+    throw new RatecadParseError('blockDefinitions must be an array');
+  }
+  const definitions: BlockDefinition[] = [];
+  const ids = new Set<string>();
+  const names = new Set<string>();
+  for (let i = 0; i < raw.length; i += 1) {
+    const item = raw[i];
+    if (!item || typeof item !== 'object') {
+      throw new RatecadParseError(`Invalid block definition at index ${i}`);
+    }
+    const record = item as Record<string, unknown>;
+    if (typeof record.id !== 'string' || !record.id) {
+      throw new RatecadParseError(`Block definition ${i} is missing an id`);
+    }
+    if (ids.has(record.id)) {
+      throw new RatecadParseError(`Duplicate block definition id ${record.id}`);
+    }
+    if (typeof record.name !== 'string') {
+      throw new RatecadParseError(`Block definition ${record.id} is missing a name`);
+    }
+    const nameError = blockNameError(record.name);
+    if (nameError) {
+      throw new RatecadParseError(`Block definition ${record.id}: ${nameError}`);
+    }
+    const nameKey = normalizeBlockName(record.name);
+    if (names.has(nameKey)) {
+      throw new RatecadParseError(
+        `Duplicate block name "${record.name.trim()}"`,
+      );
+    }
+    if (!Array.isArray(record.entities) || record.entities.length === 0) {
+      throw new RatecadParseError(
+        `Block definition ${record.id} has no geometry`,
+      );
+    }
+    const entities: BlockContentEntity[] = [];
+    const contentIds = new Set<string>();
+    for (let ei = 0; ei < record.entities.length; ei += 1) {
+      const content = record.entities[ei];
+      const contentType =
+        content && typeof content === 'object'
+          ? (content as { type?: unknown }).type
+          : undefined;
+      if (contentType === 'block') {
+        throw new RatecadParseError(
+          `Block definition ${record.id} cannot contain a nested block`,
+        );
+      }
+      if (typeof contentType !== 'string' || !isBlockContentType(contentType)) {
+        throw new RatecadParseError(
+          `Block definition ${record.id} cannot contain ${String(contentType)}`,
+        );
+      }
+      const entity = assertEntity(content, ei);
+      if (!isBlockContentEntity(entity)) {
+        throw new RatecadParseError(
+          `Block definition ${record.id} cannot contain ${entity.type}`,
+        );
+      }
+      if (contentIds.has(entity.id)) {
+        throw new RatecadParseError(
+          `Block definition ${record.id} has duplicate entity id ${entity.id}`,
+        );
+      }
+      const geometryError = contentGeometryError(entity);
+      if (geometryError) {
+        throw new RatecadParseError(
+          `Block definition ${record.id}: ${geometryError}`,
+        );
+      }
+      contentIds.add(entity.id);
+      entities.push(entity);
+    }
+    ids.add(record.id);
+    names.add(nameKey);
+    definitions.push({
+      id: record.id,
+      name: record.name.trim(),
+      basePoint:
+        record.basePoint && isVec2(record.basePoint)
+          ? { x: record.basePoint.x, y: record.basePoint.y }
+          : { x: 0, y: 0 },
+      entities,
+    });
+  }
+  return definitions;
+}
+
+function assertBlockReferences(entities: Entity[], definitions: BlockDefinition[]): void {
+  const ids = new Set(definitions.map((definition) => definition.id));
+  for (const entity of entities) {
+    if (entity.type !== 'block') continue;
+    if (!ids.has(entity.geometry.definitionId)) {
+      throw new RatecadParseError(
+        `Block reference ${entity.id} uses missing definition ${entity.geometry.definitionId}`,
+      );
+    }
+  }
 }
 
 function assertLayer(raw: unknown, index: number): Layer {
@@ -360,6 +510,9 @@ function migrateDocument(
       e.geometry.wallIds.every((id) => wallIds.has(id))
     );
   });
+
+  const blockDefinitions = parseBlockDefinitions(fileSchema, d.blockDefinitions);
+  assertBlockReferences(nextEntities, blockDefinitions);
 
   const settingsRaw = (d.settings ?? {}) as Record<string, unknown>;
   const dimStyleRaw =
@@ -572,6 +725,7 @@ function migrateDocument(
     layers: nextLayers,
     currentLayerId,
     entities: nextEntities,
+    blockDefinitions,
     layouts: parseLayouts(d.layouts, fileSchema),
     activeLayoutId: parseActiveLayoutId(d.activeLayoutId, d.layouts),
     selection: [],
@@ -715,6 +869,16 @@ function parseLayouts(raw: unknown, fileSchema: number): Layout[] {
       : [];
     const paperSpaceEntities: Entity[] = [];
     for (let pi = 0; pi < paperRaw.length; pi += 1) {
+      const paperItem = paperRaw[pi];
+      if (
+        paperItem &&
+        typeof paperItem === 'object' &&
+        (paperItem as { type?: unknown }).type === 'block'
+      ) {
+        throw new RatecadParseError(
+          'Block references cannot be stored in paper space',
+        );
+      }
       try {
         paperSpaceEntities.push(assertEntity(paperRaw[pi], pi));
       } catch {
@@ -778,6 +942,7 @@ export function serializeDocument(doc: DrawingDocument): string {
       layers: doc.layers,
       currentLayerId: doc.currentLayerId,
       entities: doc.entities,
+      blockDefinitions: doc.blockDefinitions ?? [],
       layouts: doc.layouts ?? [createDefaultLayout('Layout1')],
       activeLayoutId: doc.activeLayoutId ?? null,
     },

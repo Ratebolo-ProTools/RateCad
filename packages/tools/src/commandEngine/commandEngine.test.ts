@@ -214,6 +214,43 @@ describe('command engine sessions', () => {
     expect(lines.length).toBeGreaterThanOrEqual(2);
   });
 
+  it('LINE closes a sequence and rejects a zero-length segment', () => {
+    const { bus, engine } = makeEngine();
+    engine.start('LINE');
+    engine.submitPoint({ x: 0, y: 0 });
+    engine.submitPoint({ x: 4, y: 0 });
+    engine.submitPoint({ x: 4, y: 3 });
+    engine.submitPoint({ x: 4, y: 3 });
+    expect(bus.getDocument().entities).toHaveLength(2);
+    expect(engine.getUiState().message).toMatch(/Zero-length/);
+    engine.setBuffer('C');
+    engine.confirm('enter');
+    expect(engine.isRunning()).toBe(false);
+    expect(bus.getDocument().entities).toHaveLength(3);
+    const last = bus.getDocument().entities[2];
+    expect(last?.type).toBe('line');
+    if (last?.type === 'line') {
+      expect(last.geometry.start).toEqual({ x: 4, y: 3 });
+      expect(last.geometry.end).toEqual({ x: 0, y: 0 });
+    }
+  });
+
+  it('LINE rejects a non-finite coordinate and keeps the last point', () => {
+    const { bus, engine } = makeEngine();
+    engine.start('L');
+    engine.submitPoint({ x: 1, y: 1 });
+    engine.submitPoint({ x: Number.POSITIVE_INFINITY, y: 2 });
+    expect(bus.getDocument().entities).toHaveLength(0);
+    expect(engine.isRunning()).toBe(true);
+    engine.submitPoint({ x: 2, y: 1 });
+    const line = bus.getDocument().entities[0];
+    expect(line?.type).toBe('line');
+    if (line?.type === 'line') {
+      expect(line.geometry.start).toEqual({ x: 1, y: 1 });
+      expect(line.geometry.end).toEqual({ x: 2, y: 1 });
+    }
+  });
+
   it('LINE angle override then distance', () => {
     const { bus, engine } = makeEngine();
     engine.start('L');

@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { Entity } from '@ratecad/core';
 import {
+  crossingTrimPick,
   entitiesCrossedByFence,
   extendEntityMulti,
   fencePickPoint,
+  resolveRectSelectMode,
   trimEntityMulti,
   trimLineEntity,
 } from '../src/index.js';
@@ -108,20 +110,16 @@ describe('TrimExtendEngine — basic line trim', () => {
 });
 
 describe('TrimExtendEngine — circle / arc / polyline', () => {
-  it('Test 4 — circle becomes arc-backed polyline', () => {
+  it('Test 4 — circle trim is refused without a polyline stand-in', () => {
     const c = circle('c', { x: 0, y: 0 }, 5);
     const cutter = line('v', { x: 0, y: -10 }, { x: 0, y: 10 });
     const result = trimEntityMulti(c, [cutter], { x: 5, y: 0 });
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.entities[0]?.type).toBe('polyline');
-      const meta = result.entities[0]?.metadata?.arc as
-        | { center: { x: number; y: number }; radius: number }
-        | undefined;
-      expect(meta?.radius).toBeCloseTo(5);
-      expect(meta?.center.x).toBeCloseTo(0);
-      expect(meta?.center.y).toBeCloseTo(0);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toMatch(/unsupported until native ARC/i);
     }
+    expect(c.type).toBe('circle');
+    expect(c.geometry.radius).toBe(5);
   });
 
   it('Test 5 — arc-like polyline trim (open curve)', () => {
@@ -231,6 +229,66 @@ describe('TrimExtendEngine — cutters, edge, fence', () => {
     const hit = entitiesCrossedByFence(entities, fence);
     expect(hit).toHaveLength(3);
     expect(fencePickPoint(entities[0]!, fence)).toEqual({ x: 5, y: 0 });
+  });
+});
+
+describe('TrimExtendEngine — crossing rectangle', () => {
+  it('uses the span inside the rectangle, not a bounding-box overlap', () => {
+    const horizontal = line('h', { x: 0, y: 0 }, { x: 10, y: 0 });
+    const raised = line('r', { x: 0, y: 0 }, { x: 10, y: 3 });
+    const boxA = { x: 6, y: -1 };
+    const boxB = { x: 9, y: 1 };
+    const onLine = crossingTrimPick(horizontal, boxA, boxB, 'crossing');
+    const missed = crossingTrimPick(raised, boxA, boxB, 'crossing');
+    expect(onLine).not.toBeNull();
+    expect(onLine!.x).toBeGreaterThan(6);
+    expect(onLine!.x).toBeLessThan(9);
+    expect(onLine!.y).toBeCloseTo(0);
+    expect(missed).toBeNull();
+  });
+
+  it('window mode keeps only a fully contained segment', () => {
+    expect(resolveRectSelectMode({ x: 0, y: 0 }, { x: 4, y: 2 })).toBe('window');
+    expect(resolveRectSelectMode({ x: 4, y: 2 }, { x: 0, y: 0 })).toBe('crossing');
+    const short = line('s', { x: 1, y: 0 }, { x: 2, y: 0 });
+    const long = line('l', { x: 0, y: 0 }, { x: 10, y: 0 });
+    const a = { x: 0, y: -1 };
+    const b = { x: 3, y: 1 };
+    expect(crossingTrimPick(short, a, b, 'window')).not.toBeNull();
+    expect(crossingTrimPick(long, a, b, 'window')).toBeNull();
+    expect(crossingTrimPick(long, b, a, 'crossing')!.x).toBeGreaterThan(0);
+    expect(crossingTrimPick(long, b, a, 'crossing')!.x).toBeLessThan(3);
+  });
+
+  it('removes the portion covered by the crossing rectangle', () => {
+    const target = line('t', { x: 0, y: 0 }, { x: 10, y: 0 });
+    const cuts = [
+      line('c1', { x: 3, y: -1 }, { x: 3, y: 1 }),
+      line('c2', { x: 7, y: -1 }, { x: 7, y: 1 }),
+    ];
+    const pick = crossingTrimPick(
+      target,
+      { x: 4, y: -1 },
+      { x: 6, y: 1 },
+      'crossing',
+    );
+    expect(pick).not.toBeNull();
+    const result = trimEntityMulti(target, cuts, pick!);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const spans = result.entities
+      .filter((e) => e.type === 'line')
+      .map((e) =>
+        e.type === 'line'
+          ? [e.geometry.start.x, e.geometry.end.x]
+          : [],
+      );
+    expect(spans).toEqual(
+      expect.arrayContaining([
+        [0, 3],
+        [7, 10],
+      ]),
+    );
   });
 });
 

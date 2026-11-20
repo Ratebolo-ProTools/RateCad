@@ -100,6 +100,8 @@ export type RibbonProps = {
   onRunCommand: (alias: string) => void;
   onOpenUnits: () => void;
   onOpenDimStyle: () => void;
+  onCreateBlock: () => void;
+  onInsertBlock: () => void;
   onSetCurrentLayer: (layerId: string) => void;
   onAddLayer: () => void;
   onToggleLayerVisible: (layer: Layer) => void;
@@ -1153,8 +1155,9 @@ export function Ribbon(props: RibbonProps) {
                 <button
                   type="button"
                   className="ribbon-large"
-                  disabled
-                  title="Insert block — not yet implemented"
+                  title="Insert block"
+                  data-testid="ribbon-insert-block"
+                  onClick={() => props.onInsertBlock()}
                 >
                   {Icons.block}
                   <span>Insert</span>
@@ -1163,8 +1166,9 @@ export function Ribbon(props: RibbonProps) {
                   <button
                     type="button"
                     className="ribbon-small"
-                    disabled
-                    title="Create block — not yet implemented"
+                    title="Create block"
+                    data-testid="ribbon-create-block"
+                    onClick={() => props.onCreateBlock()}
                   >
                     Create
                   </button>

@@ -89,6 +89,39 @@ describe('resolveSnap', () => {
     expect(result.point).toEqual({ x: 1, y: 3 });
   });
 
+  it('snaps to a segment intersection before the nearest point', () => {
+    const doc = docWithGeometry();
+    doc.entities.push({
+      id: 'line-2',
+      type: 'line',
+      layerId: doc.layers[0]!.id,
+      visible: true,
+      locked: false,
+      geometry: { start: { x: 2, y: -1 }, end: { x: 2, y: 3 } },
+      properties: {},
+    });
+    const result = resolveSnap(
+      { x: 2.15, y: 0.1 },
+      doc,
+      { enabled: true, gridSize: 1, tolerance: 0.5 },
+    );
+    expect(result.kind).toBe('intersection');
+    expect(result.point.x).toBeCloseTo(2);
+    expect(result.point.y).toBeCloseTo(0);
+  });
+
+  it('snaps to the nearest point on a segment when no endpoint is in range', () => {
+    const doc = docWithGeometry();
+    const result = resolveSnap(
+      { x: 2, y: 0.2 },
+      doc,
+      { enabled: true, gridSize: 1, tolerance: 0.5 },
+    );
+    expect(result.kind).toBe('nearest');
+    expect(result.point.x).toBeCloseTo(2);
+    expect(result.point.y).toBeCloseTo(0);
+  });
+
   it('prefers endpoint over grid when both nearby', () => {
     const doc = docWithGeometry();
     const result = resolveSnap(

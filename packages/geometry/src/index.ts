@@ -222,6 +222,8 @@ export {
   canTrimEntity,
   collectIntersectionsOnSegment,
   collectIntersectionsWithCutters,
+  CIRCLE_TRIM_UNSUPPORTED,
+  crossingTrimPick,
   cuttingSegments,
   defaultTrimSettings,
   entitiesCrossedByFence,
@@ -235,6 +237,7 @@ export {
   planOpenSegmentTrim,
   planPolylineExtend,
   resolvePickInterval,
+  resolveRectSelectMode,
   segmentsAreCollinear,
   segmentsAreParallel,
   sortHitsAlongSegment,
@@ -335,3 +338,17 @@ export {
   resolvePropertyPair,
   setByLayerPatch,
 } from './propertyEngine.js';
+
+export {
+  blockCircleWorldPoints,
+  blockContentLocalPoints,
+  blockReferenceBounds,
+  contentToLocal,
+  hitTestBlockReference,
+  inverseBlockPoint,
+  isUsableBlockScale,
+  rectangleLocalCorners,
+  suggestBlockBasePoint,
+  transformBlockPoint,
+  type BlockBounds,
+} from './blockTransform.js';

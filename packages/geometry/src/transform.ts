@@ -116,6 +116,14 @@ export function translateEntity(entity: Entity, delta: Vec2): Entity | null {
           labelPosition: translatePoint(entity.geometry.labelPosition, delta),
         },
       };
+    case 'block':
+      return {
+        ...entity,
+        geometry: {
+          ...entity.geometry,
+          position: translatePoint(entity.geometry.position, delta),
+        },
+      };
   }
 }
 
@@ -142,7 +150,8 @@ export type GripEditTarget =
   | { kind: 'wall-end' }
   | { kind: 'door-position' }
   | { kind: 'window-position' }
-  | { kind: 'room-label' };
+  | { kind: 'room-label' }
+  | { kind: 'block-insertion' };
 
 /**
  * Compute dimension line placement from start/end/kind/offset.
@@ -389,6 +398,15 @@ export function applyGripEdit(
         };
       }
       return null;
+    case 'block':
+      if (target.kind !== 'block-insertion') return null;
+      return {
+        ...entity,
+        geometry: {
+          ...entity.geometry,
+          position: { ...point },
+        },
+      };
   }
 }
 
@@ -491,6 +509,17 @@ export function validateEntityGeometry(entity: Entity): boolean {
         isFiniteVec2(entity.geometry.labelPosition) &&
         typeof entity.properties.name === 'string' &&
         entity.properties.name.trim().length > 0
+      );
+    case 'block':
+      return (
+        typeof entity.geometry.definitionId === 'string' &&
+        entity.geometry.definitionId.length > 0 &&
+        isFiniteVec2(entity.geometry.position) &&
+        Number.isFinite(entity.geometry.scaleX) &&
+        entity.geometry.scaleX !== 0 &&
+        Number.isFinite(entity.geometry.scaleY) &&
+        entity.geometry.scaleY !== 0 &&
+        Number.isFinite(entity.geometry.rotation)
       );
   }
 }

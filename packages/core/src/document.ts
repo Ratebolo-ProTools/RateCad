@@ -228,6 +228,7 @@ export function createEmptyDocument(
     layers,
     currentLayerId: DEFAULT_LAYER_ID,
     entities: [],
+    blockDefinitions: [],
     layouts: [createDefaultLayout('Layout1')],
     activeLayoutId: null,
     workspaceMode: 'MODEL_SPACE',

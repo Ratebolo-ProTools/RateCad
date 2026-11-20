@@ -343,6 +343,7 @@ export function persistedContentFingerprint(doc: DrawingDocument): string {
     layers: doc.layers,
     currentLayerId: doc.currentLayerId,
     entities: doc.entities,
+    blockDefinitions: doc.blockDefinitions,
     activeLayoutId: doc.activeLayoutId ?? null,
     layouts,
   });
