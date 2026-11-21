@@ -163,7 +163,8 @@ describe('command engine sessions', () => {
     expect(engine.getUiState().preview?.kind).toBe('rectangle');
     engine.submitPoint({ x: 4, y: 3 });
     expect(bus.getDocument().entities).toHaveLength(1);
-    expect(engine.isRunning()).toBe(false);
+    expect(engine.isRunning()).toBe(true);
+    expect(engine.getLastCompletedName()).toBe('RECTANGLE');
   });
 
   it('Escape cancels without committing', () => {
@@ -417,8 +418,9 @@ describe('command engine sessions', () => {
     engine.start('REC');
     engine.submitPoint({ x: 0, y: 0 });
     engine.submitPoint({ x: 4, y: 3 });
-    expect(engine.isRunning()).toBe(false);
+    expect(engine.isRunning()).toBe(true);
     expect(engine.getLastCompletedName()).toBe('RECTANGLE');
+    engine.handleEscape();
     engine.setBuffer('');
     engine.confirm('enter');
     expect(engine.isRunning()).toBe(true);

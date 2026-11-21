@@ -352,7 +352,7 @@ describe('P4-B2 preview/commit + circle safety', () => {
     }
   });
 
-  it('circle trim is refused for one hit and for two hits', () => {
+  it('circle trim needs two intersections and preserves the source object', () => {
     const c = circle('c', { x: 0, y: 0 }, 5);
     c.properties.color = '#00ff00';
     const one = trimEntityMulti(
@@ -361,15 +361,20 @@ describe('P4-B2 preview/commit + circle safety', () => {
       { x: 5, y: 0 },
     );
     expect(one.ok).toBe(false);
-    if (!one.ok) expect(one.reason).toMatch(/unsupported until native ARC/i);
+    if (!one.ok) expect(one.reason).toMatch(/No intersection/i);
 
     const two = trimEntityMulti(
       c,
       [line('v', { x: 0, y: -10 }, { x: 0, y: 10 })],
       { x: 5, y: 0 },
     );
-    expect(two.ok).toBe(false);
-    if (!two.ok) expect(two.reason).toMatch(/unsupported until native ARC/i);
+    expect(two.ok).toBe(true);
+    if (!two.ok) return;
+    expect(two.entities[0]?.type).toBe('arc');
+    if (two.entities[0]?.type === 'arc') {
+      expect(two.entities[0].properties.color).toBe('#00ff00');
+      expect(two.entities[0].geometry.radius).toBe(5);
+    }
     expect(c.type).toBe('circle');
     expect(c.geometry).toEqual({ center: { x: 0, y: 0 }, radius: 5 });
     expect(c.properties.color).toBe('#00ff00');

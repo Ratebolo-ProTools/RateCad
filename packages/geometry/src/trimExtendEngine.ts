@@ -16,6 +16,16 @@ import {
   pointOnSegment,
   projectParam,
 } from './intersect.js';
+import {
+  TAU,
+  angleOf,
+  angleOnArc,
+  arcExtremePoints,
+  ccwSweep,
+  dedupeAngles,
+  intersectCircles,
+  normalizeAngle,
+} from './arc.js';
 import { add, distance, sub } from './math.js';
 import { isFiniteVec2, validateEntityGeometry } from './transform.js';
 
@@ -195,7 +205,7 @@ export function collectIntersectionsOnSegment(
   const hits: Vec2[] = [];
   const extend = edgeMode === 'extend';
 
-  if (cutter.type === 'circle') {
+  if (cutter.type === 'circle' || cutter.type === 'arc') {
     const pts = extend
       ? intersectLineCircle(start, end, cutter.geometry.center, cutter.geometry.radius)
       : intersectSegmentCircle(
@@ -204,9 +214,19 @@ export function collectIntersectionsOnSegment(
           cutter.geometry.center,
           cutter.geometry.radius,
         );
-    // For No Extend, target must actually meet the circle on the segment;
-    // circle itself is always its full natural path.
-    for (const p of pts) pushUniqueHit(hits, p, start, end);
+    for (const p of pts) {
+      if (
+        cutter.type === 'arc' &&
+        !angleOnArc(
+          angleOf(cutter.geometry.center, p),
+          cutter.geometry.startAngle,
+          cutter.geometry.endAngle,
+        )
+      ) {
+        continue;
+      }
+      pushUniqueHit(hits, p, start, end);
+    }
     return hits;
   }
 
@@ -321,6 +341,7 @@ function isTrimmableType(type: Entity['type']): boolean {
     type === 'polyline' ||
     type === 'rectangle' ||
     type === 'circle' ||
+    type === 'arc' ||
     type === 'wall'
   );
 }
@@ -1021,23 +1042,184 @@ function trimRectangleMulti(
   return trimPolylineMulti(pline, cutters, pickPoint, edgeMode, allowSelf);
 }
 
-/** Shown when a circle would need an arc entity that the schema does not have. */
-export const CIRCLE_TRIM_UNSUPPORTED =
-  'Circle trim is unsupported until native ARC geometry is available';
+function circularCutterHits(
+  center: Vec2,
+  radius: number,
+  cutter: Entity,
+  edgeMode: EdgeMode,
+): Vec2[] {
+  if (cutter.type === 'circle') {
+    return intersectCircles(center, radius, cutter.geometry.center, cutter.geometry.radius);
+  }
+  if (cutter.type === 'arc') {
+    return intersectCircles(
+      center,
+      radius,
+      cutter.geometry.center,
+      cutter.geometry.radius,
+    ).filter((point) =>
+      angleOnArc(
+        angleOf(cutter.geometry.center, point),
+        cutter.geometry.startAngle,
+        cutter.geometry.endAngle,
+      ),
+    );
+  }
+  const hits: Vec2[] = [];
+  const extend = edgeMode === 'extend';
+  if (
+    cutter.type === 'line' ||
+    cutter.type === 'wall' ||
+    cutter.type === 'polyline' ||
+    cutter.type === 'rectangle'
+  ) {
+    const segs = cuttingSegments(cutter);
+    for (const seg of segs) {
+      const pts = extend
+        ? intersectLineCircle(seg.a, seg.b, center, radius)
+        : intersectSegmentCircle(seg.a, seg.b, center, radius);
+      hits.push(...pts);
+    }
+  }
+  return hits;
+}
+
+function anglesOnCircle(
+  center: Vec2,
+  radius: number,
+  cutters: Entity[],
+  edgeMode: EdgeMode,
+  excludeId?: string,
+): number[] {
+  const raw: number[] = [];
+  for (const cutter of cutters) {
+    if (excludeId && cutter.id === excludeId) continue;
+    for (const point of circularCutterHits(center, radius, cutter, edgeMode)) {
+      if (Math.abs(distance(point, center) - radius) > 1e-4) continue;
+      raw.push(angleOf(center, point));
+    }
+  }
+  return dedupeAngles(raw, radius);
+}
 
 /**
- * Circle trim is refused. Replacing a circle with a sampled polyline would
- * drop exact radius geometry. The original circle is left unchanged.
+ * Remove only the sector under the pick.
+ * Every other sector between cutting intersections stays its own native arc.
  */
 function trimCircleMulti(
   circle: Extract<Entity, { type: 'circle' }>,
-  _cutters: Entity[],
-  _pickPoint: Vec2,
-  _edgeMode: EdgeMode,
-  _allowSelf: boolean,
+  cutters: Entity[],
+  pickPoint: Vec2,
+  edgeMode: EdgeMode,
+  allowSelf: boolean,
 ): ModifyResult {
-  if (!(circle.geometry.radius > EPS)) return fail('Invalid circle');
-  return fail(CIRCLE_TRIM_UNSUPPORTED);
+  const { center, radius } = circle.geometry;
+  if (!(radius > EPS) || !isFiniteVec2(center)) return fail('Invalid circle');
+  const angles = anglesOnCircle(
+    center,
+    radius,
+    cutters,
+    edgeMode,
+    allowSelf ? undefined : circle.id,
+  );
+  if (angles.length < 2) return fail('No intersection with cutting edge');
+  const pick = normalizeAngle(angleOf(center, pickPoint));
+  let removed = 0;
+  for (let i = 0; i < angles.length; i += 1) {
+    const start = angles[i]!;
+    const sweep = ccwSweep(start, angles[(i + 1) % angles.length]!);
+    const from = normalizeAngle(pick - start);
+    if (from < sweep - 1e-9) {
+      removed = i;
+      break;
+    }
+  }
+  const pieces: Array<{ startAngle: number; endAngle: number }> = [];
+  for (let i = 0; i < angles.length; i += 1) {
+    if (i === removed) continue;
+    const startAngle = normalizeAngle(angles[i]!);
+    const endAngle = normalizeAngle(angles[(i + 1) % angles.length]!);
+    const sweep = ccwSweep(startAngle, endAngle);
+    if (!(sweep > 1e-6) || sweep >= TAU - 1e-6) return fail('Circle trim collapsed');
+    pieces.push({ startAngle, endAngle });
+  }
+  if (!pieces.length) return fail('Circle trim collapsed');
+  return ok(
+    pieces.map((piece) => ({
+      id: circle.id,
+      type: 'arc' as const,
+      layerId: circle.layerId,
+      visible: circle.visible,
+      locked: circle.locked,
+      geometry: {
+        center: { ...center },
+        radius,
+        startAngle: piece.startAngle,
+        endAngle: piece.endAngle,
+      },
+      properties: { ...circle.properties },
+      metadata: { ...(circle.metadata ?? {}), trimmedFrom: 'circle' },
+    })),
+  );
+}
+
+/** Split an arc at cutter intersections and drop the piece under the pick. */
+function trimArcMulti(
+  arc: Extract<Entity, { type: 'arc' }>,
+  cutters: Entity[],
+  pickPoint: Vec2,
+  edgeMode: EdgeMode,
+  allowSelf: boolean,
+): ModifyResult {
+  const { center, radius, startAngle, endAngle } = arc.geometry;
+  const sweep = ccwSweep(startAngle, endAngle);
+  if (!(radius > EPS) || !(sweep > 1e-6) || sweep >= TAU - 1e-6) {
+    return fail('Invalid arc');
+  }
+  const pickFrom = normalizeAngle(angleOf(center, pickPoint) - startAngle);
+  if (pickFrom > sweep + 1e-6) return fail('Pick is not on the arc');
+  const cuts = anglesOnCircle(
+    center,
+    radius,
+    cutters,
+    edgeMode,
+    allowSelf ? undefined : arc.id,
+  )
+    .map((angle) => normalizeAngle(angle - startAngle))
+    .filter((from) => from > 1e-6 && from < sweep - 1e-6)
+    .sort((a, b) => a - b);
+  if (!cuts.length) return fail('No intersection with cutting edge');
+  const bounds = [0, ...cuts, sweep];
+  const pieces: Array<{ a: number; b: number }> = [];
+  let removed = false;
+  for (let i = 0; i < bounds.length - 1; i += 1) {
+    const a = bounds[i]!;
+    const b = bounds[i + 1]!;
+    if (b - a <= 1e-6) continue;
+    if (!removed && pickFrom >= a - 1e-8 && pickFrom <= b + 1e-8) {
+      removed = true;
+      continue;
+    }
+    pieces.push({ a, b });
+  }
+  if (!removed || !pieces.length) return fail('No intersection with cutting edge');
+  return ok(
+    pieces.map((piece) => ({
+      id: arc.id,
+      type: 'arc' as const,
+      layerId: arc.layerId,
+      visible: arc.visible,
+      locked: arc.locked,
+      geometry: {
+        center: { ...center },
+        radius,
+        startAngle: normalizeAngle(startAngle + piece.a),
+        endAngle: normalizeAngle(startAngle + piece.b),
+      },
+      properties: { ...arc.properties },
+      metadata: { ...(arc.metadata ?? {}), trimmedFrom: 'arc' },
+    })),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -1068,6 +1250,8 @@ export function trimEntityMulti(
       return trimRectangleMulti(target, cutters, pickPoint, edgeMode, allowSelf);
     case 'circle':
       return trimCircleMulti(target, cutters, pickPoint, edgeMode, allowSelf);
+    case 'arc':
+      return trimArcMulti(target, cutters, pickPoint, edgeMode, allowSelf);
     case 'dimension':
     case 'text':
     case 'leader':
@@ -1563,12 +1747,20 @@ export function fencePickPoint(entity: Entity, fence: Vec2[]): Vec2 | null {
   for (let i = 0; i < fence.length - 1; i += 1) {
     const fa = fence[i]!;
     const fb = fence[i + 1]!;
-    if (entity.type === 'circle') {
+    if (entity.type === 'circle' || entity.type === 'arc') {
       const pts = intersectSegmentCircle(
         fa,
         fb,
         entity.geometry.center,
         entity.geometry.radius,
+      ).filter((point) =>
+        entity.type === 'circle'
+          ? true
+          : angleOnArc(
+              angleOf(entity.geometry.center, point),
+              entity.geometry.startAngle,
+              entity.geometry.endAngle,
+            ),
       );
       if (pts[0]) return pts[0];
       continue;
@@ -1689,6 +1881,34 @@ export function crossingTrimPick(
     const len = Math.hypot(dx, dy);
     if (len < EPS) return { x: center.x + radius, y: center.y };
     return { x: center.x + (dx / len) * radius, y: center.y + (dy / len) * radius };
+  }
+
+  if (entity.type === 'arc') {
+    const { center, radius, startAngle, endAngle } = entity.geometry;
+    if (!(radius > EPS)) return null;
+    const extremes = arcExtremePoints(center, radius, startAngle, endAngle);
+    const inside = (p: Vec2) =>
+      p.x >= box.minX - HIT_EPS &&
+      p.x <= box.maxX + HIT_EPS &&
+      p.y >= box.minY - HIT_EPS &&
+      p.y <= box.maxY + HIT_EPS;
+    if (mode === 'window') {
+      if (!extremes.every(inside)) return null;
+      return extremes[0] ?? null;
+    }
+    const edges: Array<{ a: Vec2; b: Vec2 }> = [
+      { a: { x: box.minX, y: box.minY }, b: { x: box.maxX, y: box.minY } },
+      { a: { x: box.maxX, y: box.minY }, b: { x: box.maxX, y: box.maxY } },
+      { a: { x: box.maxX, y: box.maxY }, b: { x: box.minX, y: box.maxY } },
+      { a: { x: box.minX, y: box.maxY }, b: { x: box.minX, y: box.minY } },
+    ];
+    for (const edge of edges) {
+      const hit = intersectSegmentCircle(edge.a, edge.b, center, radius).find((point) =>
+        angleOnArc(angleOf(center, point), startAngle, endAngle),
+      );
+      if (hit) return hit;
+    }
+    return extremes.find(inside) ?? null;
   }
 
   const segs = cuttingSegments(entity);

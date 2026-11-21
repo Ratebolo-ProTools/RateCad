@@ -289,22 +289,59 @@ describe('TRIM command engine', () => {
     expect(bus.getDocument().blockDefinitions).toEqual(before);
   });
 
-  it('refuses circle trim and leaves the circle unchanged', () => {
+  it('trims a circle into a native arc and restores it on undo', () => {
     const bus = new CommandBus(createEmptyDocument());
     const c = new CreateCircleCommand({ x: 0, y: 0 }, 5);
     const v = new CreateLineCommand({ x: 0, y: -10 }, { x: 0, y: 10 });
     bus.execute(c);
     bus.execute(v);
-    const before = structuredClone(getEntity(bus.getDocument(), c.getEntityId()));
     const depth = bus.getUndoDepth();
     const engine = new CadCommandEngine(createDefaultEngineRegistry(), bus, host(bus));
     engine.start('TRIM');
     engine.submitPoint({ x: 5, y: 0 });
     const after = getEntity(bus.getDocument(), c.getEntityId());
-    expect(after?.type).toBe('circle');
-    expect(after).toEqual(before);
-    expect(engine.getUiState().message).toMatch(/unsupported until native ARC/i);
-    expect(bus.getUndoDepth()).toBe(depth);
+    expect(after?.type).toBe('arc');
+    if (after?.type === 'arc') {
+      expect(after.geometry.radius).toBe(5);
+      expect(after.geometry.startAngle).toBeCloseTo(Math.PI / 2);
+      expect(after.geometry.endAngle).toBeCloseTo((3 * Math.PI) / 2);
+    }
+    expect(bus.getUndoDepth()).toBe(depth + 1);
+    bus.undo();
+    expect(getEntity(bus.getDocument(), c.getEntityId())?.type).toBe('circle');
+    expect(engine.isRunning()).toBe(true);
+  });
+
+  it('trims one of four sectors and restores every remaining arc', () => {
+    const bus = new CommandBus(createEmptyDocument());
+    const circle = new CreateCircleCommand({ x: 0, y: 0 }, 5);
+    const vertical = new CreateLineCommand({ x: 0, y: -10 }, { x: 0, y: 10 });
+    const horizontal = new CreateLineCommand({ x: -10, y: 0 }, { x: 10, y: 0 });
+    bus.execute(circle);
+    bus.execute(vertical);
+    bus.execute(horizontal);
+    const layerId = getEntity(bus.getDocument(), circle.getEntityId())?.layerId;
+    const engine = new CadCommandEngine(createDefaultEngineRegistry(), bus, host(bus));
+    engine.start('TRIM');
+    engine.submitPoint({
+      x: 5 * Math.cos(Math.PI / 4),
+      y: 5 * Math.sin(Math.PI / 4),
+    });
+    const arcs = bus
+      .getDocument()
+      .entities.filter((entity) => entity.type === 'arc');
+    expect(arcs).toHaveLength(3);
+    expect(arcs.every((entity) => entity.layerId === layerId)).toBe(true);
+    expect(bus.getDocument().entities.filter((entity) => entity.type === 'line')).toHaveLength(2);
+    expect(bus.getDocument().entities.some((entity) => entity.type === 'polyline')).toBe(false);
+    expect(engine.isRunning()).toBe(true);
+    bus.undo();
+    expect(getEntity(bus.getDocument(), circle.getEntityId())?.type).toBe('circle');
+    expect(bus.getDocument().entities.filter((entity) => entity.type === 'arc')).toHaveLength(0);
+    bus.redo();
+    expect(bus.getDocument().entities.filter((entity) => entity.type === 'arc')).toHaveLength(3);
+    expect(getEntity(bus.getDocument(), circle.getEntityId())?.type).toBe('arc');
+    expect(engine.isRunning()).toBe(true);
   });
 
   it('crossing trims the covered portion and skips a bbox-only overlap', () => {

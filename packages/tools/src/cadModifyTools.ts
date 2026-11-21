@@ -101,6 +101,7 @@ export function handleTrimPointerDown(
         e.type === 'polyline' ||
         e.type === 'rectangle' ||
         e.type === 'circle' ||
+        e.type === 'arc' ||
         e.type === 'wall'
       );
     });
@@ -266,6 +267,7 @@ export function handleTrimPointerMove(
       e.type === 'polyline' ||
       e.type === 'rectangle' ||
       e.type === 'circle' ||
+      e.type === 'arc' ||
       e.type === 'wall'
     );
   });

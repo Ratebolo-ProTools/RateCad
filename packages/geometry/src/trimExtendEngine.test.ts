@@ -110,14 +110,19 @@ describe('TrimExtendEngine — basic line trim', () => {
 });
 
 describe('TrimExtendEngine — circle / arc / polyline', () => {
-  it('Test 4 — circle trim is refused without a polyline stand-in', () => {
+  it('Test 4 — circle trim becomes one native arc and keeps the circle unchanged in memory', () => {
     const c = circle('c', { x: 0, y: 0 }, 5);
     const cutter = line('v', { x: 0, y: -10 }, { x: 0, y: 10 });
     const result = trimEntityMulti(c, [cutter], { x: 5, y: 0 });
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.reason).toMatch(/unsupported until native ARC/i);
-    }
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.entities).toHaveLength(1);
+    const arc = result.entities[0]!;
+    expect(arc.type).toBe('arc');
+    if (arc.type !== 'arc') return;
+    expect(arc.geometry.radius).toBe(5);
+    expect(arc.geometry.startAngle).toBeCloseTo(Math.PI / 2);
+    expect(arc.geometry.endAngle).toBeCloseTo((3 * Math.PI) / 2);
     expect(c.type).toBe('circle');
     expect(c.geometry.radius).toBe(5);
   });

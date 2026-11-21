@@ -791,6 +791,24 @@ function strokeEntity(
       ctx.stroke();
       break;
     }
+    case 'arc': {
+      ctx.strokeStyle = color;
+      ctx.lineWidth = lineWidth;
+      ctx.beginPath();
+      const c = worldToScreen(entity.geometry.center, camera, width, height);
+      const r = Math.max(entity.geometry.radius * camera.zoom, 0.5);
+      // World Y is up; canvas angles increase clockwise, so negate the CCW angles.
+      ctx.arc(
+        c.x,
+        c.y,
+        r,
+        -entity.geometry.startAngle,
+        -entity.geometry.endAngle,
+        true,
+      );
+      ctx.stroke();
+      break;
+    }
     case 'polyline': {
       ctx.strokeStyle = color;
       ctx.lineWidth = lineWidth;

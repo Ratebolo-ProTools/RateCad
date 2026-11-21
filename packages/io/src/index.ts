@@ -45,6 +45,7 @@ const ENTITY_TYPES = new Set([
   'line',
   'rectangle',
   'circle',
+  'arc',
   'polyline',
   'dimension',
   'text',
@@ -103,6 +104,26 @@ function assertEntity(raw: unknown, index: number): Entity {
         throw new RatecadParseError(`Entity ${e.id}: invalid circle geometry`);
       }
       break;
+    case 'arc': {
+      const sweep = (angle: number, start: number) => {
+        const tau = Math.PI * 2;
+        const d = (((angle - start) % tau) + tau) % tau;
+        return d === 0 ? tau : d;
+      };
+      if (
+        !isVec2(g.center) ||
+        typeof g.radius !== 'number' ||
+        !(g.radius > 0) ||
+        typeof g.startAngle !== 'number' ||
+        !Number.isFinite(g.startAngle) ||
+        typeof g.endAngle !== 'number' ||
+        !Number.isFinite(g.endAngle) ||
+        !(sweep(g.endAngle, g.startAngle) < Math.PI * 2 - 1e-6)
+      ) {
+        throw new RatecadParseError(`Entity ${e.id}: invalid arc geometry`);
+      }
+      break;
+    }
     case 'polyline': {
       if (!Array.isArray(g.vertices) || g.vertices.length < 2) {
         throw new RatecadParseError(`Entity ${e.id}: polyline needs ≥2 vertices`);

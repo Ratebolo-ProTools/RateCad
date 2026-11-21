@@ -95,6 +95,21 @@ export interface CircleEntity extends EntityBase {
   properties: AppearanceProperties;
 }
 
+/**
+ * Exact circular arc. Angles are radians, 0 at +X, positive counterclockwise.
+ * The stored curve is the counterclockwise sweep from startAngle to endAngle.
+ */
+export interface ArcEntity extends EntityBase {
+  type: 'arc';
+  geometry: {
+    center: Vec2;
+    radius: number;
+    startAngle: number;
+    endAngle: number;
+  };
+  properties: AppearanceProperties;
+}
+
 /** Ordered polyline — one structured entity, not unrelated lines. */
 export interface PolylineEntity extends EntityBase {
   type: 'polyline';
@@ -304,6 +319,7 @@ export type Entity =
   | LineEntity
   | RectangleEntity
   | CircleEntity
+  | ArcEntity
   | PolylineEntity
   | DimensionEntity
   | TextEntity
@@ -453,7 +469,7 @@ export const DOORS_LAYER_ID = 'layer-doors' as LayerId;
 export const WINDOWS_LAYER_ID = 'layer-windows' as LayerId;
 export const ROOMS_LAYER_ID = 'layer-rooms' as LayerId;
 
-export const SCHEMA_VERSION = 11;
+export const SCHEMA_VERSION = 12;
 export const APP_VERSION = '0.10.0';
 
 export const DEFAULT_DIMENSION_STYLE: DimensionStyle = {

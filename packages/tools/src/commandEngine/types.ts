@@ -151,6 +151,8 @@ export type CadCommandInputResult =
       dynamic?: CadDynamicInput | null;
       lastPoint?: Vec2 | null;
       message?: string | null;
+      /** Geometry was committed, but the command stays active. */
+      committed?: boolean;
     }
   | {
       kind: 'complete';

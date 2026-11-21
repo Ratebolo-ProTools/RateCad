@@ -50,6 +50,14 @@ export function translateEntity(entity: Entity, delta: Vec2): Entity | null {
           radius: entity.geometry.radius,
         },
       };
+    case 'arc':
+      return {
+        ...entity,
+        geometry: {
+          ...entity.geometry,
+          center: translatePoint(entity.geometry.center, delta),
+        },
+      };
     case 'polyline': {
       if (entity.geometry.vertices.length < 2) return null;
       const moved: Entity = {
@@ -139,6 +147,10 @@ export type GripEditTarget =
   | { kind: 'rect-corner'; index: 0 | 1 | 2 | 3 }
   | { kind: 'circle-center' }
   | { kind: 'circle-radius' }
+  | { kind: 'arc-center' }
+  | { kind: 'arc-radius' }
+  | { kind: 'arc-start' }
+  | { kind: 'arc-end' }
   | { kind: 'polyline-vertex'; index: number }
   | { kind: 'dim-start' }
   | { kind: 'dim-end' }
@@ -299,6 +311,34 @@ export function applyGripEdit(
       }
       return null;
     }
+    case 'arc': {
+      const { center, radius, startAngle, endAngle } = entity.geometry;
+      if (target.kind === 'arc-center') {
+        return {
+          ...entity,
+          geometry: { ...entity.geometry, center: { ...point } },
+        };
+      }
+      if (target.kind === 'arc-radius') {
+        const nextRadius = distance(center, point);
+        if (!(nextRadius > 1e-12) || !Number.isFinite(nextRadius)) return null;
+        return {
+          ...entity,
+          geometry: { ...entity.geometry, radius: nextRadius },
+        };
+      }
+      if (target.kind === 'arc-start' || target.kind === 'arc-end') {
+        const angle = Math.atan2(point.y - center.y, point.x - center.x);
+        const geometry = {
+          ...entity.geometry,
+          startAngle: target.kind === 'arc-start' ? angle : startAngle,
+          endAngle: target.kind === 'arc-end' ? angle : endAngle,
+        };
+        const next = { ...entity, geometry };
+        return validateEntityGeometry(next) ? next : null;
+      }
+      return null;
+    }
     case 'polyline': {
       if (target.kind !== 'polyline-vertex') return null;
       const verts = entity.geometry.vertices.map((v) => ({ ...v }));
@@ -431,6 +471,22 @@ export function validateEntityGeometry(entity: Entity): boolean {
         Number.isFinite(entity.geometry.radius) &&
         entity.geometry.radius > 1e-12
       );
+    case 'arc': {
+      if (
+        !isFiniteVec2(entity.geometry.center) ||
+        !Number.isFinite(entity.geometry.radius) ||
+        !(entity.geometry.radius > 1e-12) ||
+        !Number.isFinite(entity.geometry.startAngle) ||
+        !Number.isFinite(entity.geometry.endAngle)
+      ) {
+        return false;
+      }
+      const span =
+        ((entity.geometry.endAngle - entity.geometry.startAngle) % (Math.PI * 2) +
+          Math.PI * 2) %
+        (Math.PI * 2);
+      return span > 1e-6 && span < Math.PI * 2 - 1e-6;
+    }
     case 'polyline':
       return (
         entity.geometry.vertices.length >= 2 &&

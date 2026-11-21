@@ -114,6 +114,15 @@ export function scaleEntityToWorldUnit(
           radius: entity.geometry.radius * factor,
         },
       };
+    case 'arc':
+      return {
+        ...entity,
+        geometry: {
+          ...entity.geometry,
+          center: scaleVec(entity.geometry.center, factor),
+          radius: entity.geometry.radius * factor,
+        },
+      };
     case 'polyline':
       return {
         ...entity,

@@ -68,7 +68,18 @@ function commit(
     };
   }
   s.bus.execute(new CreateRectangleCommand(corner1, corner2));
-  return { kind: 'complete', status: 'RECTANGLE complete' };
+  s.corner1 = null;
+  s.length = null;
+  s.width = null;
+  return {
+    kind: 'continue',
+    committed: true,
+    prompt: firstCorner,
+    status: 'RECTANGLE: Specify first corner:',
+    preview: null,
+    lastPoint: null,
+    message: 'Rectangle created — specify the next corner, or Esc to cancel',
+  };
 }
 
 export const rectangleCommand: CadEngineCommand = {
@@ -153,6 +164,14 @@ export const rectangleCommand: CadEngineCommand = {
         ),
         lastPoint: s.corner1,
         message: `Width = ${d.value}`,
+      };
+    }
+    if (!text && prompt.id === 'first') {
+      return {
+        kind: 'continue',
+        prompt: firstCorner,
+        status: 'RECTANGLE: Specify first corner:',
+        message: 'Specify a corner, or Esc to cancel',
       };
     }
     return { kind: 'reject', message: 'Invalid input', prompt };

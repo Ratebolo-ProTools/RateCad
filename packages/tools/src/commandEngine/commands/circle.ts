@@ -40,7 +40,16 @@ function commitRadius(
     return { kind: 'reject', message: 'No center point', prompt };
   }
   s.bus.execute(new CreateCircleCommand(s.center, r));
-  return { kind: 'complete', status: 'CIRCLE complete' };
+  s.center = null;
+  return {
+    kind: 'continue',
+    committed: true,
+    prompt: centerPrompt,
+    status: 'CIRCLE: Specify center point:',
+    preview: null,
+    lastPoint: null,
+    message: 'Circle created — specify the next center, or Esc to cancel',
+  };
 }
 
 export const circleCommand: CadEngineCommand = {
@@ -79,6 +88,14 @@ export const circleCommand: CadEngineCommand = {
       const d = parseDistanceInput(text, ctx.units, ctx.worldUnit);
       if (!d.ok) return { kind: 'reject', message: d.error, prompt };
       return commitRadius(s, d.value, prompt);
+    }
+    if (!text) {
+      return {
+        kind: 'continue',
+        prompt,
+        status: 'CIRCLE: Specify center point:',
+        message: 'Specify a center point, or Esc to cancel',
+      };
     }
     return { kind: 'reject', message: 'Invalid input', prompt };
   },

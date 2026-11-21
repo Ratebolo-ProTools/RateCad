@@ -93,7 +93,7 @@ describe('drawing unit persistence helpers', () => {
 
   it('createEmptyDocument includes drawingUnits and dimension styles', () => {
     const doc = createEmptyDocument('units-test');
-    expect(doc.schemaVersion).toBe(11);
+    expect(doc.schemaVersion).toBe(12);
     expect(doc.blockDefinitions).toEqual([]);
     expect(doc.settings.drawingUnits.linearFormat).toBe('architectural');
     expect(doc.settings.dimensionStyles.length).toBeGreaterThanOrEqual(3);

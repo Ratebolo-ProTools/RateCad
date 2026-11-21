@@ -14,7 +14,6 @@ import {
   type Vec2,
 } from '@ratecad/core';
 import {
-  CIRCLE_TRIM_UNSUPPORTED,
   applyTrimExtend,
   canExtendEntity,
   canTrimEntity,
@@ -188,6 +187,7 @@ function allVisibleCutters(bus: CommandBus): Entity[] {
       e.type === 'polyline' ||
       e.type === 'rectangle' ||
       e.type === 'circle' ||
+      e.type === 'arc' ||
       e.type === 'wall'
     );
   });
@@ -721,18 +721,13 @@ export const trimCommand: CadEngineCommand = {
       const mode = resolveRectSelectMode(a, b);
       const doc = s.bus.getDocument();
       const jobs: Array<{ target: Entity; pick: Vec2 }> = [];
-      let sawCircle = false;
       for (const e of doc.entities) {
         if (!canTrimEntity(e)) continue;
         if (!isEntityModifiable(doc, e)) continue;
         const pick = crossingTrimPick(e, a, b, mode);
         if (!pick) continue;
-        if (e.type === 'circle') {
-          sawCircle = true;
-          continue;
-        }
         const live = getEntity(s.bus.getDocument(), e.id);
-        if (!live || live.type === 'circle') continue;
+        if (!live) continue;
         jobs.push({ target: live, pick });
       }
       const count = commitTrimBatch(s, jobs);
@@ -740,11 +735,9 @@ export const trimCommand: CadEngineCommand = {
         ? mode === 'window'
           ? `Window trimmed ${count} object(s)`
           : `Crossing trimmed ${count} object(s)`
-        : sawCircle
-          ? CIRCLE_TRIM_UNSUPPORTED
-          : mode === 'window'
-            ? 'Window: nothing fully inside'
-            : 'No valid trim boundary. Crossing: nothing trimmed';
+        : mode === 'window'
+          ? 'Window: nothing fully inside'
+          : 'No valid trim boundary. Crossing: nothing trimmed';
       return beginTargets(s, message);
     }
 

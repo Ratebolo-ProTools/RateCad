@@ -14,8 +14,10 @@ import {
   hitTestBlockReference,
   pointInAABB,
   pointInPolygon,
+  arcExtremePoints,
   pointNearCircle,
   pointNearSegment,
+  pointOnArc,
   projectOntoWall,
   wallLayout,
   wallOutlineSegments,
@@ -71,6 +73,15 @@ export function hitTestEntity(
         point,
         entity.geometry.center,
         entity.geometry.radius,
+        tolerance,
+      );
+    case 'arc':
+      return pointOnArc(
+        entity.geometry.center,
+        entity.geometry.radius,
+        entity.geometry.startAngle,
+        entity.geometry.endAngle,
+        point,
         tolerance,
       );
     case 'polyline': {
@@ -261,6 +272,15 @@ export function entityBounds(
         maxY: center.y + radius,
       };
     }
+    case 'arc':
+      return aabbFromMany(
+        arcExtremePoints(
+          entity.geometry.center,
+          entity.geometry.radius,
+          entity.geometry.startAngle,
+          entity.geometry.endAngle,
+        ),
+      );
     case 'polyline': {
       const verts = entity.geometry.vertices;
       if (verts.length === 0) return null;

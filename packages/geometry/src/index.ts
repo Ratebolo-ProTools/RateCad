@@ -1,3 +1,17 @@
+export {
+  TAU,
+  angleOf,
+  angleOnArc,
+  arcEndpoints,
+  arcExtremePoints,
+  ccwSweep,
+  dedupeAngles,
+  intersectCircles,
+  normalizeAngle,
+  pointOnArc,
+  pointOnCircle,
+} from './arc.js';
+
 export type { AABB, Vec2 } from './math.js';
 export {
   aabbFromPoints,
@@ -233,7 +247,6 @@ export {
   canTrimEntity,
   collectIntersectionsOnSegment,
   collectIntersectionsWithCutters,
-  CIRCLE_TRIM_UNSUPPORTED,
   crossingTrimPick,
   cuttingSegments,
   defaultTrimSettings,

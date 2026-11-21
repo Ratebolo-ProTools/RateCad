@@ -63,7 +63,7 @@ describe('block schema 11', () => {
   it('round-trips definitions and references', () => {
     const original = blockDocument();
     const opened = parseDocument(serializeDocument(original));
-    expect(opened.schemaVersion).toBe(11);
+    expect(opened.schemaVersion).toBe(12);
     expect(opened.blockDefinitions).toHaveLength(1);
     expect(opened.blockDefinitions[0]).toMatchObject({
       id: 'bdef-1',
@@ -96,7 +96,7 @@ describe('block schema 11', () => {
     current.document.schemaVersion = 10;
     delete current.document.blockDefinitions;
     const opened = parseDocument(JSON.stringify(current));
-    expect(opened.schemaVersion).toBe(11);
+    expect(opened.schemaVersion).toBe(12);
     expect(opened.blockDefinitions).toEqual([]);
     expect(opened.entities).toEqual([]);
   });

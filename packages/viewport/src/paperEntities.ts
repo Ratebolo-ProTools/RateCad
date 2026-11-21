@@ -15,6 +15,7 @@ import {
   dimensionLayout,
   distance,
   formatLengthInUnits,
+  pointOnArc,
   resolveEffectiveAppearance,
 } from '@ratecad/geometry';
 import type { PaperViewTransform } from './paperSpace.js';
@@ -80,6 +81,21 @@ export function drawPaperSpaceEntities(
         const r = pageUnitToPx(view, entity.geometry.radius);
         ctx.beginPath();
         ctx.arc(c.x, c.y, r, 0, Math.PI * 2);
+        ctx.stroke();
+        break;
+      }
+      case 'arc': {
+        const c = paperToScreen(entity.geometry.center, view);
+        const r = pageUnitToPx(view, entity.geometry.radius);
+        ctx.beginPath();
+        ctx.arc(
+          c.x,
+          c.y,
+          r,
+          -entity.geometry.startAngle,
+          -entity.geometry.endAngle,
+          true,
+        );
         ctx.stroke();
         break;
       }
@@ -296,6 +312,15 @@ function hitPaperEntity(entity: Entity, paper: Vec2, tol: number): boolean {
       const d = distance(paper, entity.geometry.center);
       return Math.abs(d - entity.geometry.radius) <= tol;
     }
+    case 'arc':
+      return pointOnArc(
+        entity.geometry.center,
+        entity.geometry.radius,
+        entity.geometry.startAngle,
+        entity.geometry.endAngle,
+        paper,
+        tol,
+      );
     case 'polyline': {
       const verts = entity.geometry.vertices;
       for (let i = 0; i < verts.length - 1; i += 1) {

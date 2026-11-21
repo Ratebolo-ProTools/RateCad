@@ -123,6 +123,53 @@ function collectEntityCandidates(
       });
       break;
     }
+    case 'arc': {
+      const { center, radius, startAngle, endAngle } = entity.geometry;
+      const start = {
+        x: center.x + radius * Math.cos(startAngle),
+        y: center.y + radius * Math.sin(startAngle),
+      };
+      const end = {
+        x: center.x + radius * Math.cos(endAngle),
+        y: center.y + radius * Math.sin(endAngle),
+      };
+      const sweep = ((endAngle - startAngle) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2);
+      const midAngle = startAngle + (sweep === 0 ? Math.PI : sweep) / 2;
+      out.push(
+        {
+          kind: 'endpoint',
+          point: start,
+          priority: KIND_PRIORITY.endpoint,
+          entityId: entity.id,
+          label: 'Endpoint',
+        },
+        {
+          kind: 'endpoint',
+          point: end,
+          priority: KIND_PRIORITY.endpoint,
+          entityId: entity.id,
+          label: 'Endpoint',
+        },
+        {
+          kind: 'midpoint',
+          point: {
+            x: center.x + radius * Math.cos(midAngle),
+            y: center.y + radius * Math.sin(midAngle),
+          },
+          priority: KIND_PRIORITY.midpoint,
+          entityId: entity.id,
+          label: 'Midpoint',
+        },
+        {
+          kind: 'center',
+          point: { ...center },
+          priority: KIND_PRIORITY.center,
+          entityId: entity.id,
+          label: 'Center',
+        },
+      );
+      break;
+    }
     case 'polyline': {
       const verts = entity.geometry.vertices;
       for (const v of verts) {

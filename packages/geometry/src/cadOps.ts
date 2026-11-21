@@ -17,6 +17,7 @@ import {
   scalePoint,
 } from './intersect.js';
 import { add, distance, scale, sub } from './math.js';
+import { angleOf, angleOnArc, normalizeAngle } from './arc.js';
 import { syncArcPolylineMetadata } from './arcMetadata.js';
 import {
   cloneEntityWithNewId,
@@ -78,6 +79,7 @@ export function entitySegments(entity: Entity): Array<{ a: Vec2; b: Vec2 }> {
       return segs;
     }
     case 'circle':
+    case 'arc':
     case 'dimension':
     case 'text':
     case 'leader':
@@ -104,13 +106,23 @@ function collectIntersectionsOnLine(
     if (t > EPS && t < 1 - EPS) hits.push(p);
   };
 
-  if (cutter.type === 'circle') {
+  if (cutter.type === 'circle' || cutter.type === 'arc') {
     for (const p of intersectSegmentCircle(
       start,
       end,
       cutter.geometry.center,
       cutter.geometry.radius,
     )) {
+      if (
+        cutter.type === 'arc' &&
+        !angleOnArc(
+          angleOf(cutter.geometry.center, p),
+          cutter.geometry.startAngle,
+          cutter.geometry.endAngle,
+        )
+      ) {
+        continue;
+      }
       pushUnique(p);
     }
     return hits;
@@ -704,6 +716,7 @@ export function offsetEntity(
     case 'rectangle':
       return offsetRectangleEntity(entity, distanceValue, sidePoint, newId);
     case 'circle':
+    case 'arc':
     case 'dimension':
     case 'text':
     case 'leader':
@@ -755,6 +768,33 @@ export function mirrorEntity(
         ...entity,
         id: newId,
         geometry: { center: c, radius: entity.geometry.radius },
+      };
+      break;
+    }
+    case 'arc': {
+      const c = map(entity.geometry.center);
+      const start = map(
+        {
+          x: entity.geometry.center.x + entity.geometry.radius * Math.cos(entity.geometry.startAngle),
+          y: entity.geometry.center.y + entity.geometry.radius * Math.sin(entity.geometry.startAngle),
+        },
+      );
+      const end = map(
+        {
+          x: entity.geometry.center.x + entity.geometry.radius * Math.cos(entity.geometry.endAngle),
+          y: entity.geometry.center.y + entity.geometry.radius * Math.sin(entity.geometry.endAngle),
+        },
+      );
+      if (!c || !start || !end) return null;
+      next = {
+        ...entity,
+        id: newId,
+        geometry: {
+          center: c,
+          radius: entity.geometry.radius,
+          startAngle: normalizeAngle(Math.atan2(end.y - c.y, end.x - c.x)),
+          endAngle: normalizeAngle(Math.atan2(start.y - c.y, start.x - c.x)),
+        },
       };
       break;
     }
@@ -908,6 +948,17 @@ export function rotateEntity(
         },
       };
       break;
+    case 'arc':
+      next = {
+        ...entity,
+        geometry: {
+          center: map(entity.geometry.center),
+          radius: entity.geometry.radius,
+          startAngle: normalizeAngle(entity.geometry.startAngle + radians),
+          endAngle: normalizeAngle(entity.geometry.endAngle + radians),
+        },
+      };
+      break;
     case 'polyline':
       next = {
         ...entity,
@@ -1025,6 +1076,16 @@ export function scaleEntity(
       next = {
         ...entity,
         geometry: {
+          center: map(entity.geometry.center),
+          radius: entity.geometry.radius * factor,
+        },
+      };
+      break;
+    case 'arc':
+      next = {
+        ...entity,
+        geometry: {
+          ...entity.geometry,
           center: map(entity.geometry.center),
           radius: entity.geometry.radius * factor,
         },

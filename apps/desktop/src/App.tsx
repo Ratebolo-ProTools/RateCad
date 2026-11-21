@@ -408,6 +408,23 @@ function describeEntity(
           value: fmtLen(doc, entity.geometry.radius * 2),
         },
       ];
+    case 'arc': {
+      const tau = Math.PI * 2;
+      const sweep =
+        (((entity.geometry.endAngle - entity.geometry.startAngle) % tau) + tau) % tau;
+      const deg = (radians: number) => `${((radians * 180) / Math.PI).toFixed(2)}°`;
+      return [
+        ...common,
+        {
+          label: 'Center',
+          value: `${fmtLen(doc, entity.geometry.center.x)}, ${fmtLen(doc, entity.geometry.center.y)}`,
+        },
+        { label: 'Radius', value: fmtLen(doc, entity.geometry.radius) },
+        { label: 'Start angle', value: deg(entity.geometry.startAngle) },
+        { label: 'End angle', value: deg(entity.geometry.endAngle) },
+        { label: 'Sweep', value: deg(sweep) },
+      ];
+    }
     case 'polyline':
       return [
         ...common,
@@ -4959,7 +4976,26 @@ export function App() {
               }
             }}
             onWheel={onWheel}
-            onContextMenu={(e) => e.preventDefault()}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              const eng = engineRef.current;
+              const s = sessionRef.current;
+              const busy =
+                !!eng?.isRunning() ||
+                !!eng?.hasPendingHandoff() ||
+                s.mode !== 'idle' ||
+                !!s.anchor ||
+                s.vertices.length > 0 ||
+                !!s.grip ||
+                !!s.previewEntities ||
+                !!s.selectionRect ||
+                !!s.refEntityId ||
+                s.inputBuffer.length > 0;
+              if (!busy) return;
+              window.dispatchEvent(
+                new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
+              );
+            }}
             onDoubleClick={(e) => {
               e.preventDefault();
               // Layout Paper Space: enter / leave viewport model space

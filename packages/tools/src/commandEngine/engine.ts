@@ -772,6 +772,7 @@ export class CadCommandEngine {
       return;
     }
     // continue
+    if (result.committed) this.rememberCompleted(r.command.name);
     r.prompt = result.prompt;
     r.message = result.message ?? null;
     if (result.status) r.status = result.status;

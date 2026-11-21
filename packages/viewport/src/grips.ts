@@ -2,6 +2,7 @@ import type { Entity, EntityId, Vec2, WallEntity } from '@ratecad/core';
 import {
   clampHostedPosition,
   dimensionLayout,
+  arcEndpoints,
   distance,
   midpoint,
   pointAlongWall,
@@ -96,6 +97,36 @@ export function getEntityGrips(entity: Entity): Grip[] {
           entityId: entity.id,
           index: 3,
           editTarget: { kind: 'circle-radius' },
+        },
+      ];
+    }
+    case 'arc': {
+      const { center, radius, startAngle, endAngle } = entity.geometry;
+      const { start, end, mid } = arcEndpoints(center, radius, startAngle, endAngle);
+      return [
+        {
+          role: 'center',
+          point: { ...center },
+          entityId: entity.id,
+          editTarget: { kind: 'arc-center' },
+        },
+        {
+          role: 'start',
+          point: start,
+          entityId: entity.id,
+          editTarget: { kind: 'arc-start' },
+        },
+        {
+          role: 'end',
+          point: end,
+          entityId: entity.id,
+          editTarget: { kind: 'arc-end' },
+        },
+        {
+          role: 'quadrant',
+          point: mid,
+          entityId: entity.id,
+          editTarget: { kind: 'arc-radius' },
         },
       ];
     }

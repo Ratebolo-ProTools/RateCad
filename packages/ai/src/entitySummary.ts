@@ -36,6 +36,12 @@ export function describeEntity(
     detail = `Rectangle ${pointLabel(entity.geometry.corner1, worldUnit, displayUnit)} to ${pointLabel(entity.geometry.corner2, worldUnit, displayUnit)}`;
   } else if (entity.type === 'circle') {
     detail = `Circle center ${pointLabel(entity.geometry.center, worldUnit, displayUnit)}, radius ${fmt(entity.geometry.radius)}`;
+  } else if (entity.type === 'arc') {
+    const sweep =
+      (((entity.geometry.endAngle - entity.geometry.startAngle) % (Math.PI * 2)) +
+        Math.PI * 2) %
+      (Math.PI * 2);
+    detail = `Arc center ${pointLabel(entity.geometry.center, worldUnit, displayUnit)}, radius ${fmt(entity.geometry.radius)}, sweep ${(sweep * 180 / Math.PI).toFixed(2)}°`;
   } else if (entity.type === 'polyline') {
     const vertices = entity.geometry.vertices;
     const ends =

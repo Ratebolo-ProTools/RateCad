@@ -38,6 +38,8 @@ function prefixFor(type: Entity['type']): string {
       return 'rect';
     case 'circle':
       return 'circle';
+    case 'arc':
+      return 'arc';
     case 'polyline':
       return 'pline';
     case 'dimension':
