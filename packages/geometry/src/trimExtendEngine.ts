@@ -750,19 +750,66 @@ function closestPolylineParam(
   return best;
 }
 
-function trimPolylineMulti(
+type BoundaryTrimPlan =
+  | { ok: true; kept: Entity[]; removed: Vec2[] }
+  | { ok: false; reason: string };
+
+function boundaryFail(reason: string): BoundaryTrimPlan {
+  return { ok: false, reason };
+}
+
+/** Walk [startS, endTarget] along a polyline. endTarget may pass total when closed. */
+function spanChain(
+  verts: Vec2[],
+  closed: boolean,
+  lengths: number[],
+  total: number,
+  startS: number,
+  endTarget: number,
+): Vec2[] {
+  const norm = (s: number) => {
+    if (!closed) return Math.max(0, Math.min(total, s));
+    const m = ((s % total) + total) % total;
+    if (m < EPS || total - m < EPS) return 0;
+    return m;
+  };
+  const chain: Vec2[] = [
+    pointAtPolylineS(verts, closed, lengths, norm(startS)),
+  ];
+  const mids: Array<{ s: number; p: Vec2 }> = [];
+  let vAcc = 0;
+  for (let si = 0; si < lengths.length; si += 1) {
+    vAcc += lengths[si]!;
+    const vertex = verts[(si + 1) % verts.length]!;
+    const marks = closed ? [vAcc, vAcc + total] : [vAcc];
+    for (const cand of marks) {
+      if (cand > startS + EPS && cand < endTarget - EPS) {
+        mids.push({ s: cand, p: { ...vertex } });
+      }
+    }
+  }
+  mids.sort((a, b) => a.s - b.s);
+  for (const mv of mids) {
+    if (distance(chain[chain.length - 1]!, mv.p) > HIT_EPS) chain.push(mv.p);
+  }
+  const endPt = pointAtPolylineS(verts, closed, lengths, norm(endTarget));
+  if (distance(chain[chain.length - 1]!, endPt) > HIT_EPS) chain.push(endPt);
+  return dedupeVerts(chain);
+}
+
+function planBoundaryTrim(
   pline: Extract<Entity, { type: 'polyline' }>,
   cutters: Entity[],
   pickPoint: Vec2,
   edgeMode: EdgeMode,
   allowSelf: boolean,
-): ModifyResult {
+): BoundaryTrimPlan {
   const verts = pline.geometry.vertices;
-  if (verts.length < 2) return fail('Invalid polyline');
+  if (verts.length < 2) return boundaryFail('Invalid polyline');
 
   const closed = pline.geometry.closed;
   const { segCount, lengths, total } = polylineParams(verts, closed);
-  if (!(total > EPS)) return fail('Degenerate polyline');
+  if (!(total > EPS)) return boundaryFail('Degenerate polyline');
 
   const pool = eligibleCutters(cutters, pline.id, allowSelf);
   const near = nearbyCutters(pline, pool, 1e-3, edgeMode);
@@ -801,23 +848,34 @@ function trimPolylineMulti(
       for (const p of collectIntersectionsOnSegment(a, b, cutter, edgeMode)) {
         if (!hits.some((h) => distance(h, p) < HIT_EPS)) hits.push(p);
       }
-      // Also accept exact segment-endpoint intersections (vertex joints)
-      if (cutter.type !== 'circle') {
+      // Vertex joints: a target vertex counts only when it lies in the
+      // interior of a *different* cutter. The target's own corners, and a
+      // mere shared corner (cutter endpoint), are not trim intersections.
+      if (cutter.id === pline.id) continue;
+      if (cutter.type === 'circle' || cutter.type === 'arc') {
+        for (const endPt of [a, b]) {
+          const d = distance(endPt, cutter.geometry.center);
+          const onCurve = Math.abs(d - cutter.geometry.radius) < HIT_EPS;
+          const onArc =
+            cutter.type === 'circle' ||
+            angleOnArc(
+              angleOf(cutter.geometry.center, endPt),
+              cutter.geometry.startAngle,
+              cutter.geometry.endAngle,
+            );
+          if (onCurve && onArc && !hits.some((h) => distance(h, endPt) < HIT_EPS)) {
+            hits.push({ ...endPt });
+          }
+        }
+      } else {
         for (const seg of cuttingSegments(cutter)) {
           for (const endPt of [a, b]) {
+            const t = projectParam(endPt, seg.a, seg.b);
+            if (t <= PARAM_INTERIOR_LO || t >= PARAM_INTERIOR_HI) continue;
             const onCutter =
               distance(endPt, closestPointOnSegment(endPt, seg.a, seg.b)) <
               HIT_EPS;
             if (onCutter && !hits.some((h) => distance(h, endPt) < HIT_EPS)) {
-              hits.push({ ...endPt });
-            }
-          }
-        }
-      } else {
-        for (const endPt of [a, b]) {
-          const d = distance(endPt, cutter.geometry.center);
-          if (Math.abs(d - cutter.geometry.radius) < HIT_EPS) {
-            if (!hits.some((h) => distance(h, endPt) < HIT_EPS)) {
               hits.push({ ...endPt });
             }
           }
@@ -836,7 +894,7 @@ function trimPolylineMulti(
     const a0 = verts[0]!;
     const b0 = verts[1]!;
     const diag = near.length > 0 ? near : pool;
-    return fail(
+    return boundaryFail(
       diag.length === 0
         ? 'No cutting edges'
         : noIntersectionReason(a0, b0, diag),
@@ -847,9 +905,9 @@ function trimPolylineMulti(
   const pick = closestPolylineParam(verts, closed, lengths, pickPoint);
 
   if (closed) {
-    // Like circle trim: a closed loop needs ≥2 cuts to remove one arc and leave an open chain.
+    // A closed boundary needs two real cuts. Remove only the interval that contains the pick.
     if (hitS.length < 2) {
-      return fail(
+      return boundaryFail(
         'Closed polyline trim requires at least two intersection points',
       );
     }
@@ -861,11 +919,12 @@ function trimPolylineMulti(
       if (s1 - s0 > HIT_EPS) intervals.push({ s0, s1 });
     }
     if (intervals.length === 0) {
-      return fail('Closed polyline trim produced no intervals');
+      return boundaryFail('Closed polyline trim produced no intervals');
     }
 
     let removeI = 0;
     let bestMidD = Number.POSITIVE_INFINITY;
+    let found = false;
     for (let i = 0; i < intervals.length; i += 1) {
       const iv = intervals[i]!;
       let ps = pick.s;
@@ -873,61 +932,41 @@ function trimPolylineMulti(
       const mid = (iv.s0 + iv.s1) / 2;
       if (ps >= iv.s0 - EPS && ps <= iv.s1 + EPS) {
         const d = Math.abs(ps - mid);
-        // Prefer tighter midpoint match when pick sits on a shared cut
         if (d < bestMidD) {
           bestMidD = d;
           removeI = i;
+          found = true;
         }
       }
     }
+    if (!found) return boundaryFail('Pick point not on segment');
 
     const rem = intervals[removeI]!;
-    // Remaining open chain: walk forward from rem.s1 → rem.s0 (wrapping)
+    const removed = spanChain(verts, true, lengths, total, rem.s0, rem.s1);
     const startS = rem.s1 >= total ? rem.s1 - total : rem.s1;
-    const endS = rem.s0;
-    const endTarget = endS <= startS + EPS ? endS + total : endS;
-
-    const chain: Vec2[] = [
-      pointAtPolylineS(verts, closed, lengths, startS),
-    ];
-    // Vertices whose arc-length falls strictly inside the keep span, in walk order
-    const midVerts: Array<{ s: number; p: Vec2 }> = [];
-    let vAcc = 0;
-    for (let si = 0; si < segCount; si += 1) {
-      vAcc += lengths[si]!;
-      if (vAcc >= total - EPS) continue; // seam == s0
-      for (const cand of [vAcc, vAcc + total]) {
-        if (cand > startS + EPS && cand < endTarget - EPS) {
-          midVerts.push({
-            s: cand,
-            p: { ...verts[(si + 1) % verts.length]! },
-          });
-        }
-      }
+    const endTarget = rem.s0 <= startS + EPS ? rem.s0 + total : rem.s0;
+    const cleaned = spanChain(verts, true, lengths, total, startS, endTarget);
+    if (cleaned.length < 2 || removed.length < 2) {
+      return boundaryFail('Trim produced no geometry');
     }
-    midVerts.sort((a, b) => a.s - b.s);
-    for (const mv of midVerts) {
-      if (distance(chain[chain.length - 1]!, mv.p) > HIT_EPS) {
-        chain.push(mv.p);
-      }
-    }
-    const endPt = pointAtPolylineS(verts, closed, lengths, endS);
-    if (distance(chain[chain.length - 1]!, endPt) > HIT_EPS) {
-      chain.push(endPt);
-    }
-    const cleaned = dedupeVerts(chain);
-    if (cleaned.length < 2) return fail('Trim produced no geometry');
     if (distance(cleaned[0]!, cleaned[cleaned.length - 1]!) <= HIT_EPS) {
-      return fail('Closed polyline trim produced degenerate open chain');
+      return boundaryFail('Closed polyline trim produced degenerate open chain');
     }
-    return ok([
-      {
-        ...pline,
-        properties: { ...pline.properties },
-        metadata: { ...(pline.metadata ?? {}) },
-        geometry: { vertices: cleaned, closed: false },
-      },
-    ]);
+    if (distance(removed[0]!, removed[removed.length - 1]!) <= HIT_EPS) {
+      return boundaryFail('Trim would produce zero-length removal');
+    }
+    return {
+      ok: true,
+      removed,
+      kept: [
+        {
+          ...pline,
+          properties: { ...pline.properties },
+          metadata: { ...(pline.metadata ?? {}) },
+          geometry: { vertices: cleaned, closed: false },
+        },
+      ],
+    };
   }
 
   // Open polyline: intervals [0, h0], [h0,h1], ..., [hn, total]
@@ -940,33 +979,38 @@ function trimPolylineMulti(
     }
   }
 
-  const results: Entity[] = [];
+  const kept: Entity[] = [];
+  let removed: Vec2[] = [];
   let resultIndex = 0;
   for (let i = 0; i < bounds.length - 1; i += 1) {
-    if (i === removeI) continue;
     const s0 = bounds[i]!;
     const s1 = bounds[i + 1]!;
     if (s1 - s0 < HIT_EPS) continue;
-    const chain: Vec2[] = [pointAtPolylineS(verts, false, lengths, s0)];
-    // Include original vertices strictly inside (s0, s1)
-    let acc2 = 0;
-    for (let si = 0; si < segCount; si += 1) {
-      acc2 += lengths[si]!;
-      // vertex at end of segment si is at s=acc2 (except last)
-      if (acc2 > s0 + EPS && acc2 < s1 - EPS) {
-        chain.push({ ...verts[(si + 1) % verts.length]! });
-      }
+    const chain = spanChain(verts, false, lengths, total, s0, s1);
+    if (chain.length < 2) continue;
+    if (i === removeI) {
+      removed = chain;
+      continue;
     }
-    chain.push(pointAtPolylineS(verts, false, lengths, s1));
-    const cleaned = dedupeVerts(chain);
-    if (cleaned.length >= 2) {
-      results.push(makePline(pline, cleaned, resultIndex));
-      resultIndex += 1;
-    }
+    kept.push(makePline(pline, chain, resultIndex));
+    resultIndex += 1;
   }
 
-  if (results.length === 0) return fail('Trim would remove entire polyline');
-  return ok(results);
+  if (removed.length < 2) return boundaryFail('Trim would produce zero-length removal');
+  if (kept.length === 0) return boundaryFail('Trim would remove entire polyline');
+  return { ok: true, kept, removed };
+}
+
+function trimPolylineMulti(
+  pline: Extract<Entity, { type: 'polyline' }>,
+  cutters: Entity[],
+  pickPoint: Vec2,
+  edgeMode: EdgeMode,
+  allowSelf: boolean,
+): ModifyResult {
+  const plan = planBoundaryTrim(pline, cutters, pickPoint, edgeMode, allowSelf);
+  if (!plan.ok) return fail(plan.reason);
+  return ok(plan.kept);
 }
 
 function dedupeVerts(verts: Vec2[]): Vec2[] {
@@ -1000,28 +1044,12 @@ function makePline(
 // Rectangle → open polyline after edge trim
 // ---------------------------------------------------------------------------
 
-function trimRectangleMulti(
+/** Four finite edges of a rectangle, in boundary order, as one closed polyline. */
+function rectangleBoundary(
   rect: Extract<Entity, { type: 'rectangle' }>,
-  cutters: Entity[],
-  pickPoint: Vec2,
-  edgeMode: EdgeMode,
-  allowSelf: boolean,
-): ModifyResult {
-  const segs = cuttingSegments(rect);
-  let best = 0;
-  let bestD = Number.POSITIVE_INFINITY;
-  for (let i = 0; i < segs.length; i += 1) {
-    const d = distance(
-      pickPoint,
-      closestPointOnSegment(pickPoint, segs[i]!.a, segs[i]!.b),
-    );
-    if (d < bestD) {
-      bestD = d;
-      best = i;
-    }
-  }
+): Extract<Entity, { type: 'polyline' }> {
   const { corner1: c1, corner2: c2 } = rect.geometry;
-  const pline: Extract<Entity, { type: 'polyline' }> = {
+  return {
     id: rect.id,
     type: 'polyline',
     layerId: rect.layerId,
@@ -1037,9 +1065,24 @@ function trimRectangleMulti(
       closed: true,
     },
     properties: { ...rect.properties },
-    metadata: { ...(rect.metadata ?? {}), trimmedFrom: 'rectangle', edgeIndex: best },
+    metadata: { ...(rect.metadata ?? {}), trimmedFrom: 'rectangle' },
   };
-  return trimPolylineMulti(pline, cutters, pickPoint, edgeMode, allowSelf);
+}
+
+function trimRectangleMulti(
+  rect: Extract<Entity, { type: 'rectangle' }>,
+  cutters: Entity[],
+  pickPoint: Vec2,
+  edgeMode: EdgeMode,
+  allowSelf: boolean,
+): ModifyResult {
+  return trimPolylineMulti(
+    rectangleBoundary(rect),
+    cutters,
+    pickPoint,
+    edgeMode,
+    allowSelf,
+  );
 }
 
 function circularCutterHits(
@@ -1671,29 +1714,47 @@ export function trimRemovalPreviewMulti(
   pickPoint: Vec2,
   options: TrimExtendOptions = {},
 ): Entity | null {
-  if (target.type !== 'line' && target.type !== 'wall') return null;
   const edgeMode = options.edgeMode ?? 'no-extend';
   const allowSelf = options.allowSelfAsCutter ?? true;
-  const pool = eligibleCutters(cutters, target.id, allowSelf);
-  const near = nearbyCutters(target, pool, 1e-3, edgeMode);
-  const { start, end } = target.geometry;
-  const plan = planOpenSegmentTrim(
-    start,
-    end,
-    pickPoint,
-    near,
-    edgeMode,
-    allowSelf ? undefined : target.id,
-  );
-  if (!plan.ok) return null;
+  if (target.type === 'line' || target.type === 'wall') {
+    const pool = eligibleCutters(cutters, target.id, allowSelf);
+    const near = nearbyCutters(target, pool, 1e-3, edgeMode);
+    const { start, end } = target.geometry;
+    const plan = planOpenSegmentTrim(
+      start,
+      end,
+      pickPoint,
+      near,
+      edgeMode,
+      allowSelf ? undefined : target.id,
+    );
+    if (!plan.ok) return null;
+    return {
+      ...target,
+      type: 'line',
+      geometry: {
+        start: { ...plan.removed.start },
+        end: { ...plan.removed.end },
+      },
+      properties: { ...target.properties, color: '#ff6b6b' },
+    };
+  }
+  if (target.type !== 'rectangle' && target.type !== 'polyline') return null;
+  const boundary = target.type === 'rectangle' ? rectangleBoundary(target) : target;
+  const plan = planBoundaryTrim(boundary, cutters, pickPoint, edgeMode, allowSelf);
+  if (!plan.ok || plan.removed.length < 2) return null;
   return {
-    ...target,
-    type: 'line',
+    id: target.id,
+    type: 'polyline',
+    layerId: target.layerId,
+    visible: target.visible,
+    locked: target.locked,
     geometry: {
-      start: { ...plan.removed.start },
-      end: { ...plan.removed.end },
+      vertices: plan.removed.map((p) => ({ ...p })),
+      closed: false,
     },
     properties: { ...target.properties, color: '#ff6b6b' },
+    metadata: { ...(target.metadata ?? {}) },
   };
 }
 

@@ -10,6 +10,7 @@ import {
   CreateBlockCommand,
   CreateCircleCommand,
   CreateLineCommand,
+  CreateRectangleCommand,
 } from '@ratecad/commands';
 import {
   CadCommandEngine,
@@ -387,5 +388,87 @@ describe('TRIM command engine', () => {
       expect(after.geometry.end.x).toBeCloseTo(10);
     }
     expect(engine.getUiState().message).toMatch(/Window: nothing fully inside/);
+  });
+
+  it('trims a rectangle, stays active, and undoes the click exactly', () => {
+    const bus = new CommandBus(createEmptyDocument());
+    const box = new CreateRectangleCommand({ x: 0, y: 0 }, { x: 10, y: 10 });
+    const cutter = new CreateLineCommand({ x: -2, y: 5 }, { x: 12, y: 5 });
+    bus.execute(box);
+    bus.execute(cutter);
+    const depth = bus.getUndoDepth();
+    const engine = new CadCommandEngine(createDefaultEngineRegistry(), bus, host(bus));
+    engine.start('TRIM');
+    engine.onPointerMove({ x: 5, y: 10 });
+    const preview = engine.getUiState().previewEntities ?? [];
+    const removal = preview.find((entity) => entity.properties.color === '#ff6b6b');
+    const keptPreview = preview.find((entity) => entity.properties.color === '#7eb6ff');
+    expect(removal?.type).toBe('polyline');
+    expect(keptPreview?.type).toBe('polyline');
+    if (removal?.type !== 'polyline' || keptPreview?.type !== 'polyline') return;
+    expect(removal.geometry.vertices).toEqual([
+      { x: 10, y: 5 },
+      { x: 10, y: 10 },
+      { x: 0, y: 10 },
+      { x: 0, y: 5 },
+    ]);
+    expect(keptPreview.geometry.vertices).toEqual([
+      { x: 0, y: 5 },
+      { x: 0, y: 0 },
+      { x: 10, y: 0 },
+      { x: 10, y: 5 },
+    ]);
+
+    engine.submitPoint({ x: 5, y: 10 });
+    expect(engine.isRunning()).toBe(true);
+    const trimmed = getEntity(bus.getDocument(), box.getEntityId());
+    expect(trimmed?.type).toBe('polyline');
+    if (trimmed?.type === 'polyline') {
+      expect(trimmed.geometry.closed).toBe(false);
+      expect(trimmed.geometry.vertices).toEqual(keptPreview.geometry.vertices);
+    }
+    expect(bus.getUndoDepth()).toBe(depth + 1);
+
+    engine.submitPoint({ x: 5, y: 5 });
+    expect(engine.isRunning()).toBe(true);
+    const lineAfter = getEntity(bus.getDocument(), cutter.getEntityId());
+    expect(lineAfter?.type).toBe('line');
+    if (lineAfter?.type === 'line') expect(lineAfter.geometry.end.x).toBeLessThan(12);
+
+    engine.submitText('undo');
+    expect(getEntity(bus.getDocument(), cutter.getEntityId())?.type).toBe('line');
+    if (getEntity(bus.getDocument(), cutter.getEntityId())?.type === 'line') {
+      expect(getEntity(bus.getDocument(), cutter.getEntityId())).toMatchObject({
+        geometry: { start: { x: -2, y: 5 }, end: { x: 12, y: 5 } },
+      });
+    }
+    bus.undo();
+    const restored = getEntity(bus.getDocument(), box.getEntityId());
+    expect(restored?.type).toBe('rectangle');
+    if (restored?.type === 'rectangle') {
+      expect(restored.geometry.corner1).toEqual({ x: 0, y: 0 });
+      expect(restored.geometry.corner2).toEqual({ x: 10, y: 10 });
+    }
+    bus.redo();
+    expect(getEntity(bus.getDocument(), box.getEntityId())?.type).toBe('polyline');
+    expect(engine.isRunning()).toBe(true);
+  });
+
+  it('does not record undo when a rectangle has no cutting intersection', () => {
+    const bus = new CommandBus(createEmptyDocument());
+    const outer = new CreateRectangleCommand({ x: 0, y: 0 }, { x: 20, y: 20 });
+    const inner = new CreateRectangleCommand({ x: 5, y: 5 }, { x: 8, y: 8 });
+    bus.execute(outer);
+    bus.execute(inner);
+    const depth = bus.getUndoDepth();
+    const engine = new CadCommandEngine(createDefaultEngineRegistry(), bus, host(bus));
+    engine.start('TRIM');
+    engine.submitPoint({ x: 6.5, y: 8 });
+    expect(engine.isRunning()).toBe(true);
+    expect(bus.getUndoDepth()).toBe(depth);
+    expect(getEntity(bus.getDocument(), inner.getEntityId())?.type).toBe('rectangle');
+    engine.handleEscape();
+    expect(engine.isRunning()).toBe(false);
+    expect(getEntity(bus.getDocument(), inner.getEntityId())?.type).toBe('rectangle');
   });
 });

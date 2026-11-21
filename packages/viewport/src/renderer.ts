@@ -1537,6 +1537,8 @@ export function renderDocument(
     ctx.save();
     ctx.setLineDash([5, 4]);
     for (const entity of options.previewEntities) {
+      const explicit = entity.properties.color;
+      const paint = typeof explicit === 'string' ? explicit : theme.preview;
       strokeEntity(
         ctx,
         entity,
@@ -1544,7 +1546,7 @@ export function renderDocument(
         camera,
         width,
         height,
-        theme.preview,
+        paint,
         1.5,
         [],
         1,
