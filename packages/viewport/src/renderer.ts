@@ -107,6 +107,14 @@ export interface RenderOptions {
   showPickbox?: boolean;
   crosshairSize?: CrosshairSize;
   pickboxSize?: PickboxSize;
+  /** CSS hex color for the crosshair and pickbox. */
+  crosshairColor?: string;
+  /** When false, draw the pickbox without the crosshair (object selection). */
+  showCrosshair?: boolean;
+  /** Screen-pixel snap marker size. */
+  snapMarkerPx?: number;
+  /** Draw the snap kind label next to the marker. */
+  showSnapTooltip?: boolean;
   snap?: SnapResult | null;
   grips?: Grip[];
   /** Hide selected originals while showing previewEntities (move). */
@@ -1185,9 +1193,12 @@ function drawSnapIndicator(
   width: number,
   height: number,
   theme: typeof DEFAULT_THEME,
+  markerPx = 10,
+  showTooltip = true,
 ): void {
   if (!snap.snapped || !snap.kind) return;
   const p = worldToScreen(snap.point, camera, width, height);
+  const s = Math.max(6, markerPx) / 10;
   ctx.save();
   ctx.strokeStyle = theme.snap;
   ctx.fillStyle = theme.snap;
@@ -1195,63 +1206,63 @@ function drawSnapIndicator(
 
   switch (snap.kind) {
     case 'endpoint': {
-      ctx.strokeRect(p.x - 6, p.y - 6, 12, 12);
+      ctx.strokeRect(p.x - 6 * s, p.y - 6 * s, 12 * s, 12 * s);
       break;
     }
     case 'midpoint': {
       ctx.beginPath();
-      ctx.moveTo(p.x, p.y - 7);
-      ctx.lineTo(p.x + 7, p.y + 5);
-      ctx.lineTo(p.x - 7, p.y + 5);
+      ctx.moveTo(p.x, p.y - 7 * s);
+      ctx.lineTo(p.x + 7 * s, p.y + 5 * s);
+      ctx.lineTo(p.x - 7 * s, p.y + 5 * s);
       ctx.closePath();
       ctx.stroke();
       break;
     }
     case 'center': {
       ctx.beginPath();
-      ctx.arc(p.x, p.y, 7, 0, Math.PI * 2);
+      ctx.arc(p.x, p.y, 7 * s, 0, Math.PI * 2);
       ctx.stroke();
       ctx.beginPath();
-      ctx.moveTo(p.x - 9, p.y);
-      ctx.lineTo(p.x + 9, p.y);
-      ctx.moveTo(p.x, p.y - 9);
-      ctx.lineTo(p.x, p.y + 9);
+      ctx.moveTo(p.x - 9 * s, p.y);
+      ctx.lineTo(p.x + 9 * s, p.y);
+      ctx.moveTo(p.x, p.y - 9 * s);
+      ctx.lineTo(p.x, p.y + 9 * s);
       ctx.stroke();
       break;
     }
     case 'intersection': {
       ctx.beginPath();
-      ctx.moveTo(p.x - 6, p.y - 6);
-      ctx.lineTo(p.x + 6, p.y + 6);
-      ctx.moveTo(p.x + 6, p.y - 6);
-      ctx.lineTo(p.x - 6, p.y + 6);
+      ctx.moveTo(p.x - 6 * s, p.y - 6 * s);
+      ctx.lineTo(p.x + 6 * s, p.y + 6 * s);
+      ctx.moveTo(p.x + 6 * s, p.y - 6 * s);
+      ctx.lineTo(p.x - 6 * s, p.y + 6 * s);
       ctx.stroke();
       break;
     }
     case 'nearest': {
       ctx.beginPath();
-      ctx.moveTo(p.x, p.y - 7);
-      ctx.lineTo(p.x + 6, p.y);
-      ctx.lineTo(p.x, p.y + 7);
-      ctx.lineTo(p.x - 6, p.y);
+      ctx.moveTo(p.x, p.y - 7 * s);
+      ctx.lineTo(p.x + 6 * s, p.y);
+      ctx.lineTo(p.x, p.y + 7 * s);
+      ctx.lineTo(p.x - 6 * s, p.y);
       ctx.closePath();
       ctx.stroke();
       break;
     }
     case 'grid': {
       ctx.beginPath();
-      ctx.moveTo(p.x - 5, p.y);
-      ctx.lineTo(p.x + 5, p.y);
-      ctx.moveTo(p.x, p.y - 5);
-      ctx.lineTo(p.x, p.y + 5);
+      ctx.moveTo(p.x - 5 * s, p.y);
+      ctx.lineTo(p.x + 5 * s, p.y);
+      ctx.moveTo(p.x, p.y - 5 * s);
+      ctx.lineTo(p.x, p.y + 5 * s);
       ctx.stroke();
       break;
     }
   }
 
-  if (snap.label) {
+  if (showTooltip && snap.label) {
     ctx.font = '11px Cascadia Mono, SF Mono, Consolas, monospace';
-    ctx.fillText(snap.label, p.x + 10, p.y - 10);
+    ctx.fillText(snap.label, p.x + 10 * s, p.y - 10 * s);
   }
   ctx.restore();
 }
@@ -1459,8 +1470,10 @@ function paintDraftingCursor(
     canvasHeight: options.height,
     crosshairSize: options.crosshairSize,
     pickboxSize: options.pickboxSize,
-    showCrosshair: true,
+    showCrosshair: options.showCrosshair !== false,
     showPickbox: options.showPickbox === true,
+    color: options.crosshairColor,
+    pickboxColor: options.crosshairColor,
   });
 }
 
@@ -1551,7 +1564,16 @@ export function renderDocument(
   }
 
   if (options.snap) {
-    drawSnapIndicator(ctx, options.snap, camera, width, height, theme);
+    drawSnapIndicator(
+      ctx,
+      options.snap,
+      camera,
+      width,
+      height,
+      theme,
+      options.snapMarkerPx,
+      options.showSnapTooltip !== false,
+    );
   }
 
   paintDraftingCursor(ctx, options);

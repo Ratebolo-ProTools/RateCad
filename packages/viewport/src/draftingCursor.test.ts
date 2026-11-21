@@ -18,10 +18,10 @@ import {
 } from './draftingCursor.js';
 
 describe('drafting cursor preferences', () => {
-  it('defaults to medium crosshair and pickbox', () => {
-    expect(DEFAULT_CROSSHAIR_SIZE).toBe('medium');
+  it('defaults to a full-viewport crosshair and medium pickbox', () => {
+    expect(DEFAULT_CROSSHAIR_SIZE).toBe('fullscreen');
     expect(DEFAULT_PICKBOX_SIZE).toBe('medium');
-    expect(normalizeCrosshairSize('nope')).toBe('medium');
+    expect(normalizeCrosshairSize('nope')).toBe('fullscreen');
     expect(normalizePickboxSize(null)).toBe('medium');
   });
 
@@ -131,6 +131,51 @@ describe('drafting cursor mode', () => {
     expect(shouldDrawPickbox('draw')).toBe(false);
   });
 
+  it('uses a pickbox while selecting an OFFSET source and a crosshair for the side', () => {
+    const picking = resolveDraftingCursorMode({
+      activeTool: 'offset',
+      pointerOverCanvas: true,
+    });
+    expect(picking).toBe('pick');
+    expect(shouldDrawPickbox(picking)).toBe(true);
+    expect(shouldDrawCrosshair(picking)).toBe(false);
+    const side = resolveDraftingCursorMode({
+      activeTool: 'offset',
+      hasReferenceEntity: true,
+      pointerOverCanvas: true,
+    });
+    expect(side).toBe('draw');
+    expect(shouldDrawCrosshair(side)).toBe(true);
+    expect(shouldDrawPickbox(side)).toBe(false);
+  });
+
+  it('uses a pickbox for TRIM and a crosshair while editing a grip', () => {
+    const trim = resolveDraftingCursorMode({
+      activeTool: 'trim',
+      pointerOverCanvas: true,
+    });
+    expect(trim).toBe('pick');
+    expect(shouldDrawPickbox(trim)).toBe(true);
+    const grip = resolveDraftingCursorMode({
+      activeTool: 'select',
+      sessionMode: 'grip',
+      pointerOverCanvas: true,
+    });
+    expect(grip).toBe('grip');
+    expect(shouldDrawCrosshair(grip)).toBe(true);
+    expect(draftingCssCursor(grip)).toBe('none');
+  });
+
+  it('keeps the text cursor when a dialog is open during LINE', () => {
+    expect(
+      resolveDraftingCursorMode({
+        activeTool: 'line',
+        textDialogOpen: true,
+        pointerOverCanvas: true,
+      }),
+    ).toBe('text');
+  });
+
   it('uses text cursor while annotation dialog is open', () => {
     expect(
       resolveDraftingCursorMode({
@@ -183,6 +228,36 @@ describe('drawDraftingCursor', () => {
     expect(ops).toContain('m:100.5,0.0');
     expect(ops).toContain('l:100.5,130.0');
     expect(ops).toContain('rect:92.5,42.5,15,15');
+  });
+
+  it('spans the viewport in CSS pixels for a fullscreen crosshair', () => {
+    const ops: string[] = [];
+    const ctx = {
+      save: () => undefined,
+      restore: () => undefined,
+      setLineDash: () => undefined,
+      beginPath: () => undefined,
+      moveTo: (x: number, y: number) => ops.push(`m:${x},${y}`),
+      lineTo: (x: number, y: number) => ops.push(`l:${x},${y}`),
+      stroke: () => undefined,
+      strokeRect: () => undefined,
+      strokeStyle: '',
+      lineWidth: 0,
+      lineCap: 'butt',
+      lineJoin: 'miter',
+    } as unknown as CanvasRenderingContext2D;
+    drawDraftingCursor(ctx, {
+      cursorScreen: { x: 120, y: 80 },
+      canvasWidth: 800,
+      canvasHeight: 600,
+      crosshairSize: 'fullscreen',
+      showCrosshair: true,
+      showPickbox: false,
+    });
+    expect(ops).toContain('m:0,80.5');
+    expect(ops).toContain('l:800,80.5');
+    expect(ops).toContain('m:120.5,0');
+    expect(ops).toContain('l:120.5,600');
   });
 
   it('skips drawing when cursor is far outside the canvas', () => {

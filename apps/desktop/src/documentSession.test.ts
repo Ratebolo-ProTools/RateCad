@@ -96,7 +96,7 @@ describe('P3-B1 DocumentSession model', () => {
       expect(DOCUMENT_SESSION_STATE_KEYS).not.toContain(key);
     }
     // Shared prefs remain module-level, not cloned per session.
-    expect(DEFAULT_DRAFTING_PREFS.crosshairSize).toBe('medium');
+    expect(DEFAULT_DRAFTING_PREFS.crosshairSize).toBe('fullscreen');
     expect(DEFAULT_RIBBON_TAB).toBe('home');
   });
 });

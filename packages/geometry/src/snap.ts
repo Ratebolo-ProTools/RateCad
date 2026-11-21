@@ -452,3 +452,66 @@ export function resolveSnap(
     },
   };
 }
+
+function dedupeSnapCandidates(candidates: SnapCandidate[]): SnapCandidate[] {
+  const unique = new Map<string, SnapCandidate>();
+  for (const candidate of candidates) {
+    const key = `${candidate.point.x.toFixed(4)},${candidate.point.y.toFixed(4)}`;
+    const previous = unique.get(key);
+    if (!previous || candidate.priority < previous.priority) {
+      unique.set(key, candidate);
+    }
+  }
+  return [...unique.values()];
+}
+
+/** Object snaps inside the screen-space aperture, nearest first. Grid is excluded. */
+export function snapCandidatesInAperture(
+  cursor: Vec2,
+  doc: DrawingDocument,
+  options: SnapOptions,
+): SnapCandidate[] {
+  if (!options.enabled) return [];
+  const segments = visibleSegments(doc);
+  const pooled = [
+    ...collectSnapCandidates(doc, options),
+    ...intersectionCandidates(segments, cursor, options.tolerance),
+  ];
+  const nearest = nearestOnSegments(cursor, segments, options.tolerance);
+  if (nearest) {
+    pooled.push({
+      kind: 'nearest',
+      point: nearest,
+      priority: KIND_PRIORITY.nearest,
+      label: 'Nearest',
+    });
+  }
+  return dedupeSnapCandidates(pooled)
+    .filter((candidate) => distance(cursor, candidate.point) <= options.tolerance)
+    .sort((a, b) => {
+      const da = distance(cursor, a.point);
+      const db = distance(cursor, b.point);
+      if (Math.abs(da - db) > 1e-9) return da - db;
+      return a.priority - b.priority;
+    });
+}
+
+/** Tab cycle. Index 0 matches the nearest in-aperture candidate. */
+export function resolveSnapCycle(
+  cursor: Vec2,
+  doc: DrawingDocument,
+  options: SnapOptions,
+  cycleIndex: number,
+): SnapResult {
+  const list = snapCandidatesInAperture(cursor, doc, options);
+  if (list.length === 0) return resolveSnap(cursor, doc, options);
+  const index = ((cycleIndex % list.length) + list.length) % list.length;
+  const best = list[index]!;
+  return {
+    point: { ...best.point },
+    snapped: true,
+    kind: best.kind,
+    label: best.label,
+    candidate: best,
+  };
+}

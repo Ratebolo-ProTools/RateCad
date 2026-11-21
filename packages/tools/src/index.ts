@@ -709,7 +709,7 @@ export function handleToolPointerMove(
     return handleExtendPointerMove(session, bus, input, point, snap);
   }
   if (session.activeTool === 'offset') {
-    return handleOffsetPointerMove(session, bus, point, snap);
+    return handleOffsetPointerMove(session, bus, input, snap);
   }
   if (session.activeTool === 'mirror') {
     return handleMirrorPointerMove(session, bus, point, snap);

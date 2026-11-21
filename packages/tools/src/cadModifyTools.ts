@@ -19,17 +19,23 @@ import {
 } from '@ratecad/core';
 import {
   angleBetween,
+  classifyClosedPolylineOffsetSide,
+  classifyRectangleOffsetSide,
+  closedPolylineBoundaryDistance,
   distance,
   extendEntityMulti,
   formatLength,
   mirrorEntity,
   offsetEntity,
+  offsetSidePoint,
   parseAngleDegrees,
   parsePositiveScale,
+  rectangleBoundaryDistance,
   rotateEntity,
   scaleEntity,
   trimEntity,
   trimRemovalPreview,
+  type OffsetSide,
 } from '@ratecad/geometry';
 import { hitTestDocument, screenToleranceToWorld } from '@ratecad/viewport';
 import {
@@ -445,6 +451,8 @@ export function handleExtendPointerMove(
   };
 }
 
+const OFFSET_SIDE_HYSTERESIS_PX = 6;
+
 function estimateOffsetDistance(source: Entity, snapPoint: Vec2): number {
   if (source.type === 'line') {
     const mid = {
@@ -454,10 +462,13 @@ function estimateOffsetDistance(source: Entity, snapPoint: Vec2): number {
     return distance(mid, snapPoint);
   }
   if (source.type === 'polyline' && source.geometry.vertices[0]) {
+    if (source.geometry.closed) {
+      return closedPolylineBoundaryDistance(source, snapPoint) ?? 0;
+    }
     return distance(source.geometry.vertices[0], snapPoint);
   }
   if (source.type === 'rectangle') {
-    return distance(source.geometry.corner1, snapPoint);
+    return rectangleBoundaryDistance(source, snapPoint);
   }
   if (source.type === 'circle') {
     return Math.abs(
@@ -465,6 +476,78 @@ function estimateOffsetDistance(source: Entity, snapPoint: Vec2): number {
     );
   }
   return 1;
+}
+
+function usesBoundarySide(source: Entity): boolean {
+  return (
+    source.type === 'rectangle' ||
+    (source.type === 'polyline' && source.geometry.closed)
+  );
+}
+
+function classifyOffsetSide(
+  source: Entity,
+  cursor: Vec2,
+  hysteresisWorld: number,
+): OffsetSide | 'boundary' | null {
+  if (source.type === 'rectangle') {
+    return classifyRectangleOffsetSide(source, cursor, hysteresisWorld);
+  }
+  if (source.type === 'polyline' && source.geometry.closed) {
+    return classifyClosedPolylineOffsetSide(source, cursor, hysteresisWorld);
+  }
+  return null;
+}
+
+function resolveOffsetRequest(
+  source: Entity,
+  cursor: Vec2,
+  session: ToolSession,
+  camera: PointerInput['camera'],
+):
+  | {
+      ok: true;
+      distance: number;
+      sidePoint: Vec2;
+      side: OffsetSide | null;
+      hold: boolean;
+    }
+  | { ok: false; reason: string } {
+  if (!usesBoundarySide(source)) {
+    const distance =
+      session.numericValue != null
+        ? session.numericValue
+        : estimateOffsetDistance(source, cursor);
+    return {
+      ok: true,
+      distance,
+      sidePoint: cursor,
+      side: null,
+      hold: false,
+    };
+  }
+  const hysteresis = screenToleranceToWorld(camera, OFFSET_SIDE_HYSTERESIS_PX);
+  const classified = classifyOffsetSide(source, cursor, hysteresis);
+  if (!classified) return { ok: false, reason: 'cannot classify offset side' };
+  const side = classified === 'boundary' ? session.offsetSide ?? null : classified;
+  if (!side) {
+    return { ok: false, reason: 'move off the boundary to choose a side' };
+  }
+  if (classified === 'boundary' && session.numericValue == null) {
+    return {
+      ok: true,
+      distance: 0,
+      sidePoint: cursor,
+      side,
+      hold: true,
+    };
+  }
+  const distance =
+    session.numericValue != null
+      ? session.numericValue
+      : estimateOffsetDistance(source, cursor);
+  const sidePoint = offsetSidePoint(source, side) ?? cursor;
+  return { ok: true, distance, sidePoint, side, hold: false };
 }
 
 export function handleOffsetPointerDown(
@@ -494,10 +577,11 @@ export function handleOffsetPointerDown(
       mode: 'offset',
       refEntityId: ent.id,
       anchor: null,
-      numericValue: null,
       inputBuffer: '',
       lastSnap: snap,
-      statusMessage: 'Offset: specify distance (type value+Enter or click)',
+      statusMessage: session.numericValue
+        ? `Offset: choose side (d=${formatLength(session.numericValue)})`
+        : 'Offset: specify distance (type value+Enter or click)',
     };
   }
 
@@ -513,12 +597,24 @@ export function handleOffsetPointerDown(
   const locked = assertModifiable(bus, source, snap, session, 'offset');
   if (locked) return locked;
 
-  const dist =
-    session.numericValue != null
-      ? session.numericValue
-      : estimateOffsetDistance(source, snapPoint);
-
-  if (!(dist > 1e-9)) {
+  const cursor = usesBoundarySide(source) ? input.world : snapPoint;
+  const request = resolveOffsetRequest(source, cursor, session, input.camera);
+  if (!request.ok) {
+    return {
+      ...session,
+      lastSnap: snap,
+      statusMessage: `Offset: ${request.reason}`,
+    };
+  }
+  if (request.hold) {
+    return {
+      ...session,
+      lastSnap: snap,
+      offsetSide: request.side ?? session.offsetSide,
+      statusMessage: 'Offset: move off the boundary to choose a side',
+    };
+  }
+  if (!(request.distance > 1e-9)) {
     return {
       ...session,
       lastSnap: snap,
@@ -527,7 +623,7 @@ export function handleOffsetPointerDown(
   }
 
   try {
-    bus.execute(new OffsetEntityCommand(source, dist, snapPoint));
+    bus.execute(new OffsetEntityCommand(source, request.distance, request.sidePoint));
   } catch (err) {
     return {
       ...session,
@@ -536,47 +632,74 @@ export function handleOffsetPointerDown(
     };
   }
   return {
-    ...cancelTool(session),
+    ...session,
+    mode: 'offset',
+    refEntityId: null,
+    anchor: null,
+    previewEntities: null,
+    hideEntityIds: [],
+    offsetSide: null,
+    inputBuffer: '',
     lastSnap: snap,
-    statusMessage: `Offset created (d=${formatLength(dist)})`,
+    statusMessage: `Offset created (d=${formatLength(request.distance)}) — select next object`,
   };
 }
 
 export function handleOffsetPointerMove(
   session: ToolSession,
   bus: CommandBus,
-  snapPoint: Vec2,
+  input: PointerInput,
   snap: ToolSession['lastSnap'],
 ): ToolSession {
   if (!session.refEntityId) return { ...session, lastSnap: snap };
   const source = getEntity(bus.getDocument(), session.refEntityId);
   if (!source) return { ...session, lastSnap: snap };
 
-  const dist =
-    session.numericValue != null
-      ? session.numericValue
-      : estimateOffsetDistance(source, snapPoint);
-  if (!(dist > 1e-9)) {
+  const cursor = usesBoundarySide(source) ? input.world : snap?.point ?? input.world;
+  const request = resolveOffsetRequest(source, cursor, session, input.camera);
+  if (!request.ok) {
+    return {
+      ...session,
+      lastSnap: snap,
+      previewEntities: null,
+      statusMessage: `Offset: ${request.reason}`,
+    };
+  }
+  if (request.hold) {
+    return {
+      ...session,
+      lastSnap: snap,
+      offsetSide: request.side ?? session.offsetSide,
+    };
+  }
+  if (!(request.distance > 1e-9)) {
     return { ...session, lastSnap: snap, previewEntities: null };
   }
-  const result = offsetEntity(source, dist, snapPoint, createEntityId('preview'));
+  const result = offsetEntity(
+    source,
+    request.distance,
+    request.sidePoint,
+    createEntityId('preview'),
+  );
   if (!result.ok) {
     return {
       ...session,
       lastSnap: snap,
       previewEntities: null,
+      offsetSide: request.side ?? session.offsetSide,
       statusMessage: `Offset: ${result.reason}`,
     };
   }
   return {
     ...session,
     lastSnap: snap,
+    offsetSide: request.side ?? session.offsetSide,
     previewEntities: result.entities,
     hideEntityIds: [],
     statusMessage:
       session.numericValue != null
         ? `Offset: choose side (d=${formatLength(session.numericValue)})`
-        : `Offset: d≈${formatLength(dist)} — click to commit`,
+        : `Offset: d≈${formatLength(request.distance)} — click to commit`,
   };
 }
 
@@ -585,7 +708,7 @@ export function commitOffsetDistance(
   buffer: string,
 ): ToolSession {
   const n = Number(buffer.trim());
-  if (!Number.isFinite(n) || !(Math.abs(n) > 0)) {
+  if (!Number.isFinite(n) || !(n > 0)) {
     return {
       ...session,
       statusMessage: 'Offset: invalid distance',
@@ -594,9 +717,9 @@ export function commitOffsetDistance(
   }
   return {
     ...session,
-    numericValue: Math.abs(n),
+    numericValue: n,
     inputBuffer: '',
-    statusMessage: `Offset: choose side (d=${formatLength(Math.abs(n))})`,
+    statusMessage: `Offset: choose side (d=${formatLength(n)})`,
   };
 }
 

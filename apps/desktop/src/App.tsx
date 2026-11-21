@@ -87,6 +87,7 @@ import {
   parseLengthInput,
   PolarTrackingEngine,
   resolveSnap,
+  resolveSnapCycle,
   SUPPORTED_LENGTH_UNITS,
   suggestedGridSize,
   suggestBlockBasePoint,
@@ -739,6 +740,8 @@ export function App() {
   const commandLineRef = useRef('');
   const commandInputRef = useRef<HTMLInputElement | null>(null);
   const cursorWorldRef = useRef({ x: 0, y: 0 });
+  const snapCycleRef = useRef(0);
+  const snapCycleScreenRef = useRef({ x: 0, y: 0 });
   const engineRef = useRef<CadCommandEngine | null>(null);
   const selectionManagerRef = useRef<SelectionManager | null>(
     documentSessionRef.current.selectionManager,
@@ -1315,36 +1318,31 @@ export function App() {
         : sess.hideEntityIds,
       cursorWorld,
       cursorScreen,
-      showDraftingCursor:
-        pointerOverCanvas &&
-        shouldDrawCrosshair(
-          resolveDraftingCursorMode({
-            activeTool: sess.activeTool,
-            sessionMode: sess.mode,
-            spacePan: spaceDownRef.current,
-            isPanning: isPanningRef.current,
-            pointerOverCanvas,
-            engineCommandName: engUi?.commandName,
-            enginePrompt: engUi?.prompt,
-            textDialogOpen: sess.mode === 'text-input',
-          }),
-        ),
-      showPickbox:
-        pointerOverCanvas &&
-        shouldDrawPickbox(
-          resolveDraftingCursorMode({
-            activeTool: sess.activeTool,
-            sessionMode: sess.mode,
-            spacePan: spaceDownRef.current,
-            isPanning: isPanningRef.current,
-            pointerOverCanvas,
-            engineCommandName: engUi?.commandName,
-            enginePrompt: engUi?.prompt,
-            textDialogOpen: sess.mode === 'text-input',
-          }),
-        ),
+      ...(() => {
+        const cursorMode = resolveDraftingCursorMode({
+          activeTool: sess.activeTool,
+          sessionMode: sess.mode,
+          spacePan: spaceDownRef.current,
+          isPanning: isPanningRef.current,
+          pointerOverCanvas,
+          engineCommandName: engUi?.commandName,
+          enginePrompt: engUi?.prompt,
+          textDialogOpen: sess.mode === 'text-input',
+          hasReferenceEntity: !!sess.refEntityId,
+        });
+        return {
+          showDraftingCursor:
+            pointerOverCanvas &&
+            (shouldDrawCrosshair(cursorMode) || shouldDrawPickbox(cursorMode)),
+          showCrosshair: shouldDrawCrosshair(cursorMode),
+          showPickbox: pointerOverCanvas && shouldDrawPickbox(cursorMode),
+        };
+      })(),
       crosshairSize: draftingPrefs.crosshairSize,
       pickboxSize: draftingPrefs.pickboxSize,
+      crosshairColor: draftingPrefs.crosshairColor,
+      snapMarkerPx: draftingPrefs.snapMarkerPx,
+      showSnapTooltip: draftingPrefs.showSnapTooltip,
       snap: inPaper ? null : sess.lastSnap,
       hoveredEntityId: hoveredId,
       paperSpaceLayout: inPaper ? activeLayout : null,
@@ -1365,6 +1363,9 @@ export function App() {
     pointerOverCanvas,
     draftingPrefs.crosshairSize,
     draftingPrefs.pickboxSize,
+    draftingPrefs.crosshairColor,
+    draftingPrefs.snapMarkerPx,
+    draftingPrefs.showSnapTooltip,
     engineUi,
     hoveredId,
     workspaceMode,
@@ -3427,6 +3428,24 @@ export function App() {
             }
           }
         }
+        if (
+          event.key === 'Enter' &&
+          !eng?.isRunning() &&
+          s.activeTool === 'offset'
+        ) {
+          if (s.inputBuffer.trim().length > 0 && s.refEntityId) {
+            syncSession(commitNumericInput(s, busRef.current));
+            refreshEngineUi();
+            return;
+          }
+          eng?.handleEscape();
+          activateToolOnly('select');
+          clearCommandLine();
+          refreshEngineUi();
+          setCommandFeedback('Select');
+          setDoc(busRef.current.getDocument());
+          return;
+        }
         if (eng) {
           // Prefer engine when running OR when buffer has text OR empty Enter repeat
           if (
@@ -3454,8 +3473,20 @@ export function App() {
 
       if (event.key === 'Tab' && !inField) {
         event.preventDefault();
-        engineRef.current?.cycleSuggestion();
-        refreshEngineUi();
+        const engTab = engineRef.current;
+        const ui = engTab?.getUiState();
+        const buf = (engTab?.getBuffer() ?? commandLineRef.current).trim();
+        if (engTab?.isRunning() || (buf && (ui?.suggestionRows.length ?? 0) > 0)) {
+          engTab?.cycleSuggestion();
+          refreshEngineUi();
+          return;
+        }
+        snapCycleRef.current += 1;
+        const snap = snapWorld(cursorWorldRef.current);
+        syncSession({
+          ...sessionRef.current,
+          lastSnap: snap,
+        });
         return;
       }
       if (event.key === 'ArrowUp' && !inField) {
@@ -3767,11 +3798,18 @@ export function App() {
     (world: { x: number; y: number }) => {
       const d = busRef.current.getDocument();
       const cam = getActiveInteractionCamera();
-      const snap = resolveSnap(world, d, {
+      const snapOptions = {
         enabled: d.settings.snapToGrid,
         gridSize: d.settings.gridSize,
-        tolerance: screenToleranceToWorld(cam, 10),
-      });
+        tolerance: screenToleranceToWorld(
+          cam,
+          draftingPrefs.snapAperturePx,
+        ),
+      };
+      const snap =
+        snapCycleRef.current > 0
+          ? resolveSnapCycle(world, d, snapOptions, snapCycleRef.current)
+          : resolveSnap(world, d, snapOptions);
       const eng = engineRef.current;
       // Typed angle override / absolute coords take priority — skip visual tracking.
       if (eng?.getAngleOverrideDeg() != null) {
@@ -3802,7 +3840,7 @@ export function App() {
               : snap.label,
       };
     },
-    [getActiveInteractionCamera, orthoOn, polarOn, polarIncrement],
+    [draftingPrefs.snapAperturePx, getActiveInteractionCamera, orthoOn, polarOn, polarIncrement],
   );
 
   const onPointerDown = (event: ReactPointerEvent<HTMLCanvasElement>) => {
@@ -4048,7 +4086,11 @@ export function App() {
     }
     syncSession(next);
     // Handoff tools (MIRROR, etc.): after a successful commit, return to Selection Mode.
-    if (eng?.hasPendingHandoff() && eng.finalizeHandoffIfCommitted()) {
+    if (
+      eng?.hasPendingHandoff() &&
+      next.activeTool !== 'offset' &&
+      eng.finalizeHandoffIfCommitted()
+    ) {
       activateToolOnly('select');
       refreshEngineUi();
       setCommandFeedback('Select');
@@ -4070,6 +4112,11 @@ export function App() {
     const screenPos = getScreenFromEvent(event);
     setCursorScreen(screenPos);
     if (!pointerOverCanvas) setPointerOverCanvas(true);
+    const cycleScreen = snapCycleScreenRef.current;
+    if (Math.hypot(screenPos.x - cycleScreen.x, screenPos.y - cycleScreen.y) > 2) {
+      snapCycleRef.current = 0;
+      snapCycleScreenRef.current = screenPos;
+    }
 
     // Paper-space viewport drag preview
     if (
@@ -4706,6 +4753,10 @@ export function App() {
         areaMode={session.areaMode}
         crosshairSize={draftingPrefs.crosshairSize}
         pickboxSize={draftingPrefs.pickboxSize}
+        crosshairColor={draftingPrefs.crosshairColor}
+        snapAperturePx={draftingPrefs.snapAperturePx}
+        snapMarkerPx={draftingPrefs.snapMarkerPx}
+        showSnapTooltip={draftingPrefs.showSnapTooltip}
         workspaceMode={workspaceMode}
         activeLayoutId={doc.activeLayoutId}
         layouts={doc.layouts.map((l) => ({ id: l.id, name: l.name }))}
@@ -4717,6 +4768,18 @@ export function App() {
         }}
         onPickboxSizeChange={(size: PickboxSize) => {
           setDraftingPrefs(updateDraftingPrefs({ pickboxSize: size }));
+        }}
+        onCrosshairColorChange={(color) => {
+          setDraftingPrefs(updateDraftingPrefs({ crosshairColor: color }));
+        }}
+        onSnapApertureChange={(px) => {
+          setDraftingPrefs(updateDraftingPrefs({ snapAperturePx: px }));
+        }}
+        onSnapMarkerChange={(px) => {
+          setDraftingPrefs(updateDraftingPrefs({ snapMarkerPx: px }));
+        }}
+        onShowSnapTooltipChange={(show) => {
+          setDraftingPrefs(updateDraftingPrefs({ showSnapTooltip: show }));
         }}
         onNew={() => void newDrawing()}
         onOpen={() => void openDrawing()}

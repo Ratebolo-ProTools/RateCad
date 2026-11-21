@@ -15,7 +15,12 @@ export {
 } from './math.js';
 
 export type { SnapCandidate, SnapKind, SnapOptions, SnapResult } from './snap.js';
-export { collectSnapCandidates, resolveSnap } from './snap.js';
+export {
+  collectSnapCandidates,
+  resolveSnap,
+  resolveSnapCycle,
+  snapCandidatesInAperture,
+} from './snap.js';
 
 export type {
   DirectionConstraintKind,
@@ -181,17 +186,23 @@ export {
   scalePoint,
 } from './intersect.js';
 
-export type { ModifyResult } from './cadOps.js';
+export type { ModifyResult, OffsetSide, RectangleBounds } from './cadOps.js';
 export {
   entitySegments,
   extendEntity,
   extendLineEntity,
   extendPolylineEntity,
   mirrorEntity,
+  classifyClosedPolylineOffsetSide,
+  classifyRectangleOffsetSide,
+  closedPolylineBoundaryDistance,
   offsetEntity,
   offsetLineEntity,
   offsetPolylineEntity,
   offsetRectangleEntity,
+  offsetSidePoint,
+  rectangleBoundaryDistance,
+  rectangleBounds,
   parseAngleDegrees,
   parsePositiveScale,
   rotateEntity,

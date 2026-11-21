@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createEmptyDocument, type DrawingDocument } from '@ratecad/core';
-import { resolveSnap } from '../src/index.js';
+import { resolveSnap, resolveSnapCycle } from '../src/index.js';
 
 function docWithGeometry(): DrawingDocument {
   const doc = createEmptyDocument();
@@ -130,5 +130,36 @@ describe('resolveSnap', () => {
       { enabled: true, gridSize: 1, tolerance: 0.5 },
     );
     expect(result.kind).toBe('endpoint');
+  });
+
+  it('cycles snap candidates and keeps the committed point on the marker', () => {
+    const doc = docWithGeometry();
+    const cursor = { x: 0.2, y: 0.2 };
+    const options = { enabled: true, gridSize: 1, tolerance: 1 };
+    const first = resolveSnapCycle(cursor, doc, options, 0);
+    const second = resolveSnapCycle(cursor, doc, options, 1);
+    expect(first.snapped).toBe(true);
+    expect(second.snapped).toBe(true);
+    expect(second.point).not.toEqual(first.point);
+    expect(first.candidate?.point).toEqual(first.point);
+    expect(second.candidate?.point).toEqual(second.point);
+  });
+
+  it('uses the supplied screen-space tolerance at different zoom scales', () => {
+    const doc = docWithGeometry();
+    const cursor = { x: 0, y: 0.4 };
+    const tight = resolveSnap(cursor, doc, {
+      enabled: true,
+      gridSize: 1,
+      tolerance: 0.2,
+    });
+    const wide = resolveSnap(cursor, doc, {
+      enabled: true,
+      gridSize: 1,
+      tolerance: 0.5,
+    });
+    expect(tight.kind).not.toBe('endpoint');
+    expect(wide.kind).toBe('endpoint');
+    expect(wide.point).toEqual({ x: 0, y: 0 });
   });
 });

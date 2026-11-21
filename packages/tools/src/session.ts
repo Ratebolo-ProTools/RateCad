@@ -70,6 +70,8 @@ export interface ToolSession {
   refEntityId: EntityId | null;
   /** Numeric distance (offset), radians (rotate), or scale factor */
   numericValue: number | null;
+  /** Last stable rectangle/polyline offset side, held across the boundary band. */
+  offsetSide?: 'inward' | 'outward' | null;
   /** Keyboard entry buffer for distances/angles/factors */
   inputBuffer: string;
   /** Rotate: first reference angle in radians */

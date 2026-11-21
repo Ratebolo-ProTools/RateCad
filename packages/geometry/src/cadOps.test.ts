@@ -5,6 +5,8 @@ import {
   extendLineEntity,
   intersectSegments,
   mirrorEntity,
+  classifyRectangleOffsetSide,
+  offsetEntity,
   offsetLineEntity,
   offsetPolylineEntity,
   offsetRectangleEntity,
@@ -143,6 +145,166 @@ describe('offset', () => {
       expect(result.entities[0].geometry.corner1).toEqual({ x: -1, y: -1 });
       expect(result.entities[0].geometry.corner2).toEqual({ x: 5, y: 3 });
     }
+  });
+
+  it('offsets a 5000 by 4000 rectangle inward and outward by 230', () => {
+    const rect: Extract<Entity, { type: 'rectangle' }> = {
+      id: 'r',
+      type: 'rectangle',
+      layerId: 'layer-0',
+      visible: true,
+      locked: false,
+      geometry: { corner1: { x: 0, y: 0 }, corner2: { x: 5000, y: 4000 } },
+      properties: { color: '#112233', lineweight: 2, linetype: 'dashed' },
+    };
+    const inward = offsetRectangleEntity(rect, 230, { x: 2500, y: 2000 }, 'in');
+    expect(inward.ok).toBe(true);
+    if (inward.ok && inward.entities[0]?.type === 'rectangle') {
+      expect(inward.entities[0].geometry.corner1).toEqual({ x: 230, y: 230 });
+      expect(inward.entities[0].geometry.corner2).toEqual({ x: 4770, y: 3770 });
+      expect(inward.entities[0].id).toBe('in');
+      expect(inward.entities[0].properties).toEqual(rect.properties);
+      expect(inward.entities[0].layerId).toBe(rect.layerId);
+    }
+    expect(rect.geometry.corner2).toEqual({ x: 5000, y: 4000 });
+    const outward = offsetRectangleEntity(rect, 230, { x: -10, y: 2000 }, 'out');
+    expect(outward.ok).toBe(true);
+    if (outward.ok && outward.entities[0]?.type === 'rectangle') {
+      expect(outward.entities[0].geometry.corner1).toEqual({ x: -230, y: -230 });
+      expect(outward.entities[0].geometry.corner2).toEqual({ x: 5230, y: 4230 });
+    }
+  });
+
+  it('keeps a square square and rejects a collapsing inward offset', () => {
+    const square: Extract<Entity, { type: 'rectangle' }> = {
+      id: 's',
+      type: 'rectangle',
+      layerId: 'layer-0',
+      visible: true,
+      locked: false,
+      geometry: { corner1: { x: 0, y: 0 }, corner2: { x: 4000, y: 4000 } },
+      properties: {},
+    };
+    const result = offsetRectangleEntity(square, 150, { x: 2000, y: 2000 }, 's2');
+    expect(result.ok).toBe(true);
+    if (result.ok && result.entities[0]?.type === 'rectangle') {
+      const { corner1, corner2 } = result.entities[0].geometry;
+      const width = Math.abs(corner2.x - corner1.x);
+      const height = Math.abs(corner2.y - corner1.y);
+      expect(width).toBeCloseTo(3700);
+      expect(height).toBeCloseTo(3700);
+    }
+    expect(offsetRectangleEntity(square, 2000, { x: 2000, y: 2000 }, 'bad').ok).toBe(
+      false,
+    );
+  });
+
+  it('rejects zero, negative, and non-finite rectangle distances', () => {
+    const rect: Extract<Entity, { type: 'rectangle' }> = {
+      id: 'r',
+      type: 'rectangle',
+      layerId: 'layer-0',
+      visible: true,
+      locked: false,
+      geometry: { corner1: { x: 0, y: 0 }, corner2: { x: 10, y: 10 } },
+      properties: {},
+    };
+    for (const distance of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      const result = offsetRectangleEntity(rect, distance, { x: 1, y: 1 }, 'x');
+      expect(result.ok).toBe(false);
+    }
+    expect(rect.geometry).toEqual({
+      corner1: { x: 0, y: 0 },
+      corner2: { x: 10, y: 10 },
+    });
+  });
+
+  it('holds the side inside a screen-space boundary band', () => {
+    const rect: Extract<Entity, { type: 'rectangle' }> = {
+      id: 'r',
+      type: 'rectangle',
+      layerId: 'layer-0',
+      visible: true,
+      locked: false,
+      geometry: { corner1: { x: 0, y: 0 }, corner2: { x: 100, y: 80 } },
+      properties: {},
+    };
+    expect(classifyRectangleOffsetSide(rect, { x: 50, y: 40 }, 2)).toBe('inward');
+    expect(classifyRectangleOffsetSide(rect, { x: -20, y: 40 }, 2)).toBe('outward');
+    expect(classifyRectangleOffsetSide(rect, { x: 0.5, y: 40 }, 2)).toBe('boundary');
+  });
+
+  it('offsets a rotated rectangle as one closed polyline', () => {
+    const square: Extract<Entity, { type: 'rectangle' }> = {
+      id: 's',
+      type: 'rectangle',
+      layerId: 'layer-0',
+      visible: true,
+      locked: false,
+      geometry: { corner1: { x: 0, y: 0 }, corner2: { x: 4000, y: 4000 } },
+      properties: { color: '#abcdef' },
+    };
+    const rotated = rotateEntity(square, { x: 2000, y: 2000 }, degreesToRadians(45));
+    expect(rotated?.type).toBe('polyline');
+    if (rotated?.type !== 'polyline') return;
+    expect(rotated.geometry.closed).toBe(true);
+    const result = offsetEntity(rotated, 150, { x: 2000, y: 2000 }, 'rot');
+    expect(result.ok).toBe(true);
+    if (result.ok && result.entities[0]?.type === 'polyline') {
+      const vertices = result.entities[0].geometry.vertices;
+      expect(result.entities[0].geometry.closed).toBe(true);
+      expect(vertices).toHaveLength(4);
+      expect(result.entities[0].properties.color).toBe('#abcdef');
+      for (let i = 0; i < vertices.length; i += 1) {
+        const a = vertices[i]!;
+        const b = vertices[(i + 1) % vertices.length]!;
+        const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+        expect(Math.hypot(mid.x - 2000, mid.y - 2000)).toBeCloseTo(1850, 3);
+      }
+    }
+    expect(rotated.geometry.vertices[0]).toEqual(
+      rotateEntity(square, { x: 2000, y: 2000 }, degreesToRadians(45)) &&
+        rotated.geometry.vertices[0],
+    );
+  });
+
+  it('refuses a collapsed concave polyline offset without changing the source', () => {
+    const pline: Extract<Entity, { type: 'polyline' }> = {
+      id: 'c',
+      type: 'polyline',
+      layerId: 'layer-0',
+      visible: true,
+      locked: false,
+      geometry: {
+        vertices: [
+          { x: 0, y: 0 },
+          { x: 6, y: 0 },
+          { x: 6, y: 2 },
+          { x: 2, y: 2 },
+          { x: 2, y: 4 },
+          { x: 6, y: 4 },
+          { x: 6, y: 6 },
+          { x: 0, y: 6 },
+        ],
+        closed: true,
+      },
+      properties: {},
+    };
+    const before = structuredClone(pline.geometry.vertices);
+    const result = offsetPolylineEntity(pline, 1.5, { x: 1, y: 3 }, 'c2');
+    expect(result.ok).toBe(false);
+    expect(pline.geometry.vertices).toEqual(before);
+  });
+
+  it('keeps an offset line parallel at the requested distance', () => {
+    const src = line('a', { x: 0, y: 0 }, { x: 10, y: 0 });
+    const result = offsetLineEntity(src, 150, { x: 5, y: 1 }, 'b');
+    expect(result.ok).toBe(true);
+    if (result.ok && result.entities[0]?.type === 'line') {
+      expect(result.entities[0].geometry.start).toEqual({ x: 0, y: 150 });
+      expect(result.entities[0].geometry.end).toEqual({ x: 10, y: 150 });
+    }
+    expect(src.geometry.end).toEqual({ x: 10, y: 0 });
   });
 });
 

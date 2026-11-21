@@ -120,6 +120,28 @@ describe('OffsetEntityCommand', () => {
     bus.redo();
     expect(getEntity(bus.getDocument(), newId)).toBeTruthy();
   });
+
+  it('offsets a rectangle inward, preserves the original, and undoes', () => {
+    const bus = new CommandBus(createEmptyDocument());
+    const created = new CreateRectangleCommand({ x: 0, y: 0 }, { x: 5000, y: 4000 });
+    bus.execute(created);
+    const src = getEntity(bus.getDocument(), created.getEntityId())!;
+    const cmd = new OffsetEntityCommand(src, 230, { x: 2500, y: 2000 });
+    const newId = cmd.getCreatedId();
+    bus.execute(cmd);
+    const copy = getEntity(bus.getDocument(), newId);
+    expect(copy?.type).toBe('rectangle');
+    if (copy?.type === 'rectangle') {
+      expect(copy.geometry.corner1).toEqual({ x: 230, y: 230 });
+      expect(copy.geometry.corner2).toEqual({ x: 4770, y: 3770 });
+    }
+    expect(getEntity(bus.getDocument(), src.id)).toEqual(src);
+    bus.undo();
+    expect(getEntity(bus.getDocument(), newId)).toBeUndefined();
+    expect(getEntity(bus.getDocument(), src.id)?.type).toBe('rectangle');
+    bus.redo();
+    expect(getEntity(bus.getDocument(), newId)?.type).toBe('rectangle');
+  });
 });
 
 describe('MirrorEntitiesCommand', () => {

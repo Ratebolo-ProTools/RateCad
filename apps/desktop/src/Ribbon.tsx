@@ -78,12 +78,20 @@ export type RibbonProps = {
   areaMode: AreaToolMode;
   crosshairSize: CrosshairSize;
   pickboxSize: PickboxSize;
+  crosshairColor: string;
+  snapAperturePx: number;
+  snapMarkerPx: number;
+  showSnapTooltip: boolean;
   workspaceMode: WorkspaceMode;
   activeLayoutId: LayoutId | null;
   layouts: RibbonLayoutInfo[];
   annotationScaleLabel: string;
   onCrosshairSizeChange: (size: CrosshairSize) => void;
   onPickboxSizeChange: (size: PickboxSize) => void;
+  onCrosshairColorChange: (color: string) => void;
+  onSnapApertureChange: (px: number) => void;
+  onSnapMarkerChange: (px: number) => void;
+  onShowSnapTooltipChange: (show: boolean) => void;
   onNew: () => void;
   onOpen: () => void;
   onSave: () => void;
@@ -484,6 +492,94 @@ function Flyout({
         {children}
       </div>
     </div>
+  );
+}
+
+function CursorPreferenceControls(props: RibbonProps & { idPrefix: string }) {
+  return (
+    <>
+      <label className="ribbon-prop-label" title="Crosshair size">
+        <span>Crosshair</span>
+        <select
+          className="ribbon-select"
+          data-testid={`${props.idPrefix}crosshair-size`}
+          aria-label="Crosshair size"
+          value={props.crosshairSize}
+          onChange={(e) =>
+            props.onCrosshairSizeChange(e.target.value as CrosshairSize)
+          }
+        >
+          <option value="small">Small</option>
+          <option value="medium">Medium</option>
+          <option value="large">Large</option>
+          <option value="fullscreen">Full Screen</option>
+        </select>
+      </label>
+      <label className="ribbon-prop-label" title="Pickbox size">
+        <span>Pickbox</span>
+        <select
+          className="ribbon-select"
+          data-testid={`${props.idPrefix}pickbox-size`}
+          aria-label="Pickbox size"
+          value={props.pickboxSize}
+          onChange={(e) =>
+            props.onPickboxSizeChange(e.target.value as PickboxSize)
+          }
+        >
+          <option value="small">Small</option>
+          <option value="medium">Medium</option>
+          <option value="large">Large</option>
+        </select>
+      </label>
+      <label className="ribbon-prop-label" title="Crosshair color">
+        <span>Color</span>
+        <input
+          type="color"
+          aria-label="Crosshair color"
+          data-testid={`${props.idPrefix}crosshair-color`}
+          value={props.crosshairColor}
+          onChange={(e) => props.onCrosshairColorChange(e.target.value)}
+        />
+      </label>
+      <label className="ribbon-prop-label" title="Snap aperture in CSS pixels">
+        <span>Aperture</span>
+        <select
+          className="ribbon-select"
+          data-testid={`${props.idPrefix}snap-aperture`}
+          aria-label="Snap aperture"
+          value={String(props.snapAperturePx)}
+          onChange={(e) => props.onSnapApertureChange(Number(e.target.value))}
+        >
+          <option value="10">10</option>
+          <option value="12">12</option>
+          <option value="14">14</option>
+        </select>
+      </label>
+      <label className="ribbon-prop-label" title="Snap marker size in CSS pixels">
+        <span>Marker</span>
+        <select
+          className="ribbon-select"
+          data-testid={`${props.idPrefix}snap-marker`}
+          aria-label="Snap marker size"
+          value={String(props.snapMarkerPx)}
+          onChange={(e) => props.onSnapMarkerChange(Number(e.target.value))}
+        >
+          <option value="8">8</option>
+          <option value="10">10</option>
+          <option value="12">12</option>
+        </select>
+      </label>
+      <label className="ribbon-prop-label" title="Show snap tooltips">
+        <span>Tips</span>
+        <input
+          type="checkbox"
+          aria-label="Show snap tooltips"
+          data-testid={`${props.idPrefix}snap-tooltip`}
+          checked={props.showSnapTooltip}
+          onChange={(e) => props.onShowSnapTooltipChange(e.target.checked)}
+        />
+      </label>
+    </>
   );
 }
 
@@ -1443,41 +1539,7 @@ export function Ribbon(props: RibbonProps) {
                   </button>
                 </div>
                 <div className="ribbon-prop-stack ribbon-cursor-prefs">
-                  <label className="ribbon-prop-label" title="Crosshair size (user preference)">
-                    <span>Crosshair</span>
-                    <select
-                      className="ribbon-select"
-                      data-testid="ribbon-crosshair-size"
-                      aria-label="Crosshair size"
-                      value={props.crosshairSize}
-                      onChange={(e) =>
-                        props.onCrosshairSizeChange(
-                          e.target.value as CrosshairSize,
-                        )
-                      }
-                    >
-                      <option value="small">Small</option>
-                      <option value="medium">Medium</option>
-                      <option value="large">Large</option>
-                      <option value="fullscreen">Full Screen</option>
-                    </select>
-                  </label>
-                  <label className="ribbon-prop-label" title="Pickbox size (selection aperture)">
-                    <span>Pickbox</span>
-                    <select
-                      className="ribbon-select"
-                      data-testid="ribbon-pickbox-size"
-                      aria-label="Pickbox size"
-                      value={props.pickboxSize}
-                      onChange={(e) =>
-                        props.onPickboxSizeChange(e.target.value as PickboxSize)
-                      }
-                    >
-                      <option value="small">Small</option>
-                      <option value="medium">Medium</option>
-                      <option value="large">Large</option>
-                    </select>
-                  </label>
+                  <CursorPreferenceControls {...props} idPrefix="ribbon-" />
                 </div>
               </div>
               <div className="ribbon-panel-title">View</div>
@@ -1906,41 +1968,7 @@ export function Ribbon(props: RibbonProps) {
                   </button>
                 </div>
                 <div className="ribbon-prop-stack ribbon-cursor-prefs">
-                  <label className="ribbon-prop-label" title="Crosshair size">
-                    <span>Crosshair</span>
-                    <select
-                      className="ribbon-select"
-                      data-testid="view-crosshair-size"
-                      aria-label="Crosshair size"
-                      value={props.crosshairSize}
-                      onChange={(e) =>
-                        props.onCrosshairSizeChange(
-                          e.target.value as CrosshairSize,
-                        )
-                      }
-                    >
-                      <option value="small">Small</option>
-                      <option value="medium">Medium</option>
-                      <option value="large">Large</option>
-                      <option value="fullscreen">Full Screen</option>
-                    </select>
-                  </label>
-                  <label className="ribbon-prop-label" title="Pickbox size">
-                    <span>Pickbox</span>
-                    <select
-                      className="ribbon-select"
-                      data-testid="view-pickbox-size"
-                      aria-label="Pickbox size"
-                      value={props.pickboxSize}
-                      onChange={(e) =>
-                        props.onPickboxSizeChange(e.target.value as PickboxSize)
-                      }
-                    >
-                      <option value="small">Small</option>
-                      <option value="medium">Medium</option>
-                      <option value="large">Large</option>
-                    </select>
-                  </label>
+                  <CursorPreferenceControls {...props} idPrefix="view-" />
                 </div>
               </div>
               <div className="ribbon-panel-title">Display</div>

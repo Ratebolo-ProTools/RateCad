@@ -3,6 +3,7 @@ import {
   closestPointOnSegment,
   cross,
   degreesToRadians,
+  dot,
   intersectLineCircle,
   intersectRaySegment,
   intersectSegmentCircle,
@@ -22,6 +23,7 @@ import {
   isFiniteVec2,
   validateEntityGeometry,
 } from './transform.js';
+import { pointInPolygon } from './rooms.js';
 import {
   extendEntityMulti,
   trimEntityMulti,
@@ -330,8 +332,11 @@ export function offsetPolylineEntity(
   sidePoint: Vec2,
   newId: Entity['id'],
 ): ModifyResult {
+  if (polylineHasCurve(pline)) {
+    return fail('Curved geometry offset is unsupported');
+  }
   if (pline.geometry.closed) {
-    return fail('Closed polyline offset not supported in M4');
+    return offsetClosedPolylineEntity(pline, distanceValue, sidePoint, newId);
   }
   if (!(Math.abs(distanceValue) > EPS) || !Number.isFinite(distanceValue)) {
     return fail('Invalid offset distance');
@@ -399,46 +404,288 @@ export function offsetPolylineEntity(
   ]);
 }
 
+export type OffsetSide = 'inward' | 'outward';
+
+export interface RectangleBounds {
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+  width: number;
+  height: number;
+}
+
+export function rectangleBounds(
+  rect: Extract<Entity, { type: 'rectangle' }>,
+): RectangleBounds {
+  const { corner1, corner2 } = rect.geometry;
+  const minX = Math.min(corner1.x, corner2.x);
+  const maxX = Math.max(corner1.x, corner2.x);
+  const minY = Math.min(corner1.y, corner2.y);
+  const maxY = Math.max(corner1.y, corner2.y);
+  return {
+    minX,
+    maxX,
+    minY,
+    maxY,
+    width: maxX - minX,
+    height: maxY - minY,
+  };
+}
+
+/** Perpendicular distance from a point to the nearest rectangle side. */
+export function rectangleBoundaryDistance(
+  rect: Extract<Entity, { type: 'rectangle' }>,
+  point: Vec2,
+): number {
+  const b = rectangleBounds(rect);
+  const dx =
+    point.x < b.minX ? b.minX - point.x : point.x > b.maxX ? point.x - b.maxX : 0;
+  const dy =
+    point.y < b.minY ? b.minY - point.y : point.y > b.maxY ? point.y - b.maxY : 0;
+  if (dx > 0 || dy > 0) return Math.hypot(dx, dy);
+  return Math.min(
+    point.x - b.minX,
+    b.maxX - point.x,
+    point.y - b.minY,
+    b.maxY - point.y,
+  );
+}
+
+/**
+ * Inside the rectangle is inward. Outside is outward.
+ * Points within `hysteresisWorld` of a side stay on the boundary so the
+ * caller can hold the previous side.
+ */
+export function classifyRectangleOffsetSide(
+  rect: Extract<Entity, { type: 'rectangle' }>,
+  point: Vec2,
+  hysteresisWorld = 0,
+): OffsetSide | 'boundary' {
+  if (rectangleBoundaryDistance(rect, point) <= Math.max(0, hysteresisWorld)) {
+    return 'boundary';
+  }
+  const b = rectangleBounds(rect);
+  const inside =
+    point.x > b.minX &&
+    point.x < b.maxX &&
+    point.y > b.minY &&
+    point.y < b.maxY;
+  return inside ? 'inward' : 'outward';
+}
+
+function polylineHasCurve(pline: Extract<Entity, { type: 'polyline' }>): boolean {
+  const arc = (pline.metadata as { arc?: unknown } | undefined)?.arc;
+  return arc != null;
+}
+
+function ringVertices(vertices: Vec2[]): Vec2[] | null {
+  const out: Vec2[] = [];
+  for (const vertex of vertices) {
+    if (!isFiniteVec2(vertex)) return null;
+    if (out.length === 0 || distance(out[out.length - 1]!, vertex) > 1e-9) {
+      out.push(vertex);
+    }
+  }
+  if (out.length > 1 && distance(out[0]!, out[out.length - 1]!) <= 1e-9) {
+    out.pop();
+  }
+  return out.length >= 3 ? out : null;
+}
+
+function signedRingArea(vertices: Vec2[]): number {
+  let area = 0;
+  for (let i = 0; i < vertices.length; i += 1) {
+    const a = vertices[i]!;
+    const b = vertices[(i + 1) % vertices.length]!;
+    area += a.x * b.y - b.x * a.y;
+  }
+  return area / 2;
+}
+
+function minRingDistance(point: Vec2, ring: Vec2[]): number {
+  let best = Number.POSITIVE_INFINITY;
+  for (let i = 0; i < ring.length; i += 1) {
+    const closest = closestPointOnSegment(
+      point,
+      ring[i]!,
+      ring[(i + 1) % ring.length]!,
+    );
+    best = Math.min(best, distance(point, closest));
+  }
+  return best;
+}
+
+export function classifyClosedPolylineOffsetSide(
+  pline: Extract<Entity, { type: 'polyline' }>,
+  point: Vec2,
+  hysteresisWorld = 0,
+): OffsetSide | 'boundary' | null {
+  if (!pline.geometry.closed) return null;
+  const ring = ringVertices(pline.geometry.vertices);
+  if (!ring) return null;
+  if (minRingDistance(point, ring) <= Math.max(0, hysteresisWorld)) {
+    return 'boundary';
+  }
+  return pointInPolygon(point, ring) ? 'inward' : 'outward';
+}
+
+export function closedPolylineBoundaryDistance(
+  pline: Extract<Entity, { type: 'polyline' }>,
+  point: Vec2,
+): number | null {
+  const ring = ringVertices(pline.geometry.vertices);
+  if (!ring) return null;
+  return minRingDistance(point, ring);
+}
+
+function intersectInfiniteLines(
+  a1: Vec2,
+  a2: Vec2,
+  b1: Vec2,
+  b2: Vec2,
+): Vec2 | null {
+  const r = sub(a2, a1);
+  const s = sub(b2, b1);
+  const denom = cross(r, s);
+  if (Math.abs(denom) < 1e-12) return null;
+  const t = cross(sub(b1, a1), s) / denom;
+  const hit = { x: a1.x + t * r.x, y: a1.y + t * r.y };
+  return isFiniteVec2(hit) ? hit : null;
+}
+
+function offsetClosedRing(ring: Vec2[], signedDistance: number): Vec2[] | null {
+  const segments: Array<{ a: Vec2; b: Vec2; dir: Vec2 }> = [];
+  for (let i = 0; i < ring.length; i += 1) {
+    const a = ring[i]!;
+    const b = ring[(i + 1) % ring.length]!;
+    const normal = leftNormal(a, b);
+    if (!normal) return null;
+    const delta = scale(normal, signedDistance);
+    segments.push({ a: add(a, delta), b: add(b, delta), dir: sub(b, a) });
+  }
+  const joins: Vec2[] = [];
+  for (let i = 0; i < segments.length; i += 1) {
+    const prev = segments[(i + segments.length - 1) % segments.length]!;
+    const current = segments[i]!;
+    let join = intersectInfiniteLines(prev.a, prev.b, current.a, current.b);
+    if (!join) {
+      if (dot(prev.dir, current.dir) <= 0) return null;
+      join = { ...prev.b };
+    }
+    joins.push(join);
+  }
+  const count = joins.length;
+  for (let i = 0; i < count; i += 1) {
+    const next = sub(joins[(i + 1) % count]!, joins[i]!);
+    if (dot(segments[i]!.dir, next) <= 1e-8) return null;
+  }
+  for (let i = 0; i < count; i += 1) {
+    for (let j = i + 1; j < count; j += 1) {
+      const gap = Math.min(j - i, count - (j - i));
+      if (gap <= 1) continue;
+      const hit = intersectSegments(
+        joins[i]!,
+        joins[(i + 1) % count]!,
+        joins[j]!,
+        joins[(j + 1) % count]!,
+        false,
+      );
+      if (hit) return null;
+    }
+  }
+  if (Math.abs(signedRingArea(joins)) < 1e-8) return null;
+  return joins;
+}
+
+function offsetClosedPolylineEntity(
+  pline: Extract<Entity, { type: 'polyline' }>,
+  distanceValue: number,
+  sidePoint: Vec2,
+  newId: Entity['id'],
+): ModifyResult {
+  if (!Number.isFinite(distanceValue) || !(distanceValue > EPS)) {
+    return fail('Invalid offset distance');
+  }
+  const ring = ringVertices(pline.geometry.vertices);
+  if (!ring) return fail('Invalid polyline');
+  const ccw = signedRingArea(ring) > 0;
+  const inwardSign = ccw ? 1 : -1;
+  const inside = pointInPolygon(sidePoint, ring);
+  const signed = distanceValue * (inside ? inwardSign : -inwardSign);
+  const joins = offsetClosedRing(ring, signed);
+  if (!joins) return fail('Offset collapses geometry');
+  return ok([
+    {
+      ...pline,
+      id: newId,
+      geometry: { vertices: joins, closed: true },
+    },
+  ]);
+}
+
+/** A point that is unambiguously inside or outside, for side-resolved offsets. */
+export function offsetSidePoint(
+  entity: Entity,
+  side: OffsetSide,
+): Vec2 | null {
+  if (entity.type === 'rectangle') {
+    const b = rectangleBounds(entity);
+    const midY = (b.minY + b.maxY) / 2;
+    if (side === 'inward') {
+      return { x: (b.minX + b.maxX) / 2, y: midY };
+    }
+    return { x: b.maxX + Math.max(b.width, 1), y: midY };
+  }
+  if (entity.type === 'polyline' && entity.geometry.closed) {
+    const ring = ringVertices(entity.geometry.vertices);
+    if (!ring) return null;
+    const a = ring[0]!;
+    const b = ring[1]!;
+    const normal = leftNormal(a, b);
+    if (!normal) return null;
+    const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    const inward = signedRingArea(ring) > 0 ? normal : scale(normal, -1);
+    const probe = side === 'inward' ? 1e-3 : -Math.max(1, distance(a, b));
+    return add(mid, scale(inward, probe));
+  }
+  return null;
+}
+
 export function offsetRectangleEntity(
   rect: Extract<Entity, { type: 'rectangle' }>,
   distanceValue: number,
   sidePoint: Vec2,
   newId: Entity['id'],
 ): ModifyResult {
-  if (!(Math.abs(distanceValue) > EPS) || !Number.isFinite(distanceValue)) {
+  if (!Number.isFinite(distanceValue) || !(distanceValue > EPS)) {
     return fail('Invalid offset distance');
   }
-  const { corner1, corner2 } = rect.geometry;
-  const minX = Math.min(corner1.x, corner2.x);
-  const maxX = Math.max(corner1.x, corner2.x);
-  const minY = Math.min(corner1.y, corner2.y);
-  const maxY = Math.max(corner1.y, corner2.y);
-  const cx = (minX + maxX) / 2;
-  const cy = (minY + maxY) / 2;
-  // Outside if side point outside AABB
+  const bounds = rectangleBounds(rect);
+  if (!(bounds.width > EPS) || !(bounds.height > EPS)) {
+    return fail('Invalid rectangle');
+  }
   const inside =
-    sidePoint.x >= minX &&
-    sidePoint.x <= maxX &&
-    sidePoint.y >= minY &&
-    sidePoint.y <= maxY;
-  const d = Math.abs(distanceValue) * (inside ? -1 : 1);
-  const next = {
-    corner1: { x: minX - d, y: minY - d },
-    corner2: { x: maxX + d, y: maxY + d },
-  };
+    sidePoint.x >= bounds.minX &&
+    sidePoint.x <= bounds.maxX &&
+    sidePoint.y >= bounds.minY &&
+    sidePoint.y <= bounds.maxY;
   if (
-    Math.abs(next.corner1.x - next.corner2.x) < EPS ||
-    Math.abs(next.corner1.y - next.corner2.y) < EPS
+    inside &&
+    (2 * distanceValue + EPS >= bounds.width ||
+      2 * distanceValue + EPS >= bounds.height)
   ) {
     return fail('Offset collapses rectangle');
   }
-  void cx;
-  void cy;
+  const d = inside ? distanceValue : -distanceValue;
   return ok([
     {
       ...rect,
       id: newId,
-      geometry: next,
+      geometry: {
+        corner1: { x: bounds.minX + d, y: bounds.minY + d },
+        corner2: { x: bounds.maxX - d, y: bounds.maxY - d },
+      },
     },
   ]);
 }

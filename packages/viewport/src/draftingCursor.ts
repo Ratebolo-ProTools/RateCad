@@ -15,14 +15,23 @@ export type DraftingCursorMode =
   | 'select'
   | 'draw'
   | 'modify'
+  | 'pick'
+  | 'grip'
   | 'pan'
   | 'zoom-window'
   | 'text'
   | 'ui'
   | 'hidden';
 
-export const DEFAULT_CROSSHAIR_SIZE: CrosshairSize = 'medium';
+/** Full-viewport crosshair. Size remains configurable. */
+export const DEFAULT_CROSSHAIR_SIZE: CrosshairSize = 'fullscreen';
 export const DEFAULT_PICKBOX_SIZE: PickboxSize = 'medium';
+/** Screen-pixel snap aperture. RateCAD default, not an AutoCAD default. */
+export const DEFAULT_SNAP_APERTURE_PX = 12;
+/** Screen-pixel snap marker. */
+export const DEFAULT_SNAP_MARKER_PX = 10;
+export const DEFAULT_CROSSHAIR_COLOR = '#e6ecf2';
+export const DEFAULT_SHOW_SNAP_TOOLTIP = true;
 
 /** Half-length of crosshair arms in CSS pixels (non-fullscreen). */
 export const CROSSHAIR_ARM_PX: Record<Exclude<CrosshairSize, 'fullscreen'>, number> =
@@ -112,6 +121,8 @@ export type ResolveDraftingCursorInput = {
   enginePrompt?: string | null;
   /** True when text annotation dialog is open. */
   textDialogOpen?: boolean;
+  /** OFFSET has a source object and is waiting for the side point. */
+  hasReferenceEntity?: boolean;
 };
 
 /**
@@ -136,6 +147,18 @@ export function resolveDraftingCursorMode(
   ) {
     return 'zoom-window';
   }
+  if (input.sessionMode === 'grip') return 'grip';
+  if (input.activeTool === 'offset') {
+    return input.hasReferenceEntity ? 'draw' : 'pick';
+  }
+  if (
+    input.activeTool === 'trim' ||
+    input.activeTool === 'extend' ||
+    input.activeTool === 'erase' ||
+    input.activeTool === 'fillet'
+  ) {
+    return 'pick';
+  }
   if (input.activeTool === 'select') return 'select';
   if (DRAW_TOOLS.has(input.activeTool)) return 'draw';
   if (MODIFY_TOOLS.has(input.activeTool)) return 'modify';
@@ -147,12 +170,13 @@ export function shouldDrawCrosshair(mode: DraftingCursorMode): boolean {
     mode === 'select' ||
     mode === 'draw' ||
     mode === 'modify' ||
+    mode === 'grip' ||
     mode === 'zoom-window'
   );
 }
 
 export function shouldDrawPickbox(mode: DraftingCursorMode): boolean {
-  return mode === 'select';
+  return mode === 'select' || mode === 'pick';
 }
 
 /** CSS cursor keyword for the canvas element. */
@@ -169,6 +193,8 @@ export function draftingCssCursor(mode: DraftingCursorMode): string {
     case 'select':
     case 'draw':
     case 'modify':
+    case 'pick':
+    case 'grip':
     case 'zoom-window':
       return 'none';
     default:
@@ -271,4 +297,26 @@ export function normalizeCrosshairSize(raw: unknown): CrosshairSize {
 export function normalizePickboxSize(raw: unknown): PickboxSize {
   if (raw === 'small' || raw === 'medium' || raw === 'large') return raw;
   return DEFAULT_PICKBOX_SIZE;
+}
+
+export function normalizeSnapAperturePx(raw: unknown): number {
+  const value = typeof raw === 'number' ? raw : Number(raw);
+  if (value === 10 || value === 12 || value === 14) return value;
+  return DEFAULT_SNAP_APERTURE_PX;
+}
+
+export function normalizeSnapMarkerPx(raw: unknown): number {
+  const value = typeof raw === 'number' ? raw : Number(raw);
+  if (value === 8 || value === 10 || value === 12) return value;
+  return DEFAULT_SNAP_MARKER_PX;
+}
+
+export function normalizeCrosshairColor(raw: unknown): string {
+  if (typeof raw === 'string' && /^#[0-9a-fA-F]{6}$/.test(raw)) return raw;
+  return DEFAULT_CROSSHAIR_COLOR;
+}
+
+export function normalizeShowSnapTooltip(raw: unknown): boolean {
+  if (raw === false) return false;
+  return DEFAULT_SHOW_SNAP_TOOLTIP;
 }
