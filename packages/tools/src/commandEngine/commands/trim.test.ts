@@ -399,7 +399,7 @@ describe('TRIM command engine', () => {
     const depth = bus.getUndoDepth();
     const engine = new CadCommandEngine(createDefaultEngineRegistry(), bus, host(bus));
     engine.start('TRIM');
-    engine.onPointerMove({ x: 5, y: 10 });
+    engine.onPointerMove({ x: 10, y: 8 });
     const preview = engine.getUiState().previewEntities ?? [];
     const removal = preview.find((entity) => entity.properties.color === '#ff6b6b');
     const keptPreview = preview.find((entity) => entity.properties.color === '#7eb6ff');
@@ -409,17 +409,16 @@ describe('TRIM command engine', () => {
     expect(removal.geometry.vertices).toEqual([
       { x: 10, y: 5 },
       { x: 10, y: 10 },
-      { x: 0, y: 10 },
-      { x: 0, y: 5 },
     ]);
     expect(keptPreview.geometry.vertices).toEqual([
-      { x: 0, y: 5 },
+      { x: 10, y: 10 },
+      { x: 0, y: 10 },
       { x: 0, y: 0 },
       { x: 10, y: 0 },
       { x: 10, y: 5 },
     ]);
 
-    engine.submitPoint({ x: 5, y: 10 });
+    engine.submitPoint({ x: 10, y: 8 });
     expect(engine.isRunning()).toBe(true);
     const trimmed = getEntity(bus.getDocument(), box.getEntityId());
     expect(trimmed?.type).toBe('polyline');

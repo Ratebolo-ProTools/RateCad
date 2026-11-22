@@ -31,14 +31,15 @@ describe('rectangle trim save and AI rectangle', () => {
       activateSelect: () => {},
     });
     engine.start('TRIM');
-    engine.submitPoint({ x: 5, y: 10 });
+    engine.submitPoint({ x: 10, y: 8 });
     expect(engine.isRunning()).toBe(true);
     const trimmed = getEntity(bus.getDocument(), box.id);
     expect(trimmed?.type).toBe('polyline');
     if (trimmed?.type !== 'polyline') return;
     expect(trimmed.geometry.closed).toBe(false);
     expect(trimmed.geometry.vertices).toEqual([
-      { x: 0, y: 5 },
+      { x: 10, y: 10 },
+      { x: 0, y: 10 },
       { x: 0, y: 0 },
       { x: 10, y: 0 },
       { x: 10, y: 5 },

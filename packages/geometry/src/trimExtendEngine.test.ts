@@ -158,22 +158,26 @@ describe('TrimExtendEngine — circle / arc / polyline', () => {
       { x: 12, y: 0 },
     ]);
     const cutter = line('c', { x: 6, y: -1 }, { x: 6, y: 1 });
-    const result = trimEntityMulti(target, [cutter], { x: 10, y: 0 });
+    const missed = trimEntityMulti(target, [cutter], { x: 10, y: 0 });
+    expect(missed.ok).toBe(false);
+    const result = trimEntityMulti(target, [cutter], { x: 7, y: 0 });
     expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.entities.length).toBeGreaterThanOrEqual(1);
-      // Right portion beyond 6 should be removed or shortened
-      const rightMost = Math.max(
-        ...result.entities.flatMap((e) =>
-          e.type === 'polyline'
-            ? e.geometry.vertices.map((v) => v.x)
-            : e.type === 'line'
-              ? [e.geometry.start.x, e.geometry.end.x]
-              : [0],
-        ),
-      );
-      expect(rightMost).toBeLessThanOrEqual(6 + 1e-6);
-    }
+    if (!result.ok) return;
+    expect(result.entities).toHaveLength(2);
+    const chains = result.entities.map((entity) =>
+      entity.type === 'polyline' ? entity.geometry.vertices : [],
+    );
+    expect(chains).toEqual([
+      [
+        { x: 0, y: 0 },
+        { x: 4, y: 0 },
+        { x: 6, y: 0 },
+      ],
+      [
+        { x: 8, y: 0 },
+        { x: 12, y: 0 },
+      ],
+    ]);
   });
 });
 

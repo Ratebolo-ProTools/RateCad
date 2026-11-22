@@ -147,7 +147,7 @@ describe('P4-B2 polyline / closed / intersections', () => {
     }
   });
 
-  it('7: closed polyline requires two cuts; two cuts open safely', () => {
+  it('7: one cut on the picked edge opens that edge; two cuts remove only that interval', () => {
     const closed = pline(
       'cl',
       [
@@ -163,8 +163,17 @@ describe('P4-B2 polyline / closed / intersections', () => {
       [line('a', { x: 3, y: -1 }, { x: 3, y: 1 })],
       { x: 1.5, y: 0 },
     );
-    expect(one.ok).toBe(false);
-    if (!one.ok) expect(one.reason).toMatch(/two intersection/i);
+    expect(one.ok).toBe(true);
+    if (one.ok && one.entities[0]?.type === 'polyline') {
+      expect(one.entities[0].geometry.closed).toBe(false);
+      expect(one.entities[0].geometry.vertices).toEqual([
+        { x: 3, y: 0 },
+        { x: 10, y: 0 },
+        { x: 10, y: 10 },
+        { x: 0, y: 10 },
+        { x: 0, y: 0 },
+      ]);
+    }
 
     const two = trimEntityMulti(
       closed,
@@ -175,17 +184,16 @@ describe('P4-B2 polyline / closed / intersections', () => {
       { x: 5, y: 0 },
     );
     expect(two.ok).toBe(true);
-    if (!two.ok) return;
-    expect(two.entities).toHaveLength(1);
-    const e = two.entities[0]!;
-    expect(e.type).toBe('polyline');
-    if (e.type === 'polyline') {
-      expect(e.geometry.closed).toBe(false);
-      expect(e.geometry.vertices.length).toBeGreaterThanOrEqual(2);
-      const a = e.geometry.vertices[0]!;
-      const b = e.geometry.vertices[e.geometry.vertices.length - 1]!;
-      expect(Math.hypot(a.x - b.x, a.y - b.y)).toBeGreaterThan(1e-6);
-    }
+    if (!two.ok || two.entities[0]?.type !== 'polyline') return;
+    expect(two.entities[0].geometry.closed).toBe(false);
+    expect(two.entities[0].geometry.vertices).toEqual([
+      { x: 7, y: 0 },
+      { x: 10, y: 0 },
+      { x: 10, y: 10 },
+      { x: 0, y: 10 },
+      { x: 0, y: 0 },
+      { x: 3, y: 0 },
+    ]);
   });
 
   it('8: parallel boundaries fail without modifying', () => {

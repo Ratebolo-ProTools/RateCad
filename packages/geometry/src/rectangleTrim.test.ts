@@ -157,15 +157,18 @@ describe('rectangle TRIM', () => {
     ]);
   });
 
-  it('converts a trimmed rectangle edge span into one open polyline', () => {
+  it('converts the clicked rectangle edge into one open polyline', () => {
     const source = structuredClone(box);
-    const result = trimEntityMulti(source, [source, cutter], { x: 5, y: 10 });
-    const preview = trimRemovalPreviewMulti(source, [source, cutter], { x: 5, y: 10 });
+    const miss = trimEntityMulti(source, [source, cutter], { x: 5, y: 10 });
+    expect(miss.ok).toBe(false);
+    const result = trimEntityMulti(source, [source, cutter], { x: 10, y: 8 });
+    const preview = trimRemovalPreviewMulti(source, [source, cutter], { x: 10, y: 8 });
     expect(result.ok).toBe(true);
     if (!result.ok || result.entities[0]?.type !== 'polyline') return;
     expectOpenBoundary(result.entities[0], rectEdges(box));
     expect(result.entities[0].geometry.vertices).toEqual([
-      { x: 0, y: 5 },
+      { x: 10, y: 10 },
+      { x: 0, y: 10 },
       { x: 0, y: 0 },
       { x: 10, y: 0 },
       { x: 10, y: 5 },
@@ -177,12 +180,10 @@ describe('rectangle TRIM', () => {
       expect(preview.geometry.vertices).toEqual([
         { x: 10, y: 5 },
         { x: 10, y: 10 },
-        { x: 0, y: 10 },
-        { x: 0, y: 5 },
       ]);
       expect(preview.properties.color).toBe('#ff6b6b');
-      expect(chainDistance({ x: 5, y: 10 }, preview.geometry.vertices)).toBeLessThan(1e-6);
-      expect(chainDistance({ x: 5, y: 10 }, result.entities[0].geometry.vertices)).toBeGreaterThan(1);
+      expect(chainDistance({ x: 10, y: 8 }, preview.geometry.vertices)).toBeLessThan(1e-6);
+      expect(chainDistance({ x: 10, y: 8 }, result.entities[0].geometry.vertices)).toBeGreaterThan(1);
     }
     expect(source.type).toBe('rectangle');
     expect(source.geometry).toEqual(box.geometry);
@@ -214,10 +215,11 @@ describe('rectangle TRIM', () => {
     expect(bar.type).toBe('rectangle');
   });
 
-  it('removes only the overlapping corner when that corner is picked', () => {
+  it('removes only the clicked edge interval of an overlapping corner', () => {
     const target = rect('a', { x: 0, y: 0 }, { x: 10, y: 10 });
     const other = rect('b', { x: 6, y: 4 }, { x: 16, y: 14 });
     const result = trimEntityMulti(target, [target, other], { x: 8, y: 10 });
+    const preview = trimRemovalPreviewMulti(target, [target, other], { x: 8, y: 10 });
     expect(result.ok).toBe(true);
     if (!result.ok || result.entities[0]?.type !== 'polyline') return;
     expect(result.entities[0].geometry.vertices).toEqual([
@@ -225,12 +227,19 @@ describe('rectangle TRIM', () => {
       { x: 0, y: 10 },
       { x: 0, y: 0 },
       { x: 10, y: 0 },
-      { x: 10, y: 4 },
+      { x: 10, y: 10 },
     ]);
+    expect(preview?.type).toBe('polyline');
+    if (preview?.type === 'polyline') {
+      expect(preview.geometry.vertices).toEqual([
+        { x: 10, y: 10 },
+        { x: 6, y: 10 },
+      ]);
+    }
     expect(other.geometry.corner2).toEqual({ x: 16, y: 14 });
   });
 
-  it('does not invent a trim for a shared edge, a contained rectangle, or a corner touch', () => {
+  it('removes a fully shared edge and leaves a corner touch or contained rectangle unchanged', () => {
     const shared = trimEntityMulti(
       rect('sa', { x: 0, y: 0 }, { x: 10, y: 10 }),
       [
@@ -239,6 +248,16 @@ describe('rectangle TRIM', () => {
       ],
       { x: 10, y: 5 },
     );
+    expect(shared.ok).toBe(true);
+    if (shared.ok && shared.entities[0]?.type === 'polyline') {
+      expect(shared.entities[0].geometry.closed).toBe(false);
+      expect(shared.entities[0].geometry.vertices).toEqual([
+        { x: 10, y: 10 },
+        { x: 0, y: 10 },
+        { x: 0, y: 0 },
+        { x: 10, y: 0 },
+      ]);
+    }
     const contained = trimEntityMulti(
       rect('inner', { x: 4, y: 4 }, { x: 6, y: 6 }),
       [
@@ -255,7 +274,6 @@ describe('rectangle TRIM', () => {
       ],
       { x: 2, y: 4 },
     );
-    expect(shared.ok).toBe(false);
     expect(contained.ok).toBe(false);
     expect(corner.ok).toBe(false);
     expect(trimRemovalPreviewMulti(
@@ -272,12 +290,13 @@ describe('rectangle TRIM', () => {
       { x: 10, y: 10 },
       { x: 0, y: 10 },
     ]);
-    const result = trimEntityMulti(closed, [closed, cutter], { x: 5, y: 10 });
-    const preview = trimRemovalPreviewMulti(closed, [closed, cutter], { x: 5, y: 10 });
+    const result = trimEntityMulti(closed, [closed, cutter], { x: 10, y: 8 });
+    const preview = trimRemovalPreviewMulti(closed, [closed, cutter], { x: 10, y: 8 });
     expect(result.ok).toBe(true);
     if (!result.ok || result.entities[0]?.type !== 'polyline' || preview?.type !== 'polyline') return;
     expect(result.entities[0].geometry.vertices).toEqual([
-      { x: 0, y: 5 },
+      { x: 10, y: 10 },
+      { x: 0, y: 10 },
       { x: 0, y: 0 },
       { x: 10, y: 0 },
       { x: 10, y: 5 },
@@ -285,8 +304,6 @@ describe('rectangle TRIM', () => {
     expect(preview.geometry.vertices).toEqual([
       { x: 10, y: 5 },
       { x: 10, y: 10 },
-      { x: 0, y: 10 },
-      { x: 0, y: 5 },
     ]);
   });
 
@@ -298,7 +315,7 @@ describe('rectangle TRIM', () => {
       { x: -2, y: 10 },
     ]);
     const blade = line('blade', { x: -4, y: 6 }, { x: 14, y: 6 });
-    const pick = { x: 3, y: 11 };
+    const pick = { x: 8.6, y: 9 };
     const result = trimEntityMulti(rotated, [rotated, blade], pick);
     const preview = trimRemovalPreviewMulti(rotated, [rotated, blade], pick);
     expect(result.ok).toBe(true);
@@ -349,6 +366,229 @@ describe('rectangle TRIM', () => {
       { x: 10, y: 0 },
       { x: 10, y: 3 },
     ]);
+  });
+
+  it('removes each overlapping-rectangle edge interval and nothing else', () => {
+    const target = rect('a', { x: 0, y: 0 }, { x: 10, y: 10 });
+    const other = rect('b', { x: 6, y: 4 }, { x: 16, y: 14 });
+    const cases: Array<{
+      pick: Vec2;
+      removed: Vec2[];
+      kept: Vec2[];
+    }> = [
+      {
+        pick: { x: 3, y: 10 },
+        removed: [{ x: 6, y: 10 }, { x: 0, y: 10 }],
+        kept: [
+          { x: 0, y: 10 },
+          { x: 0, y: 0 },
+          { x: 10, y: 0 },
+          { x: 10, y: 10 },
+          { x: 6, y: 10 },
+        ],
+      },
+      {
+        pick: { x: 8, y: 10 },
+        removed: [{ x: 10, y: 10 }, { x: 6, y: 10 }],
+        kept: [
+          { x: 6, y: 10 },
+          { x: 0, y: 10 },
+          { x: 0, y: 0 },
+          { x: 10, y: 0 },
+          { x: 10, y: 10 },
+        ],
+      },
+      {
+        pick: { x: 9, y: 10 },
+        removed: [{ x: 10, y: 10 }, { x: 6, y: 10 }],
+        kept: [
+          { x: 6, y: 10 },
+          { x: 0, y: 10 },
+          { x: 0, y: 0 },
+          { x: 10, y: 0 },
+          { x: 10, y: 10 },
+        ],
+      },
+      {
+        pick: { x: 10, y: 2 },
+        removed: [{ x: 10, y: 0 }, { x: 10, y: 4 }],
+        kept: [
+          { x: 10, y: 4 },
+          { x: 10, y: 10 },
+          { x: 0, y: 10 },
+          { x: 0, y: 0 },
+          { x: 10, y: 0 },
+        ],
+      },
+      {
+        pick: { x: 10, y: 7 },
+        removed: [{ x: 10, y: 4 }, { x: 10, y: 10 }],
+        kept: [
+          { x: 10, y: 10 },
+          { x: 0, y: 10 },
+          { x: 0, y: 0 },
+          { x: 10, y: 0 },
+          { x: 10, y: 4 },
+        ],
+      },
+    ];
+    for (const sample of cases) {
+      const result = trimEntityMulti(target, [target, other], sample.pick);
+      const preview = trimRemovalPreviewMulti(target, [target, other], sample.pick);
+      expect(result.ok).toBe(true);
+      if (!result.ok || result.entities[0]?.type !== 'polyline' || preview?.type !== 'polyline') {
+        continue;
+      }
+      expect(result.entities).toHaveLength(1);
+      expect(result.entities[0].geometry.closed).toBe(false);
+      expect(result.entities[0].geometry.vertices).toEqual(sample.kept);
+      expect(preview.geometry.vertices).toEqual(sample.removed);
+      expect(result.entities[0].layerId).toBe(target.layerId);
+      expect(result.entities[0].properties.color).toBe(props.color);
+      expect(result.entities[0].properties.linetype).toBe(props.linetype);
+      expect(result.entities[0].properties.lineweight).toBe(props.lineweight);
+      for (let i = 0; i < sample.kept.length - 1; i += 1) {
+        const a = sample.kept[i]!;
+        const b = sample.kept[i + 1]!;
+        expect(a.x === b.x || a.y === b.y).toBe(true);
+      }
+    }
+    expect(trimEntityMulti(target, [target, other], { x: 5, y: 0 }).ok).toBe(false);
+    expect(trimEntityMulti(target, [target, other], { x: 0, y: 5 }).ok).toBe(false);
+    expect(target.type).toBe('rectangle');
+  });
+
+  it('trims the other rectangle on the same overlap, including a reversed corner order', () => {
+    const target = rect('a', { x: 0, y: 0 }, { x: 10, y: 10 });
+    const other = rect('b', { x: 16, y: 14 }, { x: 6, y: 4 });
+    const upper = trimEntityMulti(other, [other, target], { x: 6, y: 12 });
+    const lower = trimEntityMulti(other, [other, target], { x: 6, y: 7 });
+    const inner = trimEntityMulti(other, [other, target], { x: 8, y: 4 });
+    const outer = trimEntityMulti(other, [other, target], { x: 13, y: 4 });
+    expect(upper.ok && lower.ok && inner.ok && outer.ok).toBe(true);
+    if (!upper.ok || !lower.ok || !inner.ok || !outer.ok) return;
+    const verts = (result: typeof upper) =>
+      result.ok && result.entities[0]?.type === 'polyline'
+        ? result.entities[0].geometry.vertices
+        : [];
+    expect(verts(upper)).toEqual([
+      { x: 6, y: 10 },
+      { x: 6, y: 4 },
+      { x: 16, y: 4 },
+      { x: 16, y: 14 },
+      { x: 6, y: 14 },
+    ]);
+    expect(verts(lower)).toEqual([
+      { x: 6, y: 4 },
+      { x: 16, y: 4 },
+      { x: 16, y: 14 },
+      { x: 6, y: 14 },
+      { x: 6, y: 10 },
+    ]);
+    expect(verts(inner)).toEqual([
+      { x: 10, y: 4 },
+      { x: 16, y: 4 },
+      { x: 16, y: 14 },
+      { x: 6, y: 14 },
+      { x: 6, y: 4 },
+    ]);
+    expect(verts(outer)).toEqual([
+      { x: 16, y: 4 },
+      { x: 16, y: 14 },
+      { x: 6, y: 14 },
+      { x: 6, y: 4 },
+      { x: 10, y: 4 },
+    ]);
+  });
+
+  it('splits an open polyline when a later click removes a middle interval', () => {
+    const target = rect('a', { x: 0, y: 0 }, { x: 10, y: 10 });
+    const bar = rect('b', { x: 2, y: -2 }, { x: 8, y: 12 });
+    const first = trimEntityMulti(target, [target, bar], { x: 5, y: 10 });
+    expect(first.ok).toBe(true);
+    if (!first.ok || first.entities[0]?.type !== 'polyline') return;
+    const opened = first.entities[0];
+    const second = trimEntityMulti(opened, [opened, bar], { x: 5, y: 0 });
+    const preview = trimRemovalPreviewMulti(opened, [opened, bar], { x: 5, y: 0 });
+    expect(second.ok).toBe(true);
+    if (!second.ok || preview?.type !== 'polyline') return;
+    expect(second.entities).toHaveLength(2);
+    expect(second.entities.every((entity) => entity.type === 'polyline' && !entity.geometry.closed)).toBe(true);
+    expect(preview.geometry.vertices).toEqual([
+      { x: 2, y: 0 },
+      { x: 8, y: 0 },
+    ]);
+    const chains = second.entities.map((entity) =>
+      entity.type === 'polyline' ? entity.geometry.vertices : [],
+    );
+    expect(chains).toEqual([
+      [
+        { x: 2, y: 10 },
+        { x: 0, y: 10 },
+        { x: 0, y: 0 },
+        { x: 2, y: 0 },
+      ],
+      [
+        { x: 8, y: 0 },
+        { x: 10, y: 0 },
+        { x: 10, y: 10 },
+        { x: 8, y: 10 },
+      ],
+    ]);
+    expect(second.entities[0]?.id).toBe(opened.id);
+    expect(second.entities[1]?.id).not.toBe(opened.id);
+  });
+
+  it('trims a partial collinear overlap on the picked edge only', () => {
+    const target = rect('a', { x: 0, y: 0 }, { x: 10, y: 10 });
+    const blade = line('overlap', { x: 10, y: 3 }, { x: 10, y: 7 });
+    const middle = trimEntityMulti(target, [target, blade], { x: 10, y: 5 });
+    const lower = trimEntityMulti(target, [target, blade], { x: 10, y: 1 });
+    const upper = trimEntityMulti(target, [target, blade], { x: 10, y: 8.5 });
+    const preview = trimRemovalPreviewMulti(target, [target, blade], { x: 10, y: 5 });
+    expect(middle.ok && lower.ok && upper.ok).toBe(true);
+    if (!middle.ok || !lower.ok || !upper.ok || preview?.type !== 'polyline') return;
+    expect(preview.geometry.vertices).toEqual([
+      { x: 10, y: 3 },
+      { x: 10, y: 7 },
+    ]);
+    const chain = (result: typeof middle) =>
+      result.ok && result.entities[0]?.type === 'polyline'
+        ? result.entities[0].geometry.vertices
+        : [];
+    expect(chain(middle)).toEqual([
+      { x: 10, y: 7 },
+      { x: 10, y: 10 },
+      { x: 0, y: 10 },
+      { x: 0, y: 0 },
+      { x: 10, y: 0 },
+      { x: 10, y: 3 },
+    ]);
+    expect(chain(lower)[0]).toEqual({ x: 10, y: 3 });
+    expect(chain(upper)[chain(upper).length - 1]).toEqual({ x: 10, y: 7 });
+  });
+
+  it('repeats an edge interval after the rectangles move, and ignores an endpoint touch', () => {
+    const target = rect('a', { x: 100, y: 40 }, { x: 110, y: 50 });
+    const other = rect('b', { x: 106, y: 44 }, { x: 116, y: 54 });
+    const result = trimEntityMulti(target, [target, other], { x: 108, y: 50 });
+    const preview = trimRemovalPreviewMulti(target, [target, other], { x: 108, y: 50 });
+    expect(result.ok).toBe(true);
+    if (!result.ok || result.entities[0]?.type !== 'polyline' || preview?.type !== 'polyline') return;
+    expect(preview.geometry.vertices).toEqual([
+      { x: 110, y: 50 },
+      { x: 106, y: 50 },
+    ]);
+    expect(result.entities[0].geometry.vertices).toEqual([
+      { x: 106, y: 50 },
+      { x: 100, y: 50 },
+      { x: 100, y: 40 },
+      { x: 110, y: 40 },
+      { x: 110, y: 50 },
+    ]);
+    const touch = line('tip', { x: 110, y: 50 }, { x: 110, y: 60 });
+    expect(trimEntityMulti(target, [target, touch], { x: 110, y: 45 }).ok).toBe(false);
+    expect(trimRemovalPreviewMulti(target, [target, touch], { x: 110, y: 45 })).toBeNull();
   });
 
   it('still trims a circle to native arcs and an arc to the unpicked piece', () => {
