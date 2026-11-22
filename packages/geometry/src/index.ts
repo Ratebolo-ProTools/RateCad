@@ -62,6 +62,31 @@ export {
   vecDelta,
 } from './transform.js';
 
+export type {
+  DimensionDraft,
+  HoverMeasurement,
+  LinearDimMode,
+  LinearTarget,
+  ModelDimensionBinding,
+  RadialTarget,
+} from './dimensionEngine.js';
+export {
+  OBJECT_HIT_TOLERANCE,
+  angularDraft,
+  arcLengthMeasurement,
+  chooseLinearKind,
+  describeHover,
+  dimensionAnnotationText,
+  dimensionMeasuredValue,
+  linearDimensionDraft,
+  linearEdges,
+  nearestLinearTarget,
+  nearestRadialTarget,
+  radialDimensionDraft,
+  refreshModelSpaceDimensions,
+  threePointAngle,
+} from './dimensionEngine.js';
+
 export type { ArcPolylineMeta, ArcMetaMapOptions } from './arcMetadata.js';
 export {
   arcMetaConsistentWithVertices,

@@ -126,7 +126,8 @@ export type DimensionKind =
   | 'aligned'
   | 'angular'
   | 'radius'
-  | 'diameter';
+  | 'diameter'
+  | 'arc-length';
 
 /**
  * Structured dimension — measurement is always derived from geometry.
@@ -136,7 +137,9 @@ export type DimensionKind =
  * kind:
  *  - horizontal / vertical / aligned → linear (start–end)
  *  - radius / diameter → start = center, end = rim point
- *  - angular → start/end define rays from an implied vertex at midpoint offset
+ *  - angular → start/end are points on the rays, vertex is the corner
+ *  - arc-length → start/end are the arc endpoints, vertex is the center,
+ *    and metadata.sweepRadians is the exact counterclockwise sweep
  */
 export interface DimensionEntity extends EntityBase {
   type: 'dimension';

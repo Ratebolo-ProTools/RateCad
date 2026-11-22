@@ -3,7 +3,7 @@
  */
 
 import type { CommandBus } from '@ratecad/commands';
-import { formatWorldByDrawingUnits, distance } from '@ratecad/geometry';
+import { describeHover, formatWorldByDrawingUnits, distance } from '@ratecad/geometry';
 import type { Vec2 } from '@ratecad/core';
 import type { CadEngineCommand, CadPromptDefinition } from '../types.js';
 
@@ -170,7 +170,14 @@ export const distCommand: CadEngineCommand = {
   }),
   onMove: (point, prompt, _ctx, state) => {
     const s = state as DistState;
-    if (prompt.id !== 'second' || !s.first) return { preview: null };
+    if (prompt.id !== 'second' || !s.first) {
+      const hover = describeHover(s.bus.getDocument().entities, point);
+      return {
+        preview: null,
+        dynamic: hover?.distance != null ? { distance: hover.distance, label: 'Measure' } : null,
+        ...(hover ? { status: `DIST: ${hover.label}` } : {}),
+      };
+    }
     return {
       preview: { kind: 'line', start: s.first, end: point },
       dynamic: { distance: distance(s.first, point) },

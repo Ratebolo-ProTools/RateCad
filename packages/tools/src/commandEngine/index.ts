@@ -27,6 +27,11 @@ import {
   unitsCommand,
 } from './commands/unitsDimStyle.js';
 import {
+  dimensionCommands,
+  measureModeCommands,
+  quickMeasureCommand,
+} from './commands/dimension.js';
+import {
   panCommand,
   zoomCommand,
   zoomExtentsCommand,
@@ -120,10 +125,9 @@ export function createDefaultEngineRegistry(): CadEngineRegistry {
       category: 'Modify',
       keywords: ['scale', 'resize'],
     }),
-    toolBridge('dimension', 'DIMENSION', ['DIM'], 'dimension', 'Create dimensions', {
-      category: 'Annotate',
-      keywords: ['dimension', 'measure', 'distance', 'length'],
-    }),
+    ...dimensionCommands,
+    quickMeasureCommand,
+    ...measureModeCommands,
     toolBridge('text', 'TEXT', ['DT', 'MTEXT'], 'text', 'Place text', {
       category: 'Annotate',
       keywords: ['text', 'label', 'annotation', 'mtext'],

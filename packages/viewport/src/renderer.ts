@@ -25,18 +25,19 @@ import {
 } from '@ratecad/core';
 import {
   blockCircleWorldPoints,
+  dimensionAnnotationText,
   dimensionLayout,
+  dimensionMeasuredValue,
   distance,
   rectangleLocalCorners,
   transformBlockPoint,
   doorLayout,
+  formatAngleByDrawingUnits,
   formatAngleDegrees,
   formatDimensionLength,
   formatLengthInUnits,
   formatRoomLabelLines,
   lineweightToScreenPx,
-  measuredAngleDeg,
-  measuredLength,
   resolveEffectiveAppearance,
   wallOutlineSegments,
   windowLayout,
@@ -207,6 +208,180 @@ function drawArrowHead(
   ctx.fill();
 }
 
+function dimensionTextColor(styleColor: string | undefined, fallback: string): string {
+  if (!styleColor) return fallback;
+  const value = styleColor.trim();
+  if (
+    !value ||
+    value.toUpperCase() === 'BYLAYER' ||
+    value.toUpperCase() === 'BYBLOCK'
+  ) {
+    return fallback;
+  }
+  return value;
+}
+
+function strokeCurvedDimension(
+  ctx: CanvasRenderingContext2D,
+  entity: DimensionEntity,
+  doc: DrawingDocument,
+  camera: Camera,
+  width: number,
+  height: number,
+  color: string,
+  lineWidth: number,
+  sizes: {
+    arrow: number;
+    textH: number;
+    precision: number;
+    dimStyleDef: ReturnType<typeof getActiveDimensionStyle>;
+    annotative: boolean;
+    annotCtx?: AnnotationRenderContext;
+  },
+): void {
+  const vertex = entity.geometry.vertex;
+  if (!vertex) return;
+  const { start, end, kind, offset } = entity.geometry;
+  const startAngle = Math.atan2(start.y - vertex.y, start.x - vertex.x);
+  const geometryRadius = Math.hypot(start.x - vertex.x, start.y - vertex.y);
+  let sweep = Math.atan2(end.y - vertex.y, end.x - vertex.x) - startAngle;
+  while (sweep < 0) sweep += Math.PI * 2;
+  while (sweep >= Math.PI * 2) sweep -= Math.PI * 2;
+  if (kind === 'arc-length' && typeof entity.metadata?.sweepRadians === 'number') {
+    sweep = Math.abs(entity.metadata.sweepRadians as number);
+  } else if (entity.metadata?.useCcw !== true && sweep > Math.PI) {
+    sweep -= Math.PI * 2;
+  }
+  const dimRadius = kind === 'arc-length'
+    ? Math.max(geometryRadius + offset, Math.max(geometryRadius, 1e-6) * 0.2)
+    : Math.max(geometryRadius, 1e-6);
+  const at = (angle: number, radius: number): Vec2 => ({
+    x: vertex.x + radius * Math.cos(angle),
+    y: vertex.y + radius * Math.sin(angle),
+  });
+  const steps = Math.max(8, Math.ceil(Math.abs(sweep) / (Math.PI / 18)));
+  const direction = sweep >= 0 ? 1 : -1;
+
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+  ctx.lineWidth = lineWidth;
+  ctx.beginPath();
+  if (kind === 'arc-length') {
+    const gap = sizes.dimStyleDef.lines.offsetFromOrigin;
+    const beyond = sizes.dimStyleDef.lines.extendBeyond;
+    const drawRadial = (angle: number) => {
+      const inner = at(angle, geometryRadius + direction * Math.sign(offset || 1) * gap);
+      const outer = at(angle, dimRadius + direction * Math.sign(offset || 1) * beyond);
+      const a = worldToScreen(inner, camera, width, height);
+      const b = worldToScreen(outer, camera, width, height);
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+    };
+    drawRadial(startAngle);
+    drawRadial(startAngle + sweep);
+  }
+  for (let index = 0; index <= steps; index += 1) {
+    const angle = startAngle + (sweep * index) / steps;
+    const screen = worldToScreen(at(angle, dimRadius), camera, width, height);
+    if (index === 0) ctx.moveTo(screen.x, screen.y);
+    else ctx.lineTo(screen.x, screen.y);
+  }
+  ctx.stroke();
+
+  const startTip = at(startAngle, dimRadius);
+  const endTip = at(startAngle + sweep, dimRadius);
+  drawArrowHead(
+    ctx,
+    startTip,
+    { x: -Math.sin(startAngle) * direction, y: Math.cos(startAngle) * direction },
+    sizes.arrow,
+    camera,
+    width,
+    height,
+  );
+  const endAngle = startAngle + sweep;
+  drawArrowHead(
+    ctx,
+    endTip,
+    { x: Math.sin(endAngle) * direction, y: -Math.cos(endAngle) * direction },
+    sizes.arrow,
+    camera,
+    width,
+    height,
+  );
+
+  const worldUnit = doc.settings.worldUnit ?? 'ft';
+  const measured = dimensionMeasuredValue(entity.geometry, entity.metadata);
+  const formatted = kind === 'angular'
+    ? (doc.settings.drawingUnits
+      ? formatAngleByDrawingUnits(
+          measured,
+          doc.settings.drawingUnits.angularFormat,
+          doc.settings.drawingUnits.angularPrecision,
+        )
+      : formatAngleDegrees(measured, sizes.precision))
+    : kind === 'arc-length'
+      ? `Arc ${formatDimensionLength(measured, worldUnit, sizes.dimStyleDef)}`
+      : formatDimensionLength(measured, worldUnit, sizes.dimStyleDef);
+  const label = dimensionAnnotationText(entity.metadata, formatted);
+  const mid = at(startAngle + sweep / 2, dimRadius);
+  paintDimensionText(
+    ctx,
+    label,
+    mid,
+    { x: -Math.sin(startAngle + sweep / 2), y: Math.cos(startAngle + sweep / 2) },
+    dimensionTextColor(sizes.dimStyleDef.text.color, color),
+    sizes.textH,
+    camera,
+    width,
+    height,
+    sizes.annotative,
+    sizes.annotCtx,
+  );
+}
+
+function paintDimensionText(
+  ctx: CanvasRenderingContext2D,
+  label: string,
+  textPos: Vec2,
+  measuredDir: Vec2,
+  color: string,
+  textH: number,
+  camera: Camera,
+  width: number,
+  height: number,
+  annotative: boolean,
+  annotCtx: AnnotationRenderContext | undefined,
+): void {
+  let screenHeight: number;
+  if (annotative && annotCtx?.pxPerMm != null) {
+    screenHeight = Math.max(11, textH);
+  } else {
+    screenHeight = Math.max(textH * camera.zoom, 11);
+  }
+  const tp = worldToScreen(textPos, camera, width, height);
+  const ds2 = worldToScreen(
+    { x: textPos.x + measuredDir.x, y: textPos.y + measuredDir.y },
+    camera,
+    width,
+    height,
+  );
+  let drawAngle = Math.atan2(ds2.y - tp.y, ds2.x - tp.x);
+  if (drawAngle > Math.PI / 2 || drawAngle < -Math.PI / 2) drawAngle += Math.PI;
+  ctx.save();
+  ctx.translate(tp.x, tp.y);
+  ctx.rotate(drawAngle);
+  ctx.font = `${screenHeight}px Cascadia Mono, SF Mono, Consolas, monospace`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'bottom';
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = DEFAULT_THEME.background;
+  ctx.strokeText(label, 0, -2);
+  ctx.fillStyle = color;
+  ctx.fillText(label, 0, -2);
+  ctx.restore();
+}
+
 function strokeDimension(
   ctx: CanvasRenderingContext2D,
   entity: DimensionEntity,
@@ -218,9 +393,6 @@ function strokeDimension(
   lineWidth: number,
   annotCtx?: AnnotationRenderContext,
 ): void {
-  const layout = dimensionLayout(entity.geometry);
-  if (!layout) return;
-
   const dimStyleDef = getActiveDimensionStyle(
     doc.settings.dimensionStyles ?? [],
     doc.settings.activeDimensionStyleName ?? 'Standard',
@@ -255,6 +427,24 @@ function strokeDimension(
     arrow = paperArrow * annotCtx.viewportScale;
     textH = paperText * annotCtx.viewportScale;
   }
+
+  if (
+    entity.geometry.vertex &&
+    (entity.geometry.kind === 'arc-length' || entity.geometry.kind === 'angular')
+  ) {
+    strokeCurvedDimension(ctx, entity, doc, camera, width, height, color, lineWidth, {
+      arrow,
+      textH,
+      precision,
+      dimStyleDef,
+      annotative,
+      ...(annotCtx ? { annotCtx } : {}),
+    });
+    return;
+  }
+
+  const layout = dimensionLayout(entity.geometry);
+  if (!layout) return;
 
   const { start, end } = entity.geometry;
   const { dimStart, dimEnd, textPos, measuredDir, perp } = layout;
@@ -322,31 +512,35 @@ function strokeDimension(
     height,
   );
 
-  const value = measuredLength(start, end, entity.geometry.kind);
+  const value = dimensionMeasuredValue(entity.geometry, entity.metadata);
   const worldUnit = doc.settings.worldUnit ?? 'ft';
   const displayUnit = doc.settings.units;
   const frac = doc.settings.fractionDenominator ?? 16;
-  let label: string;
+  let formatted: string;
   if (entity.geometry.kind === 'angular') {
-    const vertex = entity.geometry.vertex ?? start;
-    const deg = measuredAngleDeg(vertex, start, end);
-    label = formatAngleDegrees(deg, precision);
+    const units = doc.settings.drawingUnits;
+    formatted = units
+      ? formatAngleByDrawingUnits(value, units.angularFormat, units.angularPrecision)
+      : formatAngleDegrees(value, precision);
   } else if (entity.geometry.kind === 'radius') {
-    label = formatDimensionLength(value, worldUnit, dimStyleDef, {
+    formatted = formatDimensionLength(value, worldUnit, dimStyleDef, {
       kindPrefix: 'R',
     });
   } else if (entity.geometry.kind === 'diameter') {
-    label = formatDimensionLength(value, worldUnit, dimStyleDef, {
+    formatted = formatDimensionLength(value, worldUnit, dimStyleDef, {
       kindPrefix: 'Ø',
     });
+  } else if (entity.geometry.kind === 'arc-length') {
+    formatted = `Arc ${formatDimensionLength(value, worldUnit, dimStyleDef)}`;
   } else {
     // DIMSTYLE primary/alternate units — not drawing LUNITS.
-    label = formatDimensionLength(value, worldUnit, dimStyleDef);
+    formatted = formatDimensionLength(value, worldUnit, dimStyleDef);
   }
   // Fallback if style table missing in partially migrated docs
-  if (!label || label === '—') {
-    label = formatLengthInUnits(value, displayUnit, precision, worldUnit, frac);
+  if (!formatted || formatted === '—') {
+    formatted = formatLengthInUnits(value, displayUnit, precision, worldUnit, frac);
   }
+  const label = dimensionAnnotationText(entity.metadata, formatted);
 
   // Screen-stable text: annotative in viewport uses paper mm; else model*zoom
   let screenHeight: number;
@@ -390,7 +584,7 @@ function strokeDimension(
   ctx.lineWidth = 3;
   ctx.strokeStyle = DEFAULT_THEME.background;
   ctx.strokeText(label, 0, -2);
-  ctx.fillStyle = color;
+  ctx.fillStyle = dimensionTextColor(dimStyleDef.text.color, color);
   ctx.fillText(label, 0, -2);
   ctx.restore();
 }

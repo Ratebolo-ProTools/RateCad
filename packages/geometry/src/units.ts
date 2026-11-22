@@ -32,7 +32,14 @@ export function formatLengthInUnits(
 export function measuredLength(
   start: { x: number; y: number },
   end: { x: number; y: number },
-  kind: 'horizontal' | 'vertical' | 'aligned' | 'radius' | 'diameter' | 'angular',
+  kind:
+    | 'horizontal'
+    | 'vertical'
+    | 'aligned'
+    | 'radius'
+    | 'diameter'
+    | 'angular'
+    | 'arc-length',
 ): number {
   switch (kind) {
     case 'horizontal':
@@ -46,6 +53,8 @@ export function measuredLength(
     case 'diameter':
       return Math.hypot(end.x - start.x, end.y - start.y) * 2;
     case 'angular':
+    case 'arc-length':
+      // Angle and arc length need a vertex or sweep. See dimensionMeasuredValue.
       return 0;
   }
 }

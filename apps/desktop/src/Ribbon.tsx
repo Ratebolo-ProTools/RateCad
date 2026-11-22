@@ -1081,9 +1081,9 @@ export function Ribbon(props: RibbonProps) {
                       type="button"
                       className={`ribbon-large${props.activeTool === 'dimension' ? ' active' : ''}`}
                       data-testid="tool-dimension-aligned"
-                      title={tip('Dimension', ['DIM'])}
+                      title={tip('Smart Dimension', ['DIM'])}
                       onClick={() => {
-                        props.onActivateTool('dimension', 'aligned');
+                        props.onRunCommand('DIM');
                         setDimOpen((v) => !v);
                       }}
                     >
@@ -1094,6 +1094,16 @@ export function Ribbon(props: RibbonProps) {
                     </button>
                   }
                 >
+                    <button
+                    type="button"
+                    data-testid="tool-dimension-smart"
+                    onClick={() => {
+                      props.onRunCommand('DIM');
+                      setDimOpen(false);
+                    }}
+                  >
+                    {Icons.dimension} Smart Dimension
+                  </button>
                   {(
                     [
                       ['aligned', 'Aligned', 'tool-dimension-aligned'],
@@ -1102,6 +1112,7 @@ export function Ribbon(props: RibbonProps) {
                       ['radius', 'Radius', 'tool-dimension-radius'],
                       ['diameter', 'Diameter', 'tool-dimension-diameter'],
                       ['angular', 'Angular', 'tool-dimension-angular'],
+                      ['arc-length', 'Arc Length', 'tool-dimension-arc'],
                     ] as Array<[DimensionKind, string, string]>
                   ).map(([kind, label, testId]) => (
                     <button
@@ -1116,6 +1127,24 @@ export function Ribbon(props: RibbonProps) {
                       {Icons.dimension} {label}
                     </button>
                   ))}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      props.onRunCommand('DCO');
+                      setDimOpen(false);
+                    }}
+                  >
+                    {Icons.dimension} Continue
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      props.onRunCommand('DBA');
+                      setDimOpen(false);
+                    }}
+                  >
+                    {Icons.dimension} Baseline
+                  </button>
                 </Flyout>
                 <div className="ribbon-stack">
                   <button
@@ -1433,6 +1462,36 @@ export function Ribbon(props: RibbonProps) {
                   </button>
                   <button
                     type="button"
+                    title={tip('Quick Measure', ['QM', 'MEASURE'])}
+                    onClick={() => {
+                      props.onRunCommand('QM');
+                      setMeasureOpen(false);
+                    }}
+                  >
+                    {Icons.measure} Quick Measure
+                  </button>
+                  <button
+                    type="button"
+                    title={tip('Measure Angle', ['QMA'])}
+                    onClick={() => {
+                      props.onRunCommand('QMA');
+                      setMeasureOpen(false);
+                    }}
+                  >
+                    {Icons.measure} Angle
+                  </button>
+                  <button
+                    type="button"
+                    title={tip('Measure Radius', ['QMR'])}
+                    onClick={() => {
+                      props.onRunCommand('QMR');
+                      setMeasureOpen(false);
+                    }}
+                  >
+                    {Icons.measure} Radius
+                  </button>
+                  <button
+                    type="button"
                     data-testid="measure-area"
                     title={tip('Area', ['AA', 'AREA'])}
                     onClick={() => {
@@ -1649,9 +1708,9 @@ export function Ribbon(props: RibbonProps) {
                       type="button"
                       className={`ribbon-large${props.activeTool === 'dimension' ? ' active' : ''}`}
                       data-testid="annotate-tool-dimension"
-                      title={tip('Dimension', ['DIM'])}
+                      title={tip('Smart Dimension', ['DIM'])}
                       onClick={() => {
-                        props.onActivateTool('dimension', 'aligned');
+                        props.onRunCommand('DIM');
                         setAnnotateDimOpen((v) => !v);
                       }}
                     >
@@ -1662,6 +1721,16 @@ export function Ribbon(props: RibbonProps) {
                     </button>
                   }
                 >
+                    <button
+                    type="button"
+                    data-testid="annotate-dim-smart"
+                    onClick={() => {
+                      props.onRunCommand('DIM');
+                      setAnnotateDimOpen(false);
+                    }}
+                  >
+                    {Icons.dimension} Smart Dimension
+                  </button>
                   {(
                     [
                       ['aligned', 'Aligned'],
@@ -1670,6 +1739,7 @@ export function Ribbon(props: RibbonProps) {
                       ['angular', 'Angular'],
                       ['radius', 'Radius'],
                       ['diameter', 'Diameter'],
+                      ['arc-length', 'Arc Length'],
                     ] as Array<[DimensionKind, string]>
                   )
                     .filter(([kind]) =>

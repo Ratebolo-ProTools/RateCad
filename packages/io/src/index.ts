@@ -136,7 +136,15 @@ function assertEntity(raw: unknown, index: number): Entity {
     case 'dimension': {
       if (
         typeof g.kind !== 'string' ||
-        !['horizontal', 'vertical', 'aligned'].includes(g.kind) ||
+        ![
+          'horizontal',
+          'vertical',
+          'aligned',
+          'angular',
+          'radius',
+          'diameter',
+          'arc-length',
+        ].includes(g.kind) ||
         !isVec2(g.start) ||
         !isVec2(g.end) ||
         typeof g.offset !== 'number' ||

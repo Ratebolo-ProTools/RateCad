@@ -1,4 +1,5 @@
 import type { DrawingDocument } from '@ratecad/core';
+import { refreshModelSpaceDimensions } from '@ratecad/geometry';
 
 /**
  * All document mutations go through Command.
@@ -68,7 +69,7 @@ export class CommandBus {
   }
 
   execute(command: Command): void {
-    this.document = command.execute(this.document);
+    this.document = refreshModelSpaceDimensions(command.execute(this.document));
     this.undoStack.push(command);
     this.redoStack = [];
     this.notify('execute');
@@ -90,7 +91,7 @@ export class CommandBus {
   undo(): void {
     const command = this.undoStack.pop();
     if (!command) return;
-    this.document = command.undo(this.document);
+    this.document = refreshModelSpaceDimensions(command.undo(this.document));
     this.redoStack.push(command);
     this.notify('undo');
   }
@@ -98,7 +99,7 @@ export class CommandBus {
   redo(): void {
     const command = this.redoStack.pop();
     if (!command) return;
-    this.document = command.execute(this.document);
+    this.document = refreshModelSpaceDimensions(command.execute(this.document));
     this.undoStack.push(command);
     this.notify('redo');
   }

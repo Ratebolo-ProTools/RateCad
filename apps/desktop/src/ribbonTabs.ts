@@ -128,7 +128,7 @@ export function normalizeRibbonTab(raw: unknown): RibbonTabId {
   return DEFAULT_RIBBON_TAB;
 }
 
-/** Dimension kinds RateCAD implements today (all six are wired). */
+/** Dimension kinds the ribbon can start. */
 export const SUPPORTED_DIMENSION_KINDS = [
   'aligned',
   'horizontal',
@@ -136,6 +136,7 @@ export const SUPPORTED_DIMENSION_KINDS = [
   'radius',
   'diameter',
   'angular',
+  'arc-length',
 ] as const;
 
 /** Annotate-tab commands that are live vs intentionally disabled. */

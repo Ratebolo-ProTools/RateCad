@@ -77,12 +77,13 @@ import {
   findDoorsForRoom,
   findWallsForRoom,
   findWindowsForRoom,
+  dimensionMeasuredValue,
+  formatAngleDegrees,
   formatAreaInUnits,
   formatLength,
   formatLengthInUnits,
   formatWorldLength,
   LENGTH_UNIT_LABELS,
-  measuredLength,
   parseLength,
   parseLengthInput,
   PolarTrackingEngine,
@@ -432,20 +433,21 @@ function describeEntity(
         { label: 'Closed', value: entity.geometry.closed ? 'Yes' : 'No' },
       ];
     case 'dimension': {
-      const measured = measuredLength(
-        entity.geometry.start,
-        entity.geometry.end,
-        entity.geometry.kind,
-      );
+      const measured = dimensionMeasuredValue(entity.geometry, entity.metadata);
       const precision =
         entity.properties.precision ?? doc.settings.dimensionStyle.precision;
       const assoc = getAssociativeRef(entity);
+      const modelRef = entity.metadata?.modelDimension as
+        | { valid?: boolean; brokenReason?: string; entityId?: string }
+        | undefined;
       const rows = [
         ...common,
         { label: 'Kind', value: entity.geometry.kind },
         {
           label: 'Measured',
-          value: formatLengthInUnits(measured, doc.settings.units, precision),
+          value: entity.geometry.kind === 'angular'
+            ? formatAngleDegrees(measured, precision)
+            : formatLengthInUnits(measured, doc.settings.units, precision),
         },
         { label: 'Units', value: doc.settings.units },
         { label: 'Precision', value: String(precision) },
@@ -463,12 +465,22 @@ function describeEntity(
               : 'Model',
         },
       ];
+      if (typeof entity.metadata?.displayText === 'string' && entity.metadata.displayText.trim()) {
+        rows.push({ label: 'Display text', value: entity.metadata.displayText });
+      }
       if (assoc) {
         rows.push({
           label: 'Associative',
           value: assoc.valid
             ? `Yes → ${assoc.modelEntityId}`
             : `Broken (${assoc.brokenReason ?? 'invalid'})`,
+        });
+      } else if (modelRef) {
+        rows.push({
+          label: 'Associative',
+          value: modelRef.valid === false
+            ? `Detached (${modelRef.brokenReason ?? 'invalid'})`
+            : `Yes → ${modelRef.entityId ?? 'source'}`,
         });
       }
       return rows;
@@ -1725,6 +1737,28 @@ export function App() {
   const activateTool = useCallback(
     (tool: ToolId, dimKind?: DimensionKind) => {
       const eng = engineRef.current;
+      if (tool === 'dimension' && eng) {
+        const alias =
+          dimKind === 'horizontal'
+            ? 'DIMHORIZONTAL'
+            : dimKind === 'vertical'
+              ? 'DIMVERTICAL'
+              : dimKind === 'aligned'
+                ? 'DAL'
+                : dimKind === 'angular'
+                  ? 'DAN'
+                  : dimKind === 'radius'
+                    ? 'DRA'
+                    : dimKind === 'diameter'
+                      ? 'DDI'
+                      : dimKind === 'arc-length'
+                        ? 'DAR'
+                        : 'DIM';
+        activateToolOnly('dimension', dimKind);
+        eng.start(alias);
+        refreshEngineUi();
+        return;
+      }
       // Same pathway as typed aliases (PL, EX, MI, …) via CadCommandEngine.
       if (eng && ENGINE_TOOLS.has(tool)) {
         eng.start(tool);
