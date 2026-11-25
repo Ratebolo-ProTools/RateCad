@@ -31,6 +31,7 @@ import {
   measureModeCommands,
   quickMeasureCommand,
 } from './commands/dimension.js';
+import { mtextCommand } from './commands/mtext.js';
 import {
   panCommand,
   zoomCommand,
@@ -128,10 +129,11 @@ export function createDefaultEngineRegistry(): CadEngineRegistry {
     ...dimensionCommands,
     quickMeasureCommand,
     ...measureModeCommands,
-    toolBridge('text', 'TEXT', ['DT', 'MTEXT'], 'text', 'Place text', {
+    toolBridge('text', 'TEXT', ['DT'], 'text', 'Place single-line text', {
       category: 'Annotate',
-      keywords: ['text', 'label', 'annotation', 'mtext'],
+      keywords: ['text', 'label', 'annotation'],
     }),
+    mtextCommand,
     toolBridge('leader', 'LEADER', ['LE'], 'leader', 'Create a leader', {
       category: 'Annotate',
       keywords: ['leader', 'callout', 'arrow'],

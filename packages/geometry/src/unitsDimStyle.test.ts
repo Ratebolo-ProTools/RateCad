@@ -8,7 +8,9 @@ import {
   DEFAULT_DRAWING_UNITS,
   drawingUnitsFromLegacy,
   getActiveDimensionStyle,
+  ISO25_DIMSTYLE,
   legacyDisplayFromDrawingUnits,
+  normalizeDimensionStyleDefinition,
   STANDARD_DIMSTYLE,
 } from '@ratecad/core';
 import {
@@ -150,6 +152,98 @@ describe('dimension style formatting', () => {
     const b = formatLinearByFormat(3.14159, 'decimal', 3, 'm');
     expect(a).toBe('3.14');
     expect(b).toBe('3.142');
+  });
+
+  it('follows architectural drawing units and keeps radius and diameter prefixes', () => {
+    const units = {
+      ...DEFAULT_DRAWING_UNITS,
+      linearFormat: 'architectural' as const,
+      insertionUnit: 'ft' as const,
+    };
+    const measurement = 20;
+    expect(formatDimensionLength(measurement, 'ft', STANDARD_DIMSTYLE, { drawingUnits: units })).toBe(
+      `20'-0"`,
+    );
+    expect(measurement).toBe(20);
+    expect(formatDimensionLength(12.5, 'ft', STANDARD_DIMSTYLE, { drawingUnits: units })).toBe(`12'-6"`);
+    expect(formatDimensionLength(8.75, 'ft', STANDARD_DIMSTYLE, { drawingUnits: units })).toBe(`8'-9"`);
+    expect(formatDimensionLength(2.5, 'ft', STANDARD_DIMSTYLE, { drawingUnits: units })).toBe(`2'-6"`);
+    expect(
+      formatDimensionLength(5, 'ft', STANDARD_DIMSTYLE, { drawingUnits: units, kindPrefix: 'R' }),
+    ).toBe(`R 5'-0"`);
+    expect(
+      formatDimensionLength(10, 'ft', STANDARD_DIMSTYLE, { drawingUnits: units, kindPrefix: 'Ø' }),
+    ).toBe(`Ø 10'-0"`);
+  });
+
+  it('keeps decimal feet, inches, and metric formats as explicit style overrides', () => {
+    const units = DEFAULT_DRAWING_UNITS;
+    const explicit = (
+      lengthUnit: 'ft' | 'in' | 'mm' | 'cm' | 'm',
+      precision: number,
+    ) => {
+      const style = structuredClone(STANDARD_DIMSTYLE);
+      style.primary.followDrawingUnits = false;
+      style.primary.unitFormat = 'decimal';
+      style.primary.lengthUnit = lengthUnit;
+      style.primary.precision = precision;
+      return style;
+    };
+    expect(formatDimensionLength(20, 'ft', explicit('ft', 2), { drawingUnits: units })).toBe('20.00');
+    expect(formatDimensionLength(1, 'ft', explicit('in', 2), { drawingUnits: units })).toBe('12.00');
+    expect(formatDimensionLength(1, 'ft', explicit('mm', 1), { drawingUnits: units })).toBe('304.8');
+    expect(formatDimensionLength(1, 'ft', explicit('cm', 2), { drawingUnits: units })).toBe('30.48');
+    expect(formatDimensionLength(1, 'ft', explicit('m', 3), { drawingUnits: units })).toBe('0.305');
+    expect(formatDimensionLength(1, 'ft', ISO25_DIMSTYLE, { drawingUnits: units })).toBe('304.80');
+    expect(formatDimensionLength(10.5, 'ft', ARCHITECTURAL_DIMSTYLE, { drawingUnits: units })).toContain(
+      `10'-6"`,
+    );
+  });
+
+  it('follows decimal feet, inches, millimeters, centimeters, and meters from drawing units', () => {
+    const follow = (
+      insertionUnit: 'ft' | 'in' | 'mm' | 'cm' | 'm',
+      precision = 2,
+    ) =>
+      formatDimensionLength(1, 'ft', STANDARD_DIMSTYLE, {
+        drawingUnits: {
+          ...DEFAULT_DRAWING_UNITS,
+          linearFormat: 'decimal',
+          linearPrecision: precision,
+          insertionUnit,
+        },
+      });
+    expect(follow('ft')).toBe('1.00');
+    expect(follow('in')).toBe('12.00');
+    expect(follow('mm', 1)).toBe('304.8');
+    expect(follow('cm')).toBe('30.48');
+    expect(follow('m', 3)).toBe('0.305');
+  });
+
+  it('treats a saved unmodified Standard style as following drawing units', () => {
+    const opened = normalizeDimensionStyleDefinition(
+      {
+        id: 'dimstyle-standard',
+        name: 'Standard',
+        primary: { unitFormat: 'decimal', lengthUnit: 'ft', precision: 2 },
+      },
+      STANDARD_DIMSTYLE,
+    );
+    expect(opened.primary.followDrawingUnits).toBe(true);
+    const overridden = normalizeDimensionStyleDefinition(
+      {
+        id: 'dimstyle-standard',
+        name: 'Standard',
+        primary: {
+          unitFormat: 'decimal',
+          lengthUnit: 'ft',
+          precision: 2,
+          followDrawingUnits: false,
+        },
+      },
+      STANDARD_DIMSTYLE,
+    );
+    expect(overridden.primary.followDrawingUnits).toBe(false);
   });
 
   it('drawing units format does not require geometry change', () => {

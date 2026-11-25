@@ -21,6 +21,10 @@ import {
   projectOntoWall,
   wallLayout,
   wallOutlineSegments,
+  isMText,
+  layoutMText,
+  mtextBounds,
+  pointInMText,
   windowLayout,
 } from '@ratecad/geometry';
 
@@ -127,6 +131,9 @@ export function hitTestEntity(
       return Math.hypot(dx, dy) <= tolerance * 3;
     }
     case 'text': {
+      if (isMText(entity)) {
+        return pointInMText(point, entity.geometry, tolerance);
+      }
       const h = entity.geometry.height;
       const w = Math.max(h * entity.geometry.content.length * 0.6, h);
       const box = {
@@ -321,6 +328,10 @@ export function entityBounds(
       return { minX, minY, maxX, maxY };
     }
     case 'text': {
+      if (isMText(entity)) {
+        const layout = layoutMText(entity.geometry, '#fff');
+        if (layout) return mtextBounds(layout);
+      }
       const h = entity.geometry.height;
       const w = Math.max(h * entity.geometry.content.length * 0.6, h);
       const p = entity.geometry.position;

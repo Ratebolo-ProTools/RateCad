@@ -142,7 +142,7 @@ export const SUPPORTED_DIMENSION_KINDS = [
 /** Annotate-tab commands that are live vs intentionally disabled. */
 export const ANNOTATE_COMMAND_STATUS = {
   text: 'enabled',
-  mtext: 'disabled',
+  mtext: 'enabled',
   dimension: 'enabled',
   leader: 'enabled',
   dimstyle: 'enabled',

@@ -78,7 +78,7 @@ describe('P3-A ribbon tabs', () => {
   });
 
   it('marks unsupported annotate/view/manage features disabled', () => {
-    expect(ANNOTATE_COMMAND_STATUS.mtext).toBe('disabled');
+    expect(ANNOTATE_COMMAND_STATUS.mtext).toBe('enabled');
     expect(ANNOTATE_COMMAND_STATUS.table).toBe('disabled');
     expect(ANNOTATE_COMMAND_STATUS.annotationScaleUi).toBe('disabled');
     expect(VIEW_COMMAND_STATUS.orbit3d).toBe('disabled');

@@ -4,6 +4,8 @@ import {
   dimensionLayout,
   arcEndpoints,
   distance,
+  isMText,
+  layoutMText,
   midpoint,
   pointAlongWall,
   wallLength,
@@ -167,15 +169,29 @@ export function getEntityGrips(entity: Entity): Grip[] {
         },
       ];
     }
-    case 'text':
+    case 'text': {
+      const origin = {
+        role: 'center' as const,
+        point: { ...entity.geometry.position },
+        entityId: entity.id,
+        editTarget: { kind: 'text-origin' as const },
+      };
+      if (!isMText(entity)) return [origin];
+      const layout = layoutMText(entity.geometry, '#fff');
+      if (!layout) return [origin];
       return [
+        origin,
         {
-          role: 'center' as const,
-          point: { ...entity.geometry.position },
+          role: 'end' as const,
+          point: {
+            x: (layout.corners[1].x + layout.corners[2].x) / 2,
+            y: (layout.corners[1].y + layout.corners[2].y) / 2,
+          },
           entityId: entity.id,
-          editTarget: { kind: 'text-origin' as const },
+          editTarget: { kind: 'mtext-width' as const },
         },
       ];
+    }
     case 'leader':
       return [
         {

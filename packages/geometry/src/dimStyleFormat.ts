@@ -6,9 +6,10 @@
 import type {
   DimensionStyleDefinition,
   DimPrimaryUnits,
+  DrawingUnitsSettings,
   LengthUnit,
 } from '@ratecad/core';
-import { ARCH_PRECISION_DENOMINATORS } from '@ratecad/core';
+import { ARCH_PRECISION_DENOMINATORS, insertionToLengthUnit } from '@ratecad/core';
 import {
   convertLength,
   formatArchitecturalFeet,
@@ -83,15 +84,41 @@ function formatPrimaryValue(
   return `${primary.prefix}${body}${primary.suffix}`;
 }
 
+/** Drawing-unit display used when the style follows LUNITS. Geometry is unchanged. */
+function primaryFollowingDrawingUnits(
+  primary: DimPrimaryUnits,
+  drawing: DrawingUnitsSettings,
+): DimPrimaryUnits {
+  const feetInches =
+    drawing.linearFormat === 'architectural' || drawing.linearFormat === 'engineering';
+  const fromInsertion = insertionToLengthUnit(drawing.insertionUnit, 'ft');
+  return {
+    ...primary,
+    unitFormat: drawing.linearFormat,
+    lengthUnit: feetInches ? 'ft-in' : fromInsertion,
+    precision: drawing.linearPrecision,
+  };
+}
+
+function effectivePrimary(
+  style: DimensionStyleDefinition,
+  drawingUnits?: DrawingUnitsSettings | null,
+): DimPrimaryUnits {
+  if (style.primary.followDrawingUnits && drawingUnits) {
+    return primaryFollowingDrawingUnits(style.primary, drawingUnits);
+  }
+  return style.primary;
+}
+
 function formatAlternateValue(
   worldValue: number,
   worldUnit: LengthUnit,
   style: DimensionStyleDefinition,
+  primary: DimPrimaryUnits,
 ): string {
   const alt = style.alternate;
-  // Convert world → primary length unit, then apply multiplier
-  const primaryUnit =
-    style.primary.lengthUnit === 'ft-in' ? 'ft' : style.primary.lengthUnit;
+  // Convert world → effective primary length unit, then apply multiplier
+  const primaryUnit = primary.lengthUnit === 'ft-in' ? 'ft' : primary.lengthUnit;
   const inPrimary = worldToDisplay(worldValue, worldUnit, primaryUnit);
   let altValue = inPrimary * alt.multiplier;
   altValue = roundTo(altValue, alt.roundOff);
@@ -114,6 +141,8 @@ function formatAlternateValue(
 export interface FormatDimensionOptions {
   /** Optional measurement kind prefix when style has empty prefix. */
   kindPrefix?: 'R' | 'Ø' | '';
+  /** Used only when the style primary follows drawing units. */
+  drawingUnits?: DrawingUnitsSettings | null;
 }
 
 /**
@@ -128,14 +157,15 @@ export function formatDimensionLength(
 ): string {
   if (!Number.isFinite(worldValue)) return '—';
 
-  let primary = formatPrimaryValue(worldValue, worldUnit, style.primary);
-  if (opts.kindPrefix && !style.primary.prefix) {
+  const primaryUnits = effectivePrimary(style, opts.drawingUnits);
+  let primary = formatPrimaryValue(worldValue, worldUnit, primaryUnits);
+  if (opts.kindPrefix && !primaryUnits.prefix) {
     primary = `${opts.kindPrefix} ${primary}`;
   }
 
   if (!style.alternate.enabled) return primary;
 
-  const alt = formatAlternateValue(worldValue, worldUnit, style);
+  const alt = formatAlternateValue(worldValue, worldUnit, style, primaryUnits);
   if (style.alternate.placement === 'below') {
     return `${primary}\n${alt}`;
   }

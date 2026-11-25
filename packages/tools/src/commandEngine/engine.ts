@@ -54,6 +54,14 @@ export interface EngineHost {
   openUnitsDialog?: () => void;
   /** Open Dimension Style Manager (DIMSTYLE command). */
   openDimStyleDialog?: () => void;
+  /** Open the in-place multiline text editor (MT / MTEXT). */
+  openMTextEditor?: (draft: {
+    position: import('@ratecad/core').Vec2;
+    width: number;
+    height: number;
+    rotation: number;
+    attachment: 'TL';
+  }) => void;
   /** ZOOM Extents — fit visible geometry (Phase P1). */
   zoomExtents?: () => { ok: boolean; message: string };
   /** ZOOM Window — frame two corners (Phase P1). */

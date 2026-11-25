@@ -2,7 +2,8 @@
  * AutoCAD-style Drawing Units (UNITS command / LUNITS / AUNITS / INSUNITS).
  *
  * Display formatting only — never rewrites internal geometry (worldUnit).
- * LUNITS does NOT control dimension text (that is DIMSTYLE / DIMLUNIT).
+ * Dimension text uses Drawing Units when the active style follows them.
+ * An explicit dimension-style format or length unit overrides that.
  */
 
 import type { LengthUnit } from './types.js';

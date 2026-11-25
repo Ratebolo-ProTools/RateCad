@@ -158,7 +158,10 @@ function formatDraft(doc: ReturnType<CommandBus['getDocument']>, worldUnit: Leng
     return `${formatted} (${trimNumber(value)})`;
   }
   const prefix = draft.kind === 'radius' ? 'R' : draft.kind === 'diameter' ? 'Ø' : '';
-  const formatted = formatDimensionLength(value, worldUnit, style, { kindPrefix: prefix });
+  const formatted = formatDimensionLength(value, worldUnit, style, {
+    kindPrefix: prefix,
+    drawingUnits: doc.settings.drawingUnits,
+  });
   const body = draft.kind === 'arc-length' ? `Arc ${formatted}` : formatted;
   return `${body} (${trimNumber(value)})`;
 }

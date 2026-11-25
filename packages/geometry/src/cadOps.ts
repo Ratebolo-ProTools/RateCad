@@ -25,6 +25,7 @@ import {
   validateEntityGeometry,
 } from './transform.js';
 import { pointInPolygon } from './rooms.js';
+import { scaleMTextGeometry } from './mtext.js';
 import {
   extendEntityMulti,
   trimEntityMulti,
@@ -1119,11 +1120,11 @@ export function scaleEntity(
     case 'text':
       next = {
         ...entity,
-        geometry: {
-          ...entity.geometry,
-          position: map(entity.geometry.position),
-          height: entity.geometry.height * factor,
-        },
+        geometry: scaleMTextGeometry(
+          entity.geometry,
+          factor,
+          map(entity.geometry.position),
+        ),
       };
       break;
     case 'leader':

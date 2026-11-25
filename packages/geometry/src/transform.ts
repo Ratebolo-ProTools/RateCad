@@ -6,6 +6,7 @@ import type {
   Vec2,
 } from '@ratecad/core';
 import { syncArcPolylineMetadata } from './arcMetadata.js';
+import { isMText, resizeMTextWidth, widthFromRightGrip } from './mtext.js';
 import { distance } from './math.js';
 import { cross, normalize, pointOnSegment, rotatePoint } from './intersect.js';
 
@@ -156,6 +157,7 @@ export type GripEditTarget =
   | { kind: 'dim-end' }
   | { kind: 'dim-offset' }
   | { kind: 'text-origin' }
+  | { kind: 'mtext-width' }
   | { kind: 'leader-arrow' }
   | { kind: 'leader-vertex'; index: number }
   | { kind: 'wall-start' }
@@ -381,11 +383,19 @@ export function applyGripEdit(
       return null;
     }
     case 'text': {
-      if (target.kind !== 'text-origin') return null;
-      return {
-        ...entity,
-        geometry: { ...entity.geometry, position: { ...point } },
-      };
+      if (target.kind === 'text-origin') {
+        return {
+          ...entity,
+          geometry: { ...entity.geometry, position: { ...point } },
+        };
+      }
+      if (target.kind === 'mtext-width' && isMText(entity)) {
+        return {
+          ...entity,
+          geometry: resizeMTextWidth(entity.geometry, widthFromRightGrip(entity.geometry, point)),
+        };
+      }
+      return null;
     }
     case 'leader': {
       if (target.kind === 'leader-arrow') {

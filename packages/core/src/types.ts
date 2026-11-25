@@ -164,6 +164,55 @@ export interface DimensionEntity extends EntityBase {
   };
 }
 
+export type MTextAttachment =
+  | 'TL'
+  | 'TC'
+  | 'TR'
+  | 'ML'
+  | 'MC'
+  | 'MR'
+  | 'BL'
+  | 'BC'
+  | 'BR';
+
+export type MTextAlign = 'left' | 'center' | 'right' | 'justify' | 'distribute';
+
+/** One formatted run. This is the stored text, not HTML. */
+export interface MTextSpan {
+  text: string;
+  fontFamily?: string;
+  /** Drawing units. Omitted spans use the object height. */
+  height?: number;
+  bold?: boolean;
+  italic?: boolean;
+  underline?: boolean;
+  overline?: boolean;
+  strikethrough?: boolean;
+  color?: string;
+  /** Character width scale. 1 is the font's natural width. */
+  widthFactor?: number;
+  /** Extra space, in drawing units, inserted after each character. */
+  tracking?: number;
+  baseline?: 'normal' | 'super' | 'sub';
+}
+
+export interface MTextParagraph {
+  align?: MTextAlign;
+  /** Multiple of the line height. */
+  lineSpacing?: number;
+  spaceBefore?: number;
+  spaceAfter?: number;
+  indent?: number;
+  firstLineIndent?: number;
+  tabs?: number[];
+  list?: 'none' | 'bullet' | 'number';
+  spans: MTextSpan[];
+}
+
+export interface MTextBody {
+  paragraphs: MTextParagraph[];
+}
+
 export interface TextEntity extends EntityBase {
   type: 'text';
   geometry: {
@@ -173,6 +222,15 @@ export interface TextEntity extends EntityBase {
     rotation: number;
     /** Horizontal alignment foundation (Paper Space / Model). */
     alignment?: 'left' | 'center' | 'right';
+    /**
+     * Present on multiline text. The boundary width in drawing units.
+     * Wrapping uses this width. It does not stretch the glyphs.
+     */
+    width?: number;
+    /** Which point of the boundary `position` is attached to. */
+    attachment?: MTextAttachment;
+    /** Structured paragraphs. Plain `content` stays in sync for older readers. */
+    body?: MTextBody;
   };
   properties: AppearanceProperties;
 }

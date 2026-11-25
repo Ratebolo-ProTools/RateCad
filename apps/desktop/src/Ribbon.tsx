@@ -1679,9 +1679,9 @@ export function Ribbon(props: RibbonProps) {
                   <button
                     type="button"
                     className="ribbon-small"
-                    disabled
-                    title="Multiline Text (MTEXT) — not yet implemented"
+                    title={tip('Multiline Text', ['MT', 'MTEXT'])}
                     data-testid="annotate-tool-mtext"
+                    onClick={() => props.onRunCommand('MTEXT')}
                   >
                     Multiline Text
                   </button>

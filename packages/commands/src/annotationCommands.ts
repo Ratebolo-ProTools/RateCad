@@ -124,10 +124,13 @@ export class CreateTextCommand implements Command {
     opts?: {
       properties?: TextEntity['properties'];
       metadata?: Record<string, unknown>;
+      width?: number;
+      attachment?: TextEntity['geometry']['attachment'];
+      body?: TextEntity['geometry']['body'];
     },
   ) {
-    const trimmed = content.trim();
-    if (!trimmed) throw new Error('Text content required');
+    const trimmed = opts?.body ? content : content.trim();
+    if (!trimmed.trim()) throw new Error('Text content required');
     this.layerId = layerId;
     this.entity = {
       id: entityId ?? createEntityId('text'),
@@ -140,6 +143,13 @@ export class CreateTextCommand implements Command {
         content: trimmed,
         height,
         rotation,
+        ...(opts?.body
+          ? {
+              width: opts.width,
+              attachment: opts.attachment ?? 'TL',
+              body: opts.body,
+            }
+          : {}),
       },
       properties: { ...(opts?.properties ?? {}) },
       ...(opts?.metadata ? { metadata: { ...opts.metadata } } : {}),
@@ -176,7 +186,11 @@ export class UpdateTextCommand implements Command {
       geometry: {
         ...before.geometry,
         ...patch,
-        content: patch.content?.trim() ?? before.geometry.content,
+        content: patch.body
+          ? (patch.content ?? before.geometry.content)
+          : patch.content !== undefined
+            ? patch.content.trim()
+            : before.geometry.content,
       },
     };
     if (!validateEntityGeometry(after)) {

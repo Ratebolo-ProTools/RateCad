@@ -388,6 +388,39 @@ export {
   setByLayerPatch,
 } from './propertyEngine.js';
 
+export type { MTextLayout, MTextMeasure, MTextRun, ResolvedMTextSpan } from './mtext.js';
+export {
+  MTEXT_ATTACHMENTS,
+  MTEXT_DEFAULT_FONT,
+  MTEXT_FONTS,
+  MTEXT_HEIGHT_STEP,
+  MTEXT_SYMBOLS,
+  applyStyleToRange,
+  approximateMeasure,
+  attachmentOffset,
+  bodyFromPlain,
+  caretFromIndex,
+  deleteTextRange,
+  fitTextWidthFactor,
+  indexAtLocal,
+  insertTextAt,
+  isMText,
+  layoutMText,
+  mtextBounds,
+  mtextLocalToWorld,
+  plainTextFromBody,
+  pointInMText,
+  resizeMTextWidth,
+  scaleBody,
+  scaleMTextGeometry,
+  setAttachment,
+  setBodyHeight,
+  setParagraphAlign,
+  splitParagraphAt,
+  widthFromCorners,
+  widthFromRightGrip,
+} from './mtext.js';
+
 export {
   blockCircleWorldPoints,
   blockContentLocalPoints,

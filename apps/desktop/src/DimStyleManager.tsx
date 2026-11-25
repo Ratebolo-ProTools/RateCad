@@ -1,6 +1,6 @@
 /**
  * Dimension Style Manager (DIMSTYLE command).
- * Primary/alternate units are independent of drawing LUNITS.
+ * Primary units follow drawing units until an explicit format is chosen.
  */
 
 import type { DimensionStyleDefinition, LengthUnit } from '@ratecad/core';
@@ -85,7 +85,7 @@ export function DimStyleManager({
       <div className="modal-panel dimstyle-dialog">
         <h3>Dimension Style Manager</h3>
         <p className="dialog-hint">
-          Dimension formatting uses the active style — not Drawing Units (LUNITS).
+          Standard follows Drawing Units. Choosing a format or length unit keeps that style independent.
         </p>
 
         <div className="dimstyle-layout">
@@ -184,16 +184,35 @@ export function DimStyleManager({
               {tab === 'primary' ? (
                 <>
                   <div className="prop-row">
-                    <label>Unit format</label>
-                    <select
-                      className="prop-select"
+                    <label>Follow drawing units</label>
+                    <input
+                      type="checkbox"
                       data-cad-property="1"
-                      value={selected.primary.unitFormat}
+                      checked={selected.primary.followDrawingUnits === true}
                       onChange={(e) =>
                         patch((s) => ({
                           ...s,
                           primary: {
                             ...s.primary,
+                            followDrawingUnits: e.target.checked,
+                          },
+                        }))
+                      }
+                    />
+                  </div>
+                  <div className="prop-row">
+                    <label>Unit format</label>
+                    <select
+                      className="prop-select"
+                      data-cad-property="1"
+                      value={selected.primary.unitFormat}
+                      disabled={selected.primary.followDrawingUnits === true}
+                      onChange={(e) =>
+                        patch((s) => ({
+                          ...s,
+                          primary: {
+                            ...s.primary,
+                            followDrawingUnits: false,
                             unitFormat: e.target.value as LinearUnitFormat,
                           },
                         }))
@@ -212,11 +231,13 @@ export function DimStyleManager({
                       className="prop-select"
                       data-cad-property="1"
                       value={selected.primary.lengthUnit}
+                      disabled={selected.primary.followDrawingUnits === true}
                       onChange={(e) =>
                         patch((s) => ({
                           ...s,
                           primary: {
                             ...s.primary,
+                            followDrawingUnits: false,
                             lengthUnit: e.target.value as LengthUnit,
                           },
                         }))

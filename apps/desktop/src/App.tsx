@@ -30,6 +30,7 @@ import {
   UpdateDoorCommand,
   UpdateLayerCommand,
   UpdateRoomCommand,
+  CreateTextCommand,
   UpdateTextCommand,
   UpdateWallCommand,
   UpdateWindowCommand,
@@ -74,6 +75,7 @@ import {
   LINEAR_UNIT_FORMAT_LABELS,
 } from '@ratecad/core';
 import {
+  bodyFromPlain,
   findDoorsForRoom,
   findWallsForRoom,
   findWindowsForRoom,
@@ -83,6 +85,8 @@ import {
   formatLength,
   formatLengthInUnits,
   formatWorldLength,
+  isMText,
+  plainTextFromBody,
   LENGTH_UNIT_LABELS,
   parseLength,
   parseLengthInput,
@@ -95,6 +99,8 @@ import {
   toMillimeters,
   wallLength,
 } from '@ratecad/geometry';
+import { MTextEditor, type MTextSession } from './MTextEditor';
+import { mtextEditorClaimsKey } from './mtextKeyboard';
 import { PropertiesPanel } from './PropertiesPanel';
 import {
   ViewportPropertiesPanel,
@@ -506,6 +512,12 @@ function describeEntity(
           label: 'Position',
           value: `${formatLength(entity.geometry.position.x)}, ${formatLength(entity.geometry.position.y)}`,
         },
+        ...(entity.geometry.width
+          ? [
+              { label: 'Width', value: formatLength(entity.geometry.width) },
+              { label: 'Attachment', value: entity.geometry.attachment ?? 'TL' },
+            ]
+          : []),
       ];
     case 'leader':
       return [
@@ -869,6 +881,30 @@ export function App() {
     return () => cancelAnimationFrame(frame);
   }, [propertiesExpanded]);
   const [size, setSize] = useState({ width: 800, height: 600 });
+  const [mtextSession, setMtextSession] = useState<MTextSession | null>(null);
+  const mtextOpenRef = useRef(false);
+  mtextOpenRef.current = mtextSession != null;
+  const openMTextRef = useRef<
+    (draft: {
+      position: { x: number; y: number };
+      width: number;
+      height: number;
+      rotation: number;
+      attachment: 'TL';
+    }) => void
+  >(() => undefined);
+  openMTextRef.current = (draft) => {
+    setMtextSession({
+      mode: 'create',
+      position: draft.position,
+      width: draft.width,
+      height: draft.height,
+      rotation: draft.rotation,
+      attachment: draft.attachment,
+      body: bodyFromPlain('', draft.height),
+      color: '#c8ced6',
+    });
+  };
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
   const [aiPanelOpen, setAiPanelOpen] = useState(true);
@@ -1342,9 +1378,10 @@ export function App() {
           ? [...(engUi?.previewEntities ?? sess.previewEntities ?? []), blockPreview]
           : engUi?.previewEntities ?? sess.previewEntities,
       selectionRect: inPaper ? null : sess.selectionRect,
-      hideEntityIds: engUi?.hideEntityIds?.length
-        ? engUi.hideEntityIds
-        : sess.hideEntityIds,
+      hideEntityIds: [
+        ...(engUi?.hideEntityIds?.length ? engUi.hideEntityIds : sess.hideEntityIds),
+        ...(mtextSession?.entityId ? [mtextSession.entityId] : []),
+      ],
       cursorWorld,
       cursorScreen,
       ...(() => {
@@ -1403,6 +1440,7 @@ export function App() {
     selectedPaperEntityIds,
     vpDragTick,
     blockPreview,
+    mtextSession,
   ]);
 
   const switchToModelTab = useCallback(() => {
@@ -1719,6 +1757,15 @@ export function App() {
         if (!activeDs()) return;
         showDimStyleDialogRef.current = true;
         setShowDimStyleDialog(true);
+      },
+      openMTextEditor: (draft: {
+        position: { x: number; y: number };
+        width: number;
+        height: number;
+        rotation: number;
+        attachment: 'TL';
+      }) => {
+        openMTextRef.current(draft);
       },
       zoomExtents: () => navApiRef.current.zoomExtents(),
       zoomWindow: (a: { x: number; y: number }, b: { x: number; y: number }) =>
@@ -2797,7 +2844,7 @@ export function App() {
       const result = await Promise.race([
         api.openDrawing(),
         new Promise<{ error: string }>((resolve) =>
-          setTimeout(() => resolve({ error: 'dialog-timeout' }), 8000),
+          setTimeout(() => resolve({ error: 'dialog-timeout' }), 130000),
         ),
       ]);
 
@@ -3201,6 +3248,20 @@ export function App() {
       setStatusExtra('Locked layer — cannot edit text');
       return;
     }
+    if (isMText(entity)) {
+      setMtextSession({
+        mode: 'edit',
+        entityId: entity.id,
+        position: { ...entity.geometry.position },
+        width: entity.geometry.width,
+        height: entity.geometry.height,
+        rotation: entity.geometry.rotation,
+        attachment: entity.geometry.attachment ?? 'TL',
+        body: entity.geometry.body,
+        color: '#c8ced6',
+      });
+      return;
+    }
     const next = window.prompt('Edit text', entity.geometry.content);
     if (next == null) return;
     const trimmed = next.trim();
@@ -3208,6 +3269,50 @@ export function App() {
     busRef.current.execute(
       new UpdateTextCommand(entity, { content: trimmed }),
     );
+  }, []);
+
+  const finishMText = useCallback((draft: MTextSession) => {
+    const content = plainTextFromBody(draft.body);
+    if (!content.trim()) {
+      setMtextSession(null);
+      return;
+    }
+    const bus = busRef.current;
+    if (draft.mode === 'edit' && draft.entityId) {
+      const entity = getEntity(bus.getDocument(), draft.entityId);
+      if (entity?.type === 'text') {
+        bus.execute(
+          new UpdateTextCommand(entity, {
+            content,
+            position: draft.position,
+            height: draft.height,
+            rotation: draft.rotation,
+            width: draft.width,
+            attachment: draft.attachment,
+            body: draft.body,
+          }),
+        );
+      }
+    } else {
+      bus.execute(
+        new CreateTextCommand(
+          draft.position,
+          content,
+          draft.height,
+          draft.rotation,
+          undefined,
+          undefined,
+          {
+            width: draft.width,
+            attachment: draft.attachment,
+            body: draft.body,
+          },
+        ),
+      );
+    }
+    setDoc(bus.getDocument());
+    setMtextSession(null);
+    setCommandFeedback('MTEXT');
   }, []);
 
   useEffect(() => {
@@ -3270,6 +3375,11 @@ export function App() {
 
       // IME composition must never start CAD commands or mutate the buffer.
       if (isImeCompositionEvent(event)) {
+        return;
+      }
+
+      // Open multiline editor owns typing, even if the command line still has focus.
+      if (mtextOpenRef.current && mtextEditorClaimsKey(target)) {
         return;
       }
 
@@ -3494,6 +3604,19 @@ export function App() {
           clearCommandLine();
           refreshEngineUi();
           setCommandFeedback('Select');
+          setDoc(busRef.current.getDocument());
+          return;
+        }
+        if (
+          event.key === 'Enter' &&
+          !eng?.isRunning() &&
+          s.inputBuffer.trim().length > 0 &&
+          (s.activeTool === 'rotate' ||
+            s.activeTool === 'scale' ||
+            s.activeTool === 'wall')
+        ) {
+          syncSession(commitNumericInput(s, busRef.current));
+          setCommandFeedback(sessionRef.current.statusMessage);
           setDoc(busRef.current.getDocument());
           return;
         }
@@ -5083,6 +5206,17 @@ export function App() {
               editSelectedText();
             }}
           />
+          {mtextSession ? (
+            <MTextEditor
+              key={mtextSession.entityId ?? 'new-mtext'}
+              session={mtextSession}
+              camera={camera}
+              canvasWidth={size.width}
+              canvasHeight={size.height}
+              onFinish={finishMText}
+              onCancel={() => setMtextSession(null)}
+            />
+          ) : null}
           <ViewportOverlays
             panActive={session.activeTool === 'pan'}
             zoomWindowActive={

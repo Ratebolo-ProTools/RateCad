@@ -1,6 +1,6 @@
 /**
  * Named Dimension Style system (DIMSTYLE / DIMLUNIT).
- * Dimension text formatting is controlled here — not by drawing LUNITS.
+ * Dimension text uses these settings. followDrawingUnits uses Drawing Units instead.
  */
 
 import type { LengthUnit } from './types.js';
@@ -38,7 +38,12 @@ export type DimToleranceMethod =
 
 export interface DimPrimaryUnits {
   unitFormat: LinearUnitFormat;
-  /** Display LengthUnit for primary (independent of drawing LUNITS). */
+  /**
+   * When true, dimension text uses Drawing Units (LUNITS / INSUNITS).
+   * An explicit format or length unit turns this off.
+   */
+  followDrawingUnits?: boolean;
+  /** Display LengthUnit for primary when not following drawing units. */
   lengthUnit: LengthUnit;
   precision: number;
   fractionFormat: DimFractionFormat;
@@ -131,6 +136,7 @@ function basePrimary(
 ): DimPrimaryUnits {
   return {
     unitFormat: 'decimal',
+    followDrawingUnits: false,
     lengthUnit: 'ft',
     precision: 2,
     fractionFormat: 'horizontal',
@@ -250,6 +256,7 @@ export function createDimensionStyle(
 export const STANDARD_DIMSTYLE = createDimensionStyle('dimstyle-standard', 'Standard', {
   primary: {
     unitFormat: 'decimal',
+    followDrawingUnits: true,
     lengthUnit: 'ft',
     precision: 2,
   },
@@ -258,6 +265,7 @@ export const STANDARD_DIMSTYLE = createDimensionStyle('dimstyle-standard', 'Stan
 export const ISO25_DIMSTYLE = createDimensionStyle('dimstyle-iso25', 'ISO-25', {
   primary: {
     unitFormat: 'decimal',
+    followDrawingUnits: false,
     lengthUnit: 'mm',
     precision: 2,
     suffix: '',
@@ -281,6 +289,7 @@ export const ARCHITECTURAL_DIMSTYLE = createDimensionStyle(
   {
     primary: {
       unitFormat: 'architectural',
+      followDrawingUnits: false,
       lengthUnit: 'ft-in',
       precision: 4,
       suppressZeroFeet: false,
@@ -375,6 +384,33 @@ function asLengthUnit(raw: unknown, fallback: LengthUnit): LengthUnit {
   return fallback;
 }
 
+/**
+ * Saved Standard styles that still match the original decimal-feet factory
+ * follow drawing units. Any stored format, unit, precision, prefix, or
+ * suffix is an explicit override.
+ */
+function unmodifiedStandardFollowsDrawingUnits(
+  name: string,
+  primaryRaw: Record<string, unknown>,
+): boolean {
+  if (name !== 'Standard') return false;
+  if (primaryRaw.unitFormat != null && primaryRaw.unitFormat !== 'decimal') return false;
+  if (primaryRaw.lengthUnit != null && primaryRaw.lengthUnit !== 'ft') return false;
+  if (typeof primaryRaw.precision === 'number' && primaryRaw.precision !== 2) return false;
+  if (typeof primaryRaw.prefix === 'string' && primaryRaw.prefix !== '') return false;
+  if (typeof primaryRaw.suffix === 'string' && primaryRaw.suffix !== '') return false;
+  if (typeof primaryRaw.roundOff === 'number' && primaryRaw.roundOff !== 0) return false;
+  if (
+    primaryRaw.suppressLeadingZeros ||
+    primaryRaw.suppressTrailingZeros ||
+    primaryRaw.suppressZeroFeet ||
+    primaryRaw.suppressZeroInches
+  ) {
+    return false;
+  }
+  return true;
+}
+
 export function normalizeDimensionStyleDefinition(
   raw: unknown,
   fallback: DimensionStyleDefinition = STANDARD_DIMSTYLE,
@@ -417,6 +453,13 @@ export function normalizeDimensionStyleDefinition(
         typeof primaryRaw.unitFormat === 'string'
           ? (primaryRaw.unitFormat as LinearUnitFormat)
           : base.primary.unitFormat,
+      followDrawingUnits:
+        typeof primaryRaw.followDrawingUnits === 'boolean'
+          ? primaryRaw.followDrawingUnits
+          : unmodifiedStandardFollowsDrawingUnits(
+              typeof o.name === 'string' ? o.name : fallback.name,
+              primaryRaw,
+            ),
       lengthUnit: asLengthUnit(primaryRaw.lengthUnit, base.primary.lengthUnit),
       precision: clampPrec(primaryRaw.precision, base.primary.precision),
       fractionFormat:

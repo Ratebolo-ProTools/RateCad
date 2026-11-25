@@ -1437,3 +1437,137 @@
   text-transform: uppercase;
   color: var(--text-dim);
 }
+
+.mtext-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 7;
+  pointer-events: none;
+}
+
+.mtext-ribbon,
+.mtext-frame {
+  pointer-events: auto;
+}
+
+.mtext-ribbon {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  right: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 6px;
+  background: #10141a;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+}
+
+.mtext-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.mtext-group > span {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.mtext-ribbon button,
+.mtext-ribbon select,
+.mtext-ribbon input {
+  height: 24px;
+  border: 1px solid var(--border-strong);
+  background: #1a212b;
+  color: var(--text);
+  border-radius: 3px;
+  font: inherit;
+  font-size: 12px;
+}
+
+.mtext-ribbon button.on,
+.mtext-attachments button.on {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: #d7e8ff;
+}
+
+.mtext-ribbon button.primary {
+  background: #2a4a73;
+  color: #d7e8ff;
+}
+
+.mtext-ribbon input[type='number'] {
+  width: 72px;
+}
+
+.mtext-ribbon input[type='color'] {
+  width: 32px;
+  padding: 0;
+}
+
+.mtext-attachments {
+  display: grid;
+  grid-template-columns: repeat(3, 12px);
+  gap: 2px;
+}
+
+.mtext-attachments button {
+  width: 12px;
+  height: 12px;
+  padding: 0;
+}
+
+.mtext-frame {
+  position: absolute;
+  transform-origin: top left;
+  overflow: visible;
+  background: rgba(16, 20, 26, 0.28);
+  outline: 1px dashed rgba(215, 232, 255, 0.7);
+}
+
+.mtext-run {
+  position: absolute;
+  transform-origin: left center;
+  white-space: pre;
+  pointer-events: none;
+  user-select: none;
+}
+
+.mtext-run.selected {
+  background: rgba(70, 130, 210, 0.35);
+}
+
+.mtext-caret {
+  position: absolute;
+  width: 2px;
+  background: #f4f7fb;
+  transform: translateY(-80%);
+  pointer-events: none;
+  animation: mtext-caret 1s steps(1) infinite;
+}
+
+.mtext-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  border: 0;
+  padding: 0;
+  caret-color: transparent;
+  color: transparent;
+  background: transparent;
+}
+
+@keyframes mtext-caret {
+  50% {
+    opacity: 0;
+  }
+}

@@ -164,6 +164,41 @@ function assertEntity(raw: unknown, index: number): Entity {
       ) {
         throw new RatecadParseError(`Entity ${e.id}: invalid text geometry`);
       }
+      if (g.width !== undefined && (typeof g.width !== 'number' || !(g.width > 0))) {
+        throw new RatecadParseError(`Entity ${e.id}: invalid multiline text width`);
+      }
+      if (
+        g.attachment !== undefined &&
+        (typeof g.attachment !== 'string' ||
+          !['TL', 'TC', 'TR', 'ML', 'MC', 'MR', 'BL', 'BC', 'BR'].includes(g.attachment))
+      ) {
+        throw new RatecadParseError(`Entity ${e.id}: invalid multiline text attachment`);
+      }
+      if (g.body !== undefined) {
+        const paragraphs =
+          g.body && typeof g.body === 'object' && 'paragraphs' in g.body
+            ? g.body.paragraphs
+            : undefined;
+        const spansOk =
+          Array.isArray(paragraphs) &&
+          paragraphs.every((paragraph) => {
+            if (!paragraph || typeof paragraph !== 'object' || !('spans' in paragraph)) return false;
+            const spans = paragraph.spans;
+            return (
+              Array.isArray(spans) &&
+              spans.every(
+                (span) =>
+                  !!span &&
+                  typeof span === 'object' &&
+                  'text' in span &&
+                  typeof span.text === 'string',
+              )
+            );
+          });
+        if (!spansOk) {
+          throw new RatecadParseError(`Entity ${e.id}: invalid multiline text body`);
+        }
+      }
       break;
     }
     case 'leader': {

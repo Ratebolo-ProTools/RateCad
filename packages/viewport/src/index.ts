@@ -55,6 +55,12 @@ export {
 } from './hitTest.js';
 
 export {
+  measureMTextText,
+  mtextFaceAvailable,
+  mtextFontCss,
+} from './mtextDraw.js';
+
+export {
   type Grip,
   type GripRole,
   firstSegmentMidpoint,

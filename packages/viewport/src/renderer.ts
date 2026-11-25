@@ -37,6 +37,7 @@ import {
   formatDimensionLength,
   formatLengthInUnits,
   formatRoomLabelLines,
+  isMText,
   lineweightToScreenPx,
   resolveEffectiveAppearance,
   wallOutlineSegments,
@@ -48,6 +49,7 @@ import {
   screenToWorld,
   worldToScreen,
 } from './camera.js';
+import { strokeMTextEntity } from './mtextDraw.js';
 import {
   drawDraftingCursor,
   type CrosshairSize,
@@ -321,8 +323,12 @@ function strokeCurvedDimension(
         )
       : formatAngleDegrees(measured, sizes.precision))
     : kind === 'arc-length'
-      ? `Arc ${formatDimensionLength(measured, worldUnit, sizes.dimStyleDef)}`
-      : formatDimensionLength(measured, worldUnit, sizes.dimStyleDef);
+      ? `Arc ${formatDimensionLength(measured, worldUnit, sizes.dimStyleDef, {
+          drawingUnits: doc.settings.drawingUnits,
+        })}`
+      : formatDimensionLength(measured, worldUnit, sizes.dimStyleDef, {
+          drawingUnits: doc.settings.drawingUnits,
+        });
   const label = dimensionAnnotationText(entity.metadata, formatted);
   const mid = at(startAngle + sweep / 2, dimRadius);
   paintDimensionText(
@@ -525,16 +531,21 @@ function strokeDimension(
   } else if (entity.geometry.kind === 'radius') {
     formatted = formatDimensionLength(value, worldUnit, dimStyleDef, {
       kindPrefix: 'R',
+      drawingUnits: doc.settings.drawingUnits,
     });
   } else if (entity.geometry.kind === 'diameter') {
     formatted = formatDimensionLength(value, worldUnit, dimStyleDef, {
       kindPrefix: 'Ø',
+      drawingUnits: doc.settings.drawingUnits,
     });
   } else if (entity.geometry.kind === 'arc-length') {
-    formatted = `Arc ${formatDimensionLength(value, worldUnit, dimStyleDef)}`;
+    formatted = `Arc ${formatDimensionLength(value, worldUnit, dimStyleDef, {
+      drawingUnits: doc.settings.drawingUnits,
+    })}`;
   } else {
-    // DIMSTYLE primary/alternate units — not drawing LUNITS.
-    formatted = formatDimensionLength(value, worldUnit, dimStyleDef);
+    formatted = formatDimensionLength(value, worldUnit, dimStyleDef, {
+      drawingUnits: doc.settings.drawingUnits,
+    });
   }
   // Fallback if style table missing in partially migrated docs
   if (!formatted || formatted === '—') {
@@ -598,7 +609,12 @@ function strokeTextEntity(
   color: string,
   doc?: DrawingDocument,
   annotCtx?: AnnotationRenderContext,
+  highlight = false,
 ): void {
+  if (isMText(entity)) {
+    strokeMTextEntity(ctx, entity, camera, width, height, color, highlight);
+    return;
+  }
   const p = worldToScreen(entity.geometry.position, camera, width, height);
   let screenHeight: number;
   const annotative =
@@ -1044,6 +1060,7 @@ function strokeEntity(
         color,
         doc,
         annotCtx,
+        unifiedColor,
       );
       break;
     case 'leader':

@@ -236,7 +236,7 @@ ipcMain.handle('dialog:openRatecad', async () => {
         properties: ['openFile'],
       }),
       new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('dialog-timeout')), 2500),
+        setTimeout(() => reject(new Error('dialog-timeout')), 120000),
       ),
     ]);
     if (result.canceled || !result.filePaths[0]) {
